@@ -1,0 +1,265 @@
+'use client';
+
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Suspense, useEffect, useMemo, useState } from 'react';
+import { Info, Wallet } from 'lucide-react';
+import { toast } from 'sonner';
+import { Card } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Checkbox } from '@/components/ui/checkbox';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
+import { PageHeader } from '@/components/shared/page-header';
+import { Field, FormSection, MoneyInput, TotalRow } from '@/components/shared/form-bits';
+import { Money } from '@/components/shared/money';
+import { StatusBadge } from '@/components/shared/status-badge';
+import { useAppStore } from '@/lib/store';
+import { customers, effectiveInvoiceStatus, invoiceBalance, today } from '@/lib/selectors';
+import { receivePayment } from '@/lib/services/sales';
+import type { PaymentAllocation, PaymentMode } from '@/lib/types';
+
+const MODES: PaymentMode[] = ['neft', 'upi', 'imps', 'cheque', 'cash', 'card', 'gateway'];
+
+function NewPaymentInner() {
+  const router = useRouter();
+  const params = useSearchParams();
+  const s = useAppStore();
+  const custList = customers(s);
+
+  const [customerId, setCustomerId] = useState(params.get('customer') ?? '');
+  const [date, setDate] = useState(today());
+  const [mode, setMode] = useState<PaymentMode>('neft');
+  const [bankAccountId, setBankAccountId] = useState(s.bankAccounts[0]?.id ?? '');
+  const [reference, setReference] = useState('');
+  const [tdsPaise, setTdsPaise] = useState(0);
+  const [chargesPaise, setChargesPaise] = useState(0);
+  const [selected, setSelected] = useState<Record<string, number>>({});
+
+  // Preselect the invoice passed in the query string
+  useEffect(() => {
+    const invId = params.get('invoice');
+    if (!invId) return;
+    const inv = s.invoices.find((i) => i.id === invId);
+    if (!inv) return;
+    setCustomerId(inv.customerId);
+    setSelected({ [inv.id]: invoiceBalance(inv) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params, s.invoices.length]);
+
+  const customer = custList.find((c) => c.id === customerId);
+  const openInvs = useMemo(
+    () =>
+      s.invoices
+        .filter((i) => i.customerId === customerId && i.status !== 'void' && i.status !== 'draft' && invoiceBalance(i) > 0)
+        .sort((a, b) => a.dueDate.localeCompare(b.dueDate)),
+    [s.invoices, customerId],
+  );
+
+  const allocated = Object.values(selected).reduce((t, v) => t + v, 0);
+  const cashReceived = allocated - tdsPaise - chargesPaise;
+
+  const toggle = (invId: string, balance: number) => {
+    setSelected((sel) => {
+      const next = { ...sel };
+      if (next[invId] != null) delete next[invId];
+      else next[invId] = balance;
+      return next;
+    });
+  };
+
+  const save = () => {
+    if (!customerId || allocated <= 0) {
+      toast.error('Pick a customer and at least one invoice to apply this payment to.');
+      return;
+    }
+    const allocations: PaymentAllocation[] = Object.entries(selected).map(([targetId, amountPaise]) => ({
+      targetType: 'invoice',
+      targetId,
+      amountPaise,
+    }));
+    const p = receivePayment({
+      customerId,
+      date,
+      mode,
+      bankAccountId,
+      amountPaise: cashReceived,
+      tdsPaise,
+      bankChargesPaise: chargesPaise,
+      reference,
+      allocations,
+    });
+    toast.success(`Payment ${p.number} recorded`, {
+      description: 'Invoices updated and a balanced journal entry posted.',
+    });
+    router.push('/sales/payments');
+  };
+
+  return (
+    <>
+      <PageHeader
+        title="Record payment received"
+        description="Apply one receipt across several invoices. TDS withheld by the customer is tracked separately."
+        actions={
+          <>
+            <Button variant="outline" size="sm" onClick={() => router.back()}>Cancel</Button>
+            <Button size="sm" onClick={save} className="gap-1.5">
+              <Wallet className="size-3.5" /> Record payment
+            </Button>
+          </>
+        }
+      />
+
+      <div className="grid gap-6 lg:grid-cols-3">
+        <div className="space-y-6 lg:col-span-2">
+          <Card className="p-5">
+            <FormSection title="Payment details">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Customer" required>
+                  <Select value={customerId} onValueChange={(v) => { setCustomerId(v); setSelected({}); }}>
+                    <SelectTrigger><SelectValue placeholder="Select a customer…" /></SelectTrigger>
+                    <SelectContent>
+                      {custList.map((c) => <SelectItem key={c.id} value={c.id}>{c.displayName}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field label="Payment date" required>
+                  <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+                </Field>
+                <Field label="Mode">
+                  <Select value={mode} onValueChange={(v) => setMode(v as PaymentMode)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {MODES.map((m) => <SelectItem key={m} value={m} className="uppercase">{m}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field label="Deposit to">
+                  <Select value={bankAccountId} onValueChange={setBankAccountId}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {s.bankAccounts.filter((b) => b.kind !== 'card').map((b) => (
+                        <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field label="Reference" className="sm:col-span-2">
+                  <Input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="UTR / cheque no. / UPI ref" />
+                </Field>
+              </div>
+            </FormSection>
+          </Card>
+
+          <Card className="p-5">
+            <FormSection
+              title="Apply to invoices"
+              description={customerId ? `${openInvs.length} unpaid invoice(s) for this customer` : 'Select a customer first'}
+            >
+              {openInvs.length === 0 ? (
+                <p className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
+                  {customerId ? 'This customer has no outstanding invoices.' : 'No customer selected.'}
+                </p>
+              ) : (
+                <div className="overflow-x-auto rounded-lg border thin-scroll">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
+                        <th className="w-10 px-3 py-2" />
+                        <th className="px-3 py-2 text-left font-semibold">Invoice</th>
+                        <th className="px-3 py-2 text-left font-semibold">Due</th>
+                        <th className="px-3 py-2 text-left font-semibold">Status</th>
+                        <th className="px-3 py-2 text-right font-semibold">Balance</th>
+                        <th className="px-3 py-2 text-right font-semibold">Applying</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {openInvs.map((inv) => {
+                        const bal = invoiceBalance(inv);
+                        const isSel = selected[inv.id] != null;
+                        return (
+                          <tr key={inv.id} className="border-b last:border-0">
+                            <td className="px-3 py-2">
+                              <Checkbox checked={isSel} onCheckedChange={() => toggle(inv.id, bal)} />
+                            </td>
+                            <td className="px-3 py-2 font-medium">{inv.number}</td>
+                            <td className="px-3 py-2 text-xs text-muted-foreground">
+                              {new Date(inv.dueDate).toLocaleDateString('en-IN')}
+                            </td>
+                            <td className="px-3 py-2"><StatusBadge status={effectiveInvoiceStatus(inv)} /></td>
+                            <td className="px-3 py-2 text-right"><Money value={bal} /></td>
+                            <td className="px-3 py-2">
+                              {isSel ? (
+                                <MoneyInput
+                                  valuePaise={selected[inv.id]}
+                                  onChangePaise={(p) =>
+                                    setSelected((sel) => ({ ...sel, [inv.id]: Math.min(p, bal) }))
+                                  }
+                                  className="h-8 w-32"
+                                />
+                              ) : (
+                                <span className="block text-right text-muted-foreground">—</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </FormSection>
+          </Card>
+        </div>
+
+        <div>
+          <Card className="sticky top-20 space-y-4 p-5">
+            <h3 className="text-sm font-semibold">Summary</h3>
+
+            <TotalRow label="Applied to invoices"><Money value={allocated} /></TotalRow>
+
+            <div className="space-y-3 border-t pt-3">
+              <Field
+                label="TDS deducted by customer"
+                hint={customer?.customerDeductsTds ? 'This customer usually withholds TDS' : 'Leave zero if none'}
+              >
+                <MoneyInput valuePaise={tdsPaise} onChangePaise={setTdsPaise} />
+              </Field>
+              <Field label="Bank charges">
+                <MoneyInput valuePaise={chargesPaise} onChangePaise={setChargesPaise} />
+              </Field>
+            </div>
+
+            <div className="border-t pt-3">
+              <TotalRow label="Cash actually received" emphasis>
+                <Money value={cashReceived} />
+              </TotalRow>
+            </div>
+
+            {tdsPaise > 0 && (
+              <div className="rounded-md border bg-muted/40 p-3">
+                <div className="flex items-start gap-2">
+                  <Info className="mt-0.5 size-3.5 shrink-0 text-primary" />
+                  <p className="text-[11px] leading-relaxed text-muted-foreground">
+                    The customer keeps <Money value={tdsPaise} /> and pays it to the government on your behalf.
+                    We record it as <span className="font-medium text-foreground">TDS Receivable</span> — an asset you
+                    reclaim when filing your income tax return. The invoice is still settled in full.
+                  </p>
+                </div>
+              </div>
+            )}
+          </Card>
+        </div>
+      </div>
+    </>
+  );
+}
+
+export default function NewPaymentPage() {
+  return (
+    <Suspense fallback={<div className="text-sm text-muted-foreground">Loading…</div>}>
+      <NewPaymentInner />
+    </Suspense>
+  );
+}
