@@ -1,12 +1,16 @@
 'use client';
 
+// Navy top band, matching the sidebar so the chrome reads as one frame around
+// the white workspace. Carries global search (focused with "/"), the branch
+// switcher, quick create, and the demo controls.
+
 import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
-  Building2, ChevronDown, FlaskConical, LogOut, Menu, Moon, Plus, RefreshCw,
-  Sun, UserCircle2,
+  Bell, Building2, ChevronDown, FlaskConical, LogOut, Menu, Moon, Plus,
+  RefreshCw, Search, Settings, Sun, UserCircle2,
 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { toast } from 'sonner';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
   DropdownMenuSeparator, DropdownMenuTrigger,
@@ -16,9 +20,37 @@ import { Badge } from '@/components/ui/badge';
 import { useAppStore } from '@/lib/store';
 import { hasPermission } from '@/lib/store/hooks';
 import { seedDatabase } from '@/lib/mock/seed';
+import { cn } from '@/lib/utils';
 import { Sidebar } from './sidebar';
 import { QuickCreate } from './quick-create';
-import { toast } from 'sonner';
+import { GlobalSearch } from './global-search';
+
+/** Icon button styled for the navy band. */
+function BandButton({
+  children,
+  label,
+  onClick,
+  className,
+}: {
+  children: React.ReactNode;
+  label: string;
+  onClick?: () => void;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      onClick={onClick}
+      className={cn(
+        'grid size-8 place-items-center rounded text-topbar-foreground/75 transition-colors hover:bg-white/10 hover:text-topbar-foreground',
+        className,
+      )}
+    >
+      {children}
+    </button>
+  );
+}
 
 function ThemeToggle() {
   const [dark, setDark] = useState(false);
@@ -30,30 +62,37 @@ function ThemeToggle() {
     localStorage.setItem('finora-theme', next ? 'dark' : 'light');
   };
   return (
-    <Button variant="ghost" size="icon" onClick={toggle} aria-label="Toggle theme">
+    <BandButton label="Toggle theme" onClick={toggle}>
       {dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
-    </Button>
+    </BandButton>
   );
 }
 
 export function Topbar() {
   const router = useRouter();
-  const { org, branches, activeBranchId, users, session } = useAppStore();
+  const { branches, activeBranchId, users, session } = useAppStore();
   const setActiveBranch = useAppStore((s) => s.setActiveBranch);
   const logout = useAppStore((s) => s.logout);
   const login = useAppStore((s) => s.login);
   const [quickOpen, setQuickOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [mobileNav, setMobileNav] = useState(false);
+  const searchRef = useRef<HTMLButtonElement>(null);
 
   const user = users.find((u) => u.id === session?.userId);
   const branch = branches.find((b) => b.id === activeBranchId);
   const canCreate = hasPermission(session?.role, 'sales', 'create');
 
-  // ⌘K / Ctrl-K quick create
+  // "/" focuses search, ⌘K / Ctrl-K opens quick create — both Zoho conventions.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target as HTMLElement)?.tagName ?? '');
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setQuickOpen(true);
+      } else if (e.key === '/' && !typing) {
+        e.preventDefault();
+        setSearchOpen(true);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -61,145 +100,162 @@ export function Topbar() {
   }, []);
 
   return (
-    <header className="sticky top-0 z-30 flex h-14 items-center gap-2 border-b bg-background/95 px-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 no-print sm:px-4">
-      {/* Mobile nav */}
-      <Sheet>
-        <SheetTrigger asChild>
-          <Button variant="ghost" size="icon" className="lg:hidden">
+    <>
+      <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 bg-topbar px-3 sm:px-4">
+        {/* Mobile nav */}
+        <Sheet open={mobileNav} onOpenChange={setMobileNav}>
+          <SheetTrigger
+            aria-label="Open navigation"
+            className="grid size-8 place-items-center rounded text-topbar-foreground/75 hover:bg-white/10 lg:hidden"
+          >
             <Menu className="size-4" />
-          </Button>
-        </SheetTrigger>
-        <SheetContent side="left" className="w-64 p-0">
-          <SheetTitle className="sr-only">Navigation</SheetTitle>
-          <Sidebar />
-        </SheetContent>
-      </Sheet>
+          </SheetTrigger>
+          <SheetContent side="left" className="w-64 border-0 p-0">
+            <SheetTitle className="sr-only">Navigation</SheetTitle>
+            <Sidebar onNavigate={() => setMobileNav(false)} />
+          </SheetContent>
+        </Sheet>
 
-      {/* Branch switcher — demonstrates multi-GSTIN */}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="sm" className="gap-2">
-            <Building2 className="size-3.5" />
-            <span className="hidden sm:inline">{branch?.name ?? 'Branch'}</span>
-            <Badge variant="secondary" className="hidden font-mono text-[10px] md:inline-flex">
-              {branch?.gstin}
-            </Badge>
-            <ChevronDown className="size-3.5 opacity-60" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-72">
-          <DropdownMenuLabel>Branch / GSTIN</DropdownMenuLabel>
-          <DropdownMenuSeparator />
-          {branches.map((b) => (
-            <DropdownMenuItem key={b.id} onClick={() => setActiveBranch(b.id)} className="flex-col items-start gap-0.5">
-              <span className="font-medium">{b.name}</span>
-              <span className="font-mono text-[11px] text-muted-foreground">{b.gstin}</span>
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
+        {/* Search */}
+        <button
+          ref={searchRef}
+          type="button"
+          onClick={() => setSearchOpen(true)}
+          className="flex h-8 max-w-md flex-1 items-center gap-2 rounded border border-white/15 bg-white/10 px-2.5 text-left text-[13px] text-topbar-foreground/60 transition-colors hover:bg-white/15"
+        >
+          <Search className="size-3.5 shrink-0" />
+          <span className="min-w-0 flex-1 truncate">Search customers, invoices, bills…</span>
+          <kbd className="hidden shrink-0 rounded border border-white/20 px-1 font-sans text-[10px] sm:inline">
+            /
+          </kbd>
+        </button>
 
-      <div className="ml-auto flex items-center gap-1.5">
-        {canCreate && (
-          <Button size="sm" className="gap-1.5" onClick={() => setQuickOpen(true)}>
-            <Plus className="size-4" />
-            <span className="hidden sm:inline">New</span>
-            <kbd className="ml-1 hidden rounded border border-primary-foreground/25 px-1 text-[10px] opacity-70 lg:inline">
-              ⌘K
-            </kbd>
-          </Button>
-        )}
+        <div className="ml-auto flex items-center gap-1">
+          {/* Demo org / test banner */}
+          <span className="mr-1 hidden text-[11px] text-topbar-foreground/60 xl:inline">
+            Demo data · nothing is filed with any portal
+          </span>
 
-        {/* Demo controls — resets/reloads the dummy dataset */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="gap-1.5">
+          {/* Branch (GSTIN) switcher */}
+          <DropdownMenu>
+            <DropdownMenuTrigger className="flex h-8 items-center gap-1.5 rounded px-2 text-[13px] text-topbar-foreground/85 transition-colors hover:bg-white/10">
+              <Building2 className="size-3.5 shrink-0" />
+              <span className="hidden max-w-[130px] truncate sm:inline">{branch?.name ?? 'Branch'}</span>
+              <ChevronDown className="size-3 shrink-0" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-72">
+              <DropdownMenuLabel>Branch &amp; GST registration</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {branches.map((b) => (
+                <DropdownMenuItem key={b.id} onClick={() => setActiveBranch(b.id)}>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-medium">{b.name}</p>
+                    <p className="truncate font-mono text-[10px] text-muted-foreground">{b.gstin}</p>
+                  </div>
+                  {b.id === activeBranchId && <Badge variant="secondary" className="ml-2 text-[9px]">Active</Badge>}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* Quick create */}
+          {canCreate && (
+            <button
+              type="button"
+              onClick={() => setQuickOpen(true)}
+              aria-label="Quick create"
+              className="grid size-8 place-items-center rounded bg-sidebar-primary text-white transition-opacity hover:opacity-90"
+            >
+              <Plus className="size-4" />
+            </button>
+          )}
+
+          <BandButton label="Notifications" onClick={() => toast.info('No new notifications')}>
+            <Bell className="size-4" />
+          </BandButton>
+          <ThemeToggle />
+          <BandButton label="Settings" onClick={() => router.push('/settings')}>
+            <Settings className="size-4" />
+          </BandButton>
+
+          {/* Demo controls */}
+          <DropdownMenu>
+            <DropdownMenuTrigger className="flex h-8 items-center gap-1.5 rounded px-2 text-[13px] text-topbar-foreground/85 transition-colors hover:bg-white/10">
               <FlaskConical className="size-3.5" />
               <span className="hidden md:inline">Demo</span>
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-64">
-            <DropdownMenuLabel>Demo controls</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onClick={() => {
-                seedDatabase({ keepSession: true });
-                toast.success('Demo data reset', { description: 'All records restored to the seeded dataset.' });
-                router.refresh();
-              }}
-            >
-              <RefreshCw className="mr-2 size-4" /> Reset to seed data
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={() => {
-                seedDatabase({ rich: true, keepSession: true });
-                toast.success('Rich dataset loaded', { description: 'Extra history added for a denser walkthrough.' });
-                router.refresh();
-              }}
-            >
-              <FlaskConical className="mr-2 size-4" /> Load rich dataset
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground">
-              Switch role to see permissions change
-            </DropdownMenuLabel>
-            {users.map((u) => (
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-60">
+              <DropdownMenuLabel>Sign in as</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {users.map((u) => (
+                <DropdownMenuItem
+                  key={u.id}
+                  onClick={() => {
+                    login(u.id, u.role);
+                    toast.success(`Now viewing as ${u.name}`, { description: `Role: ${u.role}` });
+                  }}
+                >
+                  <span
+                    className="mr-2 grid size-5 place-items-center rounded-full text-[9px] font-semibold text-white"
+                    style={{ backgroundColor: u.avatarColor }}
+                  >
+                    {u.name.split(' ').map((n) => n[0]).join('')}
+                  </span>
+                  <span className="flex-1 truncate">{u.name}</span>
+                  <span className="text-[10px] capitalize text-muted-foreground">{u.role}</span>
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>Demo data</DropdownMenuLabel>
               <DropdownMenuItem
-                key={u.id}
                 onClick={() => {
-                  login(u.id, u.role);
-                  toast.info(`Now viewing as ${u.name}`, { description: `Role: ${u.role}` });
+                  // keepSession, or resetting the demo signs the user out and
+                  // bounces them to /login mid-walkthrough.
+                  seedDatabase({ keepSession: true });
+                  toast.success('Reset to seed data', {
+                    description: 'Every document, entry and match is back to its starting state.',
+                  });
                 }}
               >
-                <span
-                  className="mr-2 size-2 rounded-full"
-                  style={{ backgroundColor: u.avatarColor }}
-                />
-                {u.name}
-                <span className="ml-auto text-[11px] capitalize text-muted-foreground">{u.role}</span>
+                <RefreshCw className="mr-2 size-4" /> Reset to seed data
               </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
+            </DropdownMenuContent>
+          </DropdownMenu>
 
-        <ThemeToggle />
-
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="sm" className="gap-2 px-2">
-              <span
-                className="flex size-6 items-center justify-center rounded-full text-[10px] font-semibold text-white"
-                style={{ backgroundColor: user?.avatarColor ?? '#6366f1' }}
-              >
-                {user?.name.split(' ').map((n) => n[0]).join('').slice(0, 2)}
-              </span>
-              <span className="hidden text-sm lg:inline">{user?.name}</span>
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuLabel className="flex flex-col gap-0.5">
-              <span>{user?.name}</span>
-              <span className="text-[11px] font-normal capitalize text-muted-foreground">
-                {session?.role} · {org?.name}
-              </span>
-            </DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => router.push('/settings')}>
-              <UserCircle2 className="mr-2 size-4" /> Settings
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={() => {
-                logout();
-                router.push('/login');
-              }}
+          {/* Account */}
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              aria-label="Account"
+              className="ml-0.5 grid size-8 shrink-0 place-items-center rounded-full text-[11px] font-semibold text-white"
+              style={{ backgroundColor: user?.avatarColor ?? 'var(--primary)' }}
             >
-              <LogOut className="mr-2 size-4" /> Sign out
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
+              {user?.name.split(' ').map((n) => n[0]).join('') ?? '?'}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuLabel>
+                <p className="font-medium">{user?.name}</p>
+                <p className="text-xs font-normal text-muted-foreground">{user?.email}</p>
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => router.push('/settings')}>
+                <UserCircle2 className="mr-2 size-4" /> Settings
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={() => {
+                  logout();
+                  router.replace('/login');
+                }}
+              >
+                <LogOut className="mr-2 size-4" /> Sign out
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </header>
 
       <QuickCreate open={quickOpen} onOpenChange={setQuickOpen} />
-    </header>
+      <GlobalSearch open={searchOpen} onOpenChange={setSearchOpen} />
+    </>
   );
 }

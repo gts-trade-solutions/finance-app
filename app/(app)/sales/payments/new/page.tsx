@@ -8,15 +8,14 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
+import { Combobox } from '@/components/ui/combobox';
 import { PageHeader } from '@/components/shared/page-header';
 import { Field, FormSection, MoneyInput, TotalRow } from '@/components/shared/form-bits';
 import { Money } from '@/components/shared/money';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { useAppStore } from '@/lib/store';
 import { customers, effectiveInvoiceStatus, invoiceBalance, today } from '@/lib/selectors';
+import { bankAccountOptions, customerOptions } from '@/lib/options';
 import { receivePayment } from '@/lib/services/sales';
 import type { PaymentAllocation, PaymentMode } from '@/lib/types';
 
@@ -117,33 +116,37 @@ function NewPaymentInner() {
             <FormSection title="Payment details">
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field label="Customer" required>
-                  <Select value={customerId} onValueChange={(v) => { setCustomerId(v); setSelected({}); }}>
-                    <SelectTrigger><SelectValue placeholder="Select a customer…" /></SelectTrigger>
-                    <SelectContent>
-                      {custList.map((c) => <SelectItem key={c.id} value={c.id}>{c.displayName}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
+                  <Combobox
+                    options={customerOptions(s)}
+                    value={customerId}
+                    onChange={(v) => { setCustomerId(v); setSelected({}); }}
+                    placeholder="Select a customer"
+                    searchPlaceholder="Search customers"
+                    clearable
+                  />
                 </Field>
                 <Field label="Payment date" required>
                   <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
                 </Field>
                 <Field label="Mode">
-                  <Select value={mode} onValueChange={(v) => setMode(v as PaymentMode)}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {MODES.map((m) => <SelectItem key={m} value={m} className="uppercase">{m}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
+                  <Combobox
+                    options={MODES.map((m) => ({ value: m, label: m.toUpperCase() }))}
+                    value={mode}
+                    onChange={(v) => setMode(v as PaymentMode)}
+                    showAvatar={false}
+                    searchPlaceholder="Search modes"
+                  />
                 </Field>
                 <Field label="Deposit to">
-                  <Select value={bankAccountId} onValueChange={setBankAccountId}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {s.bankAccounts.filter((b) => b.kind !== 'card').map((b) => (
-                        <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <Combobox
+                    options={bankAccountOptions(s).filter((o) =>
+                      s.bankAccounts.find((b) => b.id === o.value)?.kind !== 'card',
+                    )}
+                    value={bankAccountId}
+                    onChange={setBankAccountId}
+                    placeholder="Select account"
+                    searchPlaceholder="Search accounts"
+                  />
                 </Field>
                 <Field label="Reference" className="sm:col-span-2">
                   <Input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="UTR / cheque no. / UPI ref" />

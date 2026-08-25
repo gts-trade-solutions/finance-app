@@ -45,3 +45,7 @@ build.log
 
 # out-of-band production build dir
 /.next-build/
+
+# local screenshots
+/scripts/shots/
+dev.log

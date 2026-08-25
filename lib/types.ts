@@ -251,6 +251,14 @@ export interface Invoice {
   notes?: string;
   terms?: string;
   salespersonId?: string;
+  // ── Zoho-parity header fields
+  orderNumber?: string;
+  subject?: string;
+  paymentTerms?: string; // preset key, e.g. 'net_30'
+  shippingChargePaise: Paise;
+  adjustmentPaise: Paise; // signed; free-text label below
+  adjustmentLabel?: string;
+  attachmentCount?: number;
   einvoice: EInvoiceInfo;
   ewayBillNo?: string;
   sourceDocId?: string; // estimate/SO it came from

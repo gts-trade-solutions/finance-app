@@ -9,15 +9,14 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
+import { Combobox } from '@/components/ui/combobox';
 import { PageHeader } from '@/components/shared/page-header';
 import { Field, FormSection, MoneyInput, TotalRow } from '@/components/shared/form-bits';
 import { Money } from '@/components/shared/money';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { useAppStore } from '@/lib/store';
 import { billBalance, today, vendors } from '@/lib/selectors';
+import { bankAccountOptions, vendorOptions } from '@/lib/options';
 import { makePayment } from '@/lib/services/purchases';
 import type { PaymentAllocation, PaymentMode } from '@/lib/types';
 
@@ -102,33 +101,35 @@ function PayInner() {
             <FormSection title="Payment details">
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field label="Vendor" required>
-                  <Select value={vendorId} onValueChange={(v) => { setVendorId(v); setSelected({}); }}>
-                    <SelectTrigger><SelectValue placeholder="Select a vendor…" /></SelectTrigger>
-                    <SelectContent>
-                      {vendorList.map((v) => (
-                        <SelectItem key={v.id} value={v.id}>{v.displayName}{v.isMsme ? ' · MSME' : ''}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <Combobox
+                    options={vendorOptions(s)}
+                    value={vendorId}
+                    onChange={(v) => { setVendorId(v); setSelected({}); }}
+                    placeholder="Select a vendor"
+                    searchPlaceholder="Search vendors"
+                    clearable
+                  />
                 </Field>
                 <Field label="Payment date" required>
                   <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
                 </Field>
                 <Field label="Mode">
-                  <Select value={mode} onValueChange={(v) => setMode(v as PaymentMode)}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {MODES.map((m) => <SelectItem key={m} value={m} className="uppercase">{m}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
+                  <Combobox
+                    options={MODES.map((m) => ({ value: m, label: m.toUpperCase() }))}
+                    value={mode}
+                    onChange={(v) => setMode(v as PaymentMode)}
+                    showAvatar={false}
+                    searchPlaceholder="Search modes"
+                  />
                 </Field>
                 <Field label="Pay from">
-                  <Select value={bankAccountId} onValueChange={setBankAccountId}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {s.bankAccounts.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
+                  <Combobox
+                    options={bankAccountOptions(s)}
+                    value={bankAccountId}
+                    onChange={setBankAccountId}
+                    placeholder="Select account"
+                    searchPlaceholder="Search accounts"
+                  />
                 </Field>
                 <Field label="Reference" className="sm:col-span-2">
                   <Input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="UTR / cheque no." />

@@ -94,6 +94,16 @@ export interface CreateInvoiceInput {
   salespersonId?: string;
   status?: 'draft' | 'approved';
   sourceDocId?: string;
+  // ── Zoho-parity header fields
+  number?: string; // override the auto-allocated series number
+  orderNumber?: string;
+  subject?: string;
+  paymentTerms?: string;
+  shippingChargePaise?: number;
+  adjustmentPaise?: number;
+  adjustmentLabel?: string;
+  tcsPaise?: number;
+  attachmentCount?: number;
 }
 
 export function createInvoice(input: CreateInvoiceInput): Invoice {
@@ -110,12 +120,21 @@ export function createInvoice(input: CreateInvoiceInput): Invoice {
 
   const lines = buildDocLines(input.lines, supplyType);
   const tax = sumTax(lines.map((l) => l.tax));
-  const gross = tax.taxablePaise + totalTaxPaise(tax);
+
+  // Shipping and adjustment sit outside the line tax, as they do in Zoho.
+  const shipping = input.shippingChargePaise ?? 0;
+  const adjustment = input.adjustmentPaise ?? 0;
+  const tcs = input.tcsPaise ?? 0;
+  const gross = tax.taxablePaise + totalTaxPaise(tax) + shipping + adjustment + tcs;
   const { rounded, roundOff } = roundToRupee(gross);
+
+  // The series number is only consumed when we don't take an explicit override,
+  // so a user-edited invoice number never burns a slot in the sequence.
+  const number = input.number?.trim() || nextNumber('INV', input.branchId);
 
   const invoice: Invoice = {
     id: genId('inv'),
-    number: nextNumber('INV', input.branchId),
+    number,
     branchId: input.branchId,
     customerId: input.customerId,
     date: input.date,
@@ -127,13 +146,20 @@ export function createInvoice(input: CreateInvoiceInput): Invoice {
     subtotalPaise: tax.taxablePaise,
     docDiscountPaise: 0,
     tax,
-    tcsPaise: 0,
+    tcsPaise: tcs,
     roundOffPaise: roundOff,
     totalPaise: rounded,
     amountPaidPaise: 0,
     notes: input.notes,
     terms: input.terms,
     salespersonId: input.salespersonId,
+    orderNumber: input.orderNumber,
+    subject: input.subject,
+    paymentTerms: input.paymentTerms,
+    shippingChargePaise: shipping,
+    adjustmentPaise: adjustment,
+    adjustmentLabel: input.adjustmentLabel,
+    attachmentCount: input.attachmentCount,
     einvoice: {
       status:
         getState().org?.aatoAbove5Cr && customer.gstin ? 'pending' : 'not_applicable',
@@ -176,9 +202,26 @@ export function postInvoice(invoiceId: string): void {
       description: l.description,
     });
   }
+  // Freight billed to the customer is income, not a reduction of cost.
+  if (inv.shippingChargePaise > 0) {
+    draft.push({
+      accountId: ACC.SHIPPING_INCOME,
+      credit: inv.shippingChargePaise,
+      branchId: inv.branchId,
+      description: 'Shipping & packing charges',
+    });
+  }
+  // A manual adjustment can go either way — a surcharge or a goodwill discount.
+  if (inv.adjustmentPaise > 0) {
+    draft.push({ accountId: ACC.OTHER_INCOME, credit: inv.adjustmentPaise, description: inv.adjustmentLabel ?? 'Adjustment' });
+  } else if (inv.adjustmentPaise < 0) {
+    draft.push({ accountId: ACC.OTHER_INCOME, debit: -inv.adjustmentPaise, description: inv.adjustmentLabel ?? 'Adjustment' });
+  }
   if (inv.tax.cgstPaise) draft.push({ accountId: ACC.GST_CGST, credit: inv.tax.cgstPaise });
   if (inv.tax.sgstPaise) draft.push({ accountId: ACC.GST_SGST, credit: inv.tax.sgstPaise });
   if (inv.tax.igstPaise) draft.push({ accountId: ACC.GST_IGST, credit: inv.tax.igstPaise });
+  // TCS is collected from the buyer and owed onward to the government.
+  if (inv.tcsPaise > 0) draft.push({ accountId: ACC.TCS_PAYABLE, credit: inv.tcsPaise });
   if (inv.roundOffPaise > 0) draft.push({ accountId: ACC.ROUNDING, credit: inv.roundOffPaise });
   if (inv.roundOffPaise < 0) draft.push({ accountId: ACC.ROUNDING, debit: -inv.roundOffPaise });
 

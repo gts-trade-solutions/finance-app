@@ -26,6 +26,19 @@ export function formatDocNumber(docType: DocType, fyShort: string, n: number): s
 }
 
 /**
+ * The number a document *would* get, without consuming it. Forms show this so
+ * the user sees the real number before saving, the way Zoho does.
+ */
+export function peekNumber(
+  state: NumberSeriesState,
+  branchId: string,
+  docType: DocType,
+  fyShort: string,
+): string {
+  return formatDocNumber(docType, fyShort, state[seriesKey(branchId, docType)] ?? 1);
+}
+
+/**
  * Allocate the next number. Pure function: returns the formatted number and the
  * updated series state (the store commits it atomically with the document).
  */

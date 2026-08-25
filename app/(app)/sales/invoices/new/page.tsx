@@ -2,58 +2,100 @@
 
 import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
-import { Info, Save, Send } from 'lucide-react';
+import {
+  FileText, Info, Loader2, Paperclip, Save, Send, Settings2,
+} from 'lucide-react';
 import { toast } from 'sonner';
-import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Combobox } from '@/components/ui/combobox';
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
-import { PageHeader } from '@/components/shared/page-header';
-import { Field, FormSection, TotalRow } from '@/components/shared/form-bits';
-import { Money } from '@/components/shared/money';
+  DocumentForm, FormRow, FormRowPair, FormSectionRule,
+} from '@/components/shared/form-layout';
 import {
-  LineItemsEditor, newEditorLine, type EditorLine,
-} from '@/components/forms/line-items-editor';
+  LineItemsEditor, effectiveDiscountPct, newEditorLine, type EditorLine,
+} from '@/components/forms/document-lines';
 import { useAppStore } from '@/lib/store';
-import { customers, today } from '@/lib/selectors';
-import { createInvoice, markInvoiceSent } from '@/lib/services/sales';
+import { today } from '@/lib/selectors';
 import {
-  computeLineTax, GST_STATES, resolveSupplyType, stateName, sumTax,
-  supplyTypeLabel, totalTaxPaise,
+  branchOptions, customerOptions, dueDateFor, stateOptions, termsForDays,
+  termsOptions, userOptions,
+} from '@/lib/options';
+import { createInvoice, markInvoiceSent } from '@/lib/services/sales';
+import { peekNumber } from '@/lib/series';
+import { FY_SHORT } from '@/lib/mock/seed/org';
+import {
+  computeLineTax, resolveSupplyType, stateName, sumTax, supplyTypeLabel, totalTaxPaise,
+  TCS_RATE_PCT,
 } from '@/lib/tax/gst';
-import { roundToRupee } from '@/lib/money';
+import { formatINR, roundToRupee, toRupees } from '@/lib/money';
 
 export default function NewInvoicePage() {
   const router = useRouter();
   const s = useAppStore();
-  const branches = s.branches;
-  const custList = customers(s);
 
-  const [branchId, setBranchId] = useState(s.activeBranchId || branches[0]?.id);
+  const [branchId, setBranchId] = useState(s.activeBranchId || s.branches[0]?.id || '');
   const [customerId, setCustomerId] = useState('');
+  const [number, setNumber] = useState('');
+  const [orderNumber, setOrderNumber] = useState('');
   const [date, setDate] = useState(today());
+  const [paymentTerms, setPaymentTerms] = useState('net_30');
+  const [dueDate, setDueDate] = useState(dueDateFor('net_30', today()));
+  const [salespersonId, setSalespersonId] = useState('');
+  const [subject, setSubject] = useState('');
   const [placeOfSupply, setPlaceOfSupply] = useState('');
   const [lines, setLines] = useState<EditorLine[]>([newEditorLine('l1')]);
-  const [notes, setNotes] = useState('');
+  const [notes, setNotes] = useState('Thanks for your business.');
   const [terms, setTerms] = useState(
     'Goods once sold will not be taken back. Interest @18% p.a. on overdue amounts.',
   );
+  const [shipping, setShipping] = useState(0);
+  const [adjustment, setAdjustment] = useState(0);
+  const [adjustmentLabel, setAdjustmentLabel] = useState('Adjustment');
+  const [applyTcs, setApplyTcs] = useState(false);
+  const [attachments, setAttachments] = useState(0);
+  const [markPaid, setMarkPaid] = useState(false);
+  const [saving, setSaving] = useState<false | 'draft' | 'send'>(false);
 
-  const customer = custList.find((c) => c.id === customerId);
-  const branch = branches.find((b) => b.id === branchId);
+  // Zoho shows the number that will actually be used, not a placeholder.
+  const nextNumber = useMemo(
+    () => (branchId ? peekNumber(s.series, branchId, 'INV', FY_SHORT) : ''),
+    [s.series, branchId],
+  );
+
+  const customers = useMemo(() => customerOptions(s), [s]);
+  const branches = useMemo(() => branchOptions(s), [s]);
+  const salespeople = useMemo(() => userOptions(s), [s]);
+  const states = useMemo(() => stateOptions(), []);
+
+  const customer = s.contacts.find((c) => c.id === customerId);
+  const branch = s.branches.find((b) => b.id === branchId);
   const pos = placeOfSupply || customer?.stateCode || '';
 
-  const dueDate = useMemo(() => {
-    const d = new Date(date);
-    d.setDate(d.getDate() + (customer?.paymentTermsDays ?? 30));
-    return d.toISOString().slice(0, 10);
-  }, [date, customer]);
+  // Picking a customer pulls their default payment terms through, like Zoho.
+  const onCustomerChange = (id: string) => {
+    setCustomerId(id);
+    const c = s.contacts.find((x) => x.id === id);
+    if (!c) return;
+    const t = termsForDays(c.paymentTermsDays);
+    setPaymentTerms(t);
+    setDueDate(dueDateFor(t, date));
+    setPlaceOfSupply(c.stateCode);
+  };
 
-  // Live GST resolution — the heart of the demo
+  const onTermsChange = (t: string) => {
+    setPaymentTerms(t);
+    setDueDate(dueDateFor(t, date));
+  };
+
+  const onDateChange = (d: string) => {
+    setDate(d);
+    setDueDate(dueDateFor(paymentTerms, d));
+  };
+
   const supplyType = useMemo(
     () =>
       customer && branch
@@ -72,34 +114,51 @@ export default function NewInvoicePage() {
         computeLineTax({
           ratePaise: l.ratePaise,
           qty: l.qty,
-          discountPct: l.discountPct,
+          discountPct: effectiveDiscountPct(l),
           gstRatePct: l.gstRatePct,
           supplyType,
         }).tax,
     );
     const tax = sumTax(parts);
-    const gross = tax.taxablePaise + totalTaxPaise(tax);
-    const { rounded, roundOff } = roundToRupee(gross);
-    return { tax, gross, rounded, roundOff };
-  }, [lines, supplyType]);
+    const grossBeforeDiscount = lines.reduce((t, l) => t + Math.round(l.ratePaise * l.qty), 0);
+    const discount = grossBeforeDiscount - tax.taxablePaise;
+    const tcs = applyTcs ? Math.round((tax.taxablePaise * TCS_RATE_PCT) / 100) : 0;
+    const beforeRound =
+      tax.taxablePaise + totalTaxPaise(tax) + shipping + adjustment + tcs;
+    const { rounded, roundOff } = roundToRupee(beforeRound);
+    const qty = lines.reduce((t, l) => t + (l.qty || 0), 0);
+    return { tax, discount, grossBeforeDiscount, tcs, rounded, roundOff, qty };
+  }, [lines, supplyType, shipping, adjustment, applyTcs]);
 
-  const valid =
-    !!customerId && lines.some((l) => l.qty > 0 && l.ratePaise > 0) && totals.rounded > 0;
+  const valid = !!customerId && lines.some((l) => l.qty > 0 && l.ratePaise > 0);
 
-  const save = (send: boolean) => {
+  const save = (mode: 'draft' | 'send') => {
     if (!valid) {
-      toast.error('Pick a customer and add at least one line with a quantity and rate.');
+      toast.error('Add a customer and at least one item', {
+        description: 'An invoice needs a customer and one line with a quantity and rate.',
+      });
       return;
     }
+    setSaving(mode);
     const inv = createInvoice({
       branchId,
       customerId,
       date,
       dueDate,
       placeOfSupply: pos,
-      status: 'approved',
+      status: mode === 'draft' ? 'draft' : 'approved',
+      number: number && number !== nextNumber ? number : undefined,
+      orderNumber: orderNumber || undefined,
+      subject: subject || undefined,
+      paymentTerms,
+      salespersonId: salespersonId || undefined,
       notes,
       terms,
+      shippingChargePaise: shipping,
+      adjustmentPaise: adjustment,
+      adjustmentLabel,
+      tcsPaise: totals.tcs,
+      attachmentCount: attachments || undefined,
       lines: lines
         .filter((l) => l.qty > 0)
         .map((l) => ({
@@ -109,200 +168,335 @@ export default function NewInvoicePage() {
           qty: l.qty,
           uqc: l.uqc,
           ratePaise: l.ratePaise,
-          discountPct: l.discountPct,
+          discountPct: effectiveDiscountPct(l),
           gstRatePct: l.gstRatePct,
         })),
     });
-    if (send) markInvoiceSent(inv.id);
-    toast.success(`Invoice ${inv.number} created`, {
-      description: send
-        ? 'Emailed to the customer and posted to the ledger.'
-        : 'Posted to the ledger. Journal entry created.',
+    if (mode === 'send') markInvoiceSent(inv.id);
+    toast.success(`Invoice ${inv.number} ${mode === 'draft' ? 'saved as draft' : 'saved and sent'}`, {
+      description:
+        mode === 'draft'
+          ? 'Drafts stay out of the ledger until you approve them.'
+          : 'Emailed to the customer and posted to the ledger.',
     });
     router.push(`/sales/invoices/${inv.id}`);
   };
 
   return (
-    <>
-      <PageHeader
-        title="New invoice"
-        description="Tax is resolved live from your branch state and the customer's place of supply."
-        actions={
-          <>
-            <Button variant="outline" size="sm" onClick={() => router.back()}>
-              Cancel
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => save(false)} className="gap-1.5">
-              <Save className="size-3.5" /> Save
-            </Button>
-            <Button size="sm" onClick={() => save(true)} className="gap-1.5">
-              <Send className="size-3.5" /> Save &amp; send
-            </Button>
-          </>
-        }
-      />
-
-      <div className="grid gap-6 lg:grid-cols-3">
-        <div className="space-y-6 lg:col-span-2">
-          <Card className="p-5">
-            <FormSection title="Invoice details">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Customer" required>
-                  <Select value={customerId} onValueChange={setCustomerId}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select a customer…" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {custList.map((c) => (
-                        <SelectItem key={c.id} value={c.id}>
-                          {c.displayName}
-                          {c.gstin ? ` · ${c.gstin}` : ' · Unregistered'}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
-
-                <Field label="Branch (GSTIN)" required hint={branch ? `Supplying from ${stateName(branch.stateCode)}` : undefined}>
-                  <Select value={branchId} onValueChange={setBranchId}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {branches.map((b) => (
-                        <SelectItem key={b.id} value={b.id}>
-                          {b.name} · {b.gstin}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
-
-                <Field label="Invoice date" required>
-                  <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-                </Field>
-
-                <Field
-                  label="Due date"
-                  hint={`Auto from ${customer?.paymentTermsDays ?? 30}-day payment terms`}
-                >
-                  <Input type="date" value={dueDate} readOnly className="bg-muted/40" />
-                </Field>
-
-                <Field
-                  label="Place of supply"
-                  required
-                  className="sm:col-span-2"
-                  hint="Changing this switches the tax between CGST+SGST and IGST"
-                >
-                  <Select value={pos} onValueChange={setPlaceOfSupply}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select state…" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {Object.entries(GST_STATES).map(([code, name]) => (
-                        <SelectItem key={code} value={code}>
-                          {code} — {name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
-              </div>
-            </FormSection>
-          </Card>
-
-          <Card className="p-5">
-            <FormSection title="Items">
-              <LineItemsEditor lines={lines} onChange={setLines} supplyType={supplyType} />
-            </FormSection>
-          </Card>
-
-          <Card className="p-5">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Notes to customer">
-                <Textarea
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                  rows={3}
-                  placeholder="Thanks for your business…"
-                />
-              </Field>
-              <Field label="Terms & conditions">
-                <Textarea value={terms} onChange={(e) => setTerms(e.target.value)} rows={3} />
-              </Field>
+    <DocumentForm
+      title="New Invoice"
+      icon={<FileText className="size-5 text-muted-foreground" />}
+      backHref="/sales/invoices"
+      headerExtra={
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Invoice preferences"
+          onClick={() => toast.info('Invoice preferences', { description: 'Numbering, templates and defaults live in Settings.' })}
+        >
+          <Settings2 className="size-4" />
+        </Button>
+      }
+      footer={
+        <>
+          <Button variant="outline" onClick={() => save('draft')} disabled={!!saving} className="gap-1.5">
+            {saving === 'draft' ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+            Save as Draft
+          </Button>
+          <Button onClick={() => save('send')} disabled={!!saving} className="gap-1.5">
+            {saving === 'send' ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+            Save and Send
+          </Button>
+          <Button variant="ghost" onClick={() => router.push('/sales/invoices')} disabled={!!saving}>
+            Cancel
+          </Button>
+        </>
+      }
+      footerSummary={
+        <>
+          <p className="text-sm">
+            <span className="text-muted-foreground">Total Amount: </span>
+            <span className="font-semibold tabular">{formatINR(totals.rounded)}</span>
+          </p>
+          <p className="text-[11px] text-muted-foreground">
+            Total Quantity: <span className="tabular">{totals.qty}</span>
+          </p>
+        </>
+      }
+    >
+      {/* ── Header fields ─────────────────────────────────────────────── */}
+      <div className="space-y-4">
+        <FormRow label="Customer Name" required width="lg">
+          <Combobox
+            options={customers}
+            value={customerId}
+            onChange={onCustomerChange}
+            placeholder="Select or add a customer"
+            searchPlaceholder="Search customers by name or GSTIN"
+            createLabel="New Customer"
+            onCreate={() => router.push('/sales/customers/new')}
+            clearable
+          />
+          {customer && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              <Badge variant="secondary" className="text-[10px] capitalize">
+                {customer.gstTreatment.replace(/_/g, ' ')}
+              </Badge>
+              <Badge variant="outline" className="text-[10px]">
+                {stateName(customer.stateCode)}
+              </Badge>
+              {customer.creditLimit && (
+                <Badge variant="outline" className="text-[10px]">
+                  Credit limit {formatINR(customer.creditLimit)}
+                </Badge>
+              )}
+              {customer.customerDeductsTds && (
+                <Badge variant="outline" className="border-amber-500/40 text-[10px]">
+                  Deducts TDS
+                </Badge>
+              )}
             </div>
-          </Card>
+          )}
+        </FormRow>
+
+        <FormRowPair>
+          <FormRow label="Invoice#" required>
+            <Input
+              value={number || nextNumber}
+              onChange={(e) => setNumber(e.target.value)}
+              className="font-mono"
+            />
+          </FormRow>
+          <FormRow label="Order Number">
+            <Input
+              value={orderNumber}
+              onChange={(e) => setOrderNumber(e.target.value)}
+              placeholder="Customer PO reference"
+            />
+          </FormRow>
+        </FormRowPair>
+
+        <FormRowPair>
+          <FormRow label="Invoice Date" required>
+            <Input type="date" value={date} onChange={(e) => onDateChange(e.target.value)} />
+          </FormRow>
+          <FormRow label="Terms">
+            <Combobox
+              options={termsOptions()}
+              value={paymentTerms}
+              onChange={onTermsChange}
+              placeholder="Select terms"
+              showAvatar={false}
+              searchPlaceholder="Search terms"
+            />
+          </FormRow>
+        </FormRowPair>
+
+        <FormRowPair>
+          <FormRow label="Due Date">
+            <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+          </FormRow>
+          <FormRow label="Salesperson">
+            <Combobox
+              options={salespeople}
+              value={salespersonId}
+              onChange={setSalespersonId}
+              placeholder="Select a salesperson"
+              searchPlaceholder="Search people"
+              clearable
+            />
+          </FormRow>
+        </FormRowPair>
+
+        <FormRow label="Subject" width="lg" hint="A short line summarising what this invoice is for">
+          <Input
+            value={subject}
+            onChange={(e) => setSubject(e.target.value)}
+            placeholder="e.g. Spare parts supply — August 2026"
+          />
+        </FormRow>
+
+        <FormSectionRule label="GST" />
+
+        <FormRowPair>
+          <FormRow label="Branch (GSTIN)" required>
+            <Combobox
+              options={branches}
+              value={branchId}
+              onChange={setBranchId}
+              placeholder="Select branch"
+              searchPlaceholder="Search branches"
+            />
+          </FormRow>
+          <FormRow label="Place of Supply" required>
+            <Combobox
+              options={states}
+              value={pos}
+              onChange={setPlaceOfSupply}
+              placeholder="Select state"
+              searchPlaceholder="Search states"
+              showAvatar={false}
+            />
+          </FormRow>
+        </FormRowPair>
+
+        {customer && branch && (
+          <div className="flex items-start gap-2.5 rounded-md border border-primary/25 bg-primary/5 px-3 py-2.5 sm:ml-[166px]">
+            <Info className="mt-0.5 size-3.5 shrink-0 text-primary" />
+            <p className="text-xs leading-relaxed">
+              <span className="font-medium">{supplyTypeLabel(supplyType)}</span>
+              <span className="text-muted-foreground">
+                {' — supplying from '}{stateName(branch.stateCode)}{' to '}{stateName(pos)}
+                {supplyType === 'intra' && '. Same state, so the tax splits equally between centre and state.'}
+                {supplyType === 'inter' && '. Different states, so a single integrated tax applies.'}
+                {supplyType === 'export_lut' && '. Exports under LUT are zero-rated.'}
+                {supplyType === 'sez' && '. Supplies to an SEZ unit are zero-rated.'}
+              </span>
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* ── Item table ────────────────────────────────────────────────── */}
+      <div className="space-y-3">
+        <h2 className="text-sm font-semibold">Item Table</h2>
+        <LineItemsEditor lines={lines} onChange={setLines} supplyType={supplyType} />
+      </div>
+
+      {/* ── Notes + totals ────────────────────────────────────────────── */}
+      <div className="grid gap-6 lg:grid-cols-2">
+        <div className="space-y-4">
+          <div>
+            <label className="mb-1 block text-[13px] text-field-label">Customer Notes</label>
+            <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} />
+            <p className="mt-1 text-[11px] text-muted-foreground">Shown on the invoice.</p>
+          </div>
+          <div>
+            <label className="mb-1 block text-[13px] text-field-label">Terms &amp; Conditions</label>
+            <Textarea value={terms} onChange={(e) => setTerms(e.target.value)} rows={3} />
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setAttachments((n) => n + 1);
+              toast.success('File attached', { description: 'Attachments travel with the invoice.' });
+            }}
+            className="flex items-center gap-2 rounded-md border border-dashed px-3 py-2.5 text-sm text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
+          >
+            <Paperclip className="size-3.5" />
+            Attach File(s) to Invoice
+            {attachments > 0 && (
+              <Badge variant="secondary" className="text-[10px]">{attachments} attached</Badge>
+            )}
+          </button>
         </div>
 
-        {/* Live totals + tax explanation */}
-        <div className="space-y-4">
-          <Card className="sticky top-20 p-5">
-            <h3 className="mb-3 text-sm font-semibold">Totals</h3>
-
-            {customer && (
-              <div className="mb-4 rounded-md border bg-muted/40 p-3">
-                <div className="flex items-start gap-2">
-                  <Info className="mt-0.5 size-3.5 shrink-0 text-primary" />
-                  <div className="min-w-0 text-xs">
-                    <p className="font-medium">{supplyTypeLabel(supplyType)}</p>
-                    <p className="mt-1 leading-relaxed text-muted-foreground">
-                      {branch && `Supplying from ${stateName(branch.stateCode)} (${branch.stateCode})`}
-                      {pos && ` to ${stateName(pos)} (${pos})`}
-                      {supplyType === 'intra' && ' — same state, so the tax splits equally between centre and state.'}
-                      {supplyType === 'inter' && ' — different states, so a single integrated tax applies.'}
-                      {supplyType === 'export_lut' && ' — exports under LUT are zero-rated.'}
-                      {supplyType === 'sez' && ' — supplies to an SEZ unit are zero-rated.'}
-                    </p>
-                  </div>
-                </div>
+        {/* Totals panel */}
+        <div className="rounded-md border bg-muted/30 p-4">
+          <dl className="space-y-2 text-sm">
+            <div className="flex items-center justify-between">
+              <dt className="text-muted-foreground">Sub Total</dt>
+              <dd className="tabular">{formatINR(totals.grossBeforeDiscount)}</dd>
+            </div>
+            {totals.discount > 0 && (
+              <div className="flex items-center justify-between">
+                <dt className="text-muted-foreground">Discount</dt>
+                <dd className="tabular text-destructive">−{formatINR(totals.discount)}</dd>
               </div>
             )}
+            <div className="flex items-center justify-between">
+              <dt className="text-muted-foreground">Taxable Value</dt>
+              <dd className="tabular">{formatINR(totals.tax.taxablePaise)}</dd>
+            </div>
 
-            <TotalRow label="Taxable value">
-              <Money value={totals.tax.taxablePaise} />
-            </TotalRow>
             {totals.tax.cgstPaise > 0 && (
               <>
-                <TotalRow label="CGST" muted>
-                  <Money value={totals.tax.cgstPaise} />
-                </TotalRow>
-                <TotalRow label="SGST" muted>
-                  <Money value={totals.tax.sgstPaise} />
-                </TotalRow>
+                <div className="flex items-center justify-between">
+                  <dt className="text-muted-foreground">CGST</dt>
+                  <dd className="tabular">{formatINR(totals.tax.cgstPaise)}</dd>
+                </div>
+                <div className="flex items-center justify-between">
+                  <dt className="text-muted-foreground">SGST</dt>
+                  <dd className="tabular">{formatINR(totals.tax.sgstPaise)}</dd>
+                </div>
               </>
             )}
             {totals.tax.igstPaise > 0 && (
-              <TotalRow label="IGST" muted>
-                <Money value={totals.tax.igstPaise} />
-              </TotalRow>
-            )}
-            {totals.roundOff !== 0 && (
-              <TotalRow label="Round off" muted>
-                <Money value={totals.roundOff} />
-              </TotalRow>
-            )}
-            <TotalRow label="Total" emphasis>
-              <Money value={totals.rounded} />
-            </TotalRow>
-
-            {customer?.creditLimit && (
-              <div className="mt-4 rounded-md border p-3 text-xs">
-                <p className="text-muted-foreground">Credit limit</p>
-                <p className="mt-0.5 font-medium">
-                  <Money value={customer.creditLimit} />
-                </p>
+              <div className="flex items-center justify-between">
+                <dt className="text-muted-foreground">IGST</dt>
+                <dd className="tabular">{formatINR(totals.tax.igstPaise)}</dd>
               </div>
             )}
 
-            {s.org?.aatoAbove5Cr && customer?.gstin && (
-              <Badge variant="secondary" className="mt-4 w-full justify-center text-[11px]">
-                E-invoice (IRN) required for this customer
-              </Badge>
+            {/* Shipping */}
+            <div className="flex items-center justify-between gap-3 border-t pt-2">
+              <dt className="text-muted-foreground">Shipping Charges</dt>
+              <dd>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={shipping === 0 ? '' : toRupees(shipping)}
+                  onChange={(e) => setShipping(Math.round(parseFloat(e.target.value || '0') * 100))}
+                  placeholder="0.00"
+                  className="h-8 w-28 text-right tabular"
+                />
+              </dd>
+            </div>
+
+            {/* Adjustment */}
+            <div className="flex items-center justify-between gap-3">
+              <dt className="min-w-0 flex-1">
+                <Input
+                  value={adjustmentLabel}
+                  onChange={(e) => setAdjustmentLabel(e.target.value)}
+                  className="h-8 max-w-[140px] text-xs"
+                />
+              </dt>
+              <dd>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={adjustment === 0 ? '' : toRupees(adjustment)}
+                  onChange={(e) => setAdjustment(Math.round(parseFloat(e.target.value || '0') * 100))}
+                  placeholder="0.00"
+                  className="h-8 w-28 text-right tabular"
+                />
+              </dd>
+            </div>
+
+            {/* TCS */}
+            <label className="flex cursor-pointer items-center justify-between gap-3">
+              <span className="flex items-center gap-2 text-muted-foreground">
+                <Checkbox checked={applyTcs} onCheckedChange={(v) => setApplyTcs(v === true)} />
+                TCS @ {TCS_RATE_PCT}% (206C(1H))
+              </span>
+              <span className="tabular">{formatINR(totals.tcs)}</span>
+            </label>
+
+            {totals.roundOff !== 0 && (
+              <div className="flex items-center justify-between">
+                <dt className="text-muted-foreground">Round Off</dt>
+                <dd className="tabular">{formatINR(totals.roundOff)}</dd>
+              </div>
             )}
-          </Card>
+
+            <div className="flex items-center justify-between border-t pt-2.5 text-base font-semibold">
+              <dt>Total</dt>
+              <dd className="tabular">{formatINR(totals.rounded)}</dd>
+            </div>
+          </dl>
+
+          <label className="mt-4 flex cursor-pointer items-start gap-2 border-t pt-3 text-xs">
+            <Checkbox checked={markPaid} onCheckedChange={(v) => setMarkPaid(v === true)} className="mt-0.5" />
+            <span className="text-muted-foreground">
+              I have received the payment
+              <span className="mt-0.5 block text-[11px]">
+                Records the receipt at the same time, so the invoice is created already settled.
+              </span>
+            </span>
+          </label>
         </div>
       </div>
-    </>
+    </DocumentForm>
   );
 }

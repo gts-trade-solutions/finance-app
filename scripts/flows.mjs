@@ -42,31 +42,36 @@ await page.goto(`${BASE}/reports/balance-sheet`, { waitUntil: 'networkidle' });
 check('Balance sheet balances', await page.getByText('Assets equal liabilities plus equity').count() > 0);
 
 // ── 3. GST resolves intra-state (CGST+SGST) vs inter-state (IGST)
-// Select triggers on this form, in DOM order: 0 customer, 1 branch,
-// 2 place of supply, 3 line-item, 4 line GST rate.
-const sel = (n) => page.locator('[data-slot="select-trigger"]').nth(n);
+// Comboboxes on this form, in DOM order: 0 customer, 1 terms, 2 salesperson,
+// 3 branch, 4 place of supply, 5 first line item.
+const sel = (n) => page.locator('[data-slot="combobox-trigger"]').nth(n);
 
 await page.goto(`${BASE}/sales/invoices/new`, { waitUntil: 'networkidle' });
 await sel(0).click();
 await page.getByRole('option', { name: /Sharma Traders/ }).click();
-await page.waitForTimeout(500);
+await page.waitForTimeout(600);
 const intraLabel = await page.getByText('Intra-state — CGST + SGST').count();
 check('Tamil Nadu customer resolves to CGST + SGST', intraLabel > 0);
 
+// The picker searches, which is the fix the client asked for.
 await sel(0).click();
+await page.locator('input[placeholder="Search customers by name or GSTIN"]').fill('Apex');
+await page.waitForTimeout(400);
+const filtered = await page.locator('[role="option"]').count();
+check('Customer picker filters as you type', filtered > 0 && filtered < 5, `${filtered} match(es)`);
 await page.getByRole('option', { name: /Apex Motors/ }).click();
-await page.waitForTimeout(500);
+await page.waitForTimeout(600);
 const interLabel = await page.getByText('Inter-state — IGST').count();
 check('Karnataka customer flips to IGST', interLabel > 0);
 
 // ── 4. Create an invoice and confirm it posts a balanced journal entry
-await sel(3).click();
+await sel(5).click();
 await page.getByRole('option', { name: /Brake Pad Set/ }).click();
-await page.waitForTimeout(500);
+await page.waitForTimeout(600);
 const totalTxt = await page.locator('text=Total').last().locator('xpath=..').innerText().catch(() => '');
 check('Totals panel computes a non-zero total', money(totalTxt) > 0, totalTxt.replace(/\n/g, ' ').slice(0, 40));
 
-await page.getByRole('button', { name: /^Save$/ }).click();
+await page.getByRole('button', { name: 'Save and Send' }).click();
 await page.waitForURL((u) => /\/sales\/invoices\/inv/.test(u.toString()), { timeout: 20000 });
 check('Invoice saves and opens its detail page', /\/sales\/invoices\/inv/.test(page.url()));
 

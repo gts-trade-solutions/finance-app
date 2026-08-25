@@ -7,9 +7,7 @@ import { FileCheck2, Plus, Receipt } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
+import { Combobox } from '@/components/ui/combobox';
 import { PageHeader } from '@/components/shared/page-header';
 import { DataTable, type Column } from '@/components/shared/data-table';
 import { Money } from '@/components/shared/money';
@@ -172,18 +170,17 @@ export default function InvoicesPage() {
           searchPlaceholder="Search invoice no. or customer…"
           initialSort={{ key: 'date', dir: 'desc' }}
           toolbar={
-            <Select value={filter} onValueChange={setFilter}>
-              <SelectTrigger className="w-44">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {FILTERS.map((f) => (
-                  <SelectItem key={f} value={f} className="capitalize">
-                    {f === 'all' ? 'All statuses' : f.replace('_', ' ')}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Combobox
+              options={FILTERS.map((f) => ({
+                value: f,
+                label: f === 'all' ? 'All statuses' : f.replace('_', ' ').replace(/^\w/, (c) => c.toUpperCase()),
+              }))}
+              value={filter}
+              onChange={setFilter}
+              showAvatar={false}
+              searchPlaceholder="Filter status"
+              className="w-44"
+            />
           }
         />
       )}

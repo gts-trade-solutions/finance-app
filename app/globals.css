@@ -36,84 +36,130 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  /* Zoho-style surfaces */
+  --color-topbar: var(--topbar);
+  --color-topbar-foreground: var(--topbar-foreground);
+  --color-surface: var(--surface);
+  --color-field-label: var(--field-label);
+  --color-required: var(--required);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+  --radius-sm: calc(var(--radius) - 1px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 6px);
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   --font-mono: ui-monospace, "Cascadia Code", "Source Code Pro", monospace;
 }
 
+/*
+  Palette follows the Zoho Books convention: a deep navy chrome (sidebar and
+  top band) framing a near-white workspace, with one saturated blue carrying
+  every primary action. Radii stay tight (4px) because dense financial tables
+  read as sloppy when corners are soft.
+*/
 :root {
-  --radius: 0.625rem;
-  /* Indigo-led finance palette: trustworthy, high-contrast, print-safe */
-  --background: oklch(0.99 0.002 250);
-  --foreground: oklch(0.21 0.01 260);
+  --radius: 0.25rem;
+
+  --background: oklch(0.975 0.002 250);
+  --surface: oklch(1 0 0);
+  --foreground: oklch(0.24 0.012 258);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.21 0.01 260);
+  --card-foreground: oklch(0.24 0.012 258);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.21 0.01 260);
-  --primary: oklch(0.52 0.19 270);
-  --primary-foreground: oklch(0.99 0.002 250);
-  --secondary: oklch(0.96 0.006 260);
-  --secondary-foreground: oklch(0.3 0.02 265);
-  --muted: oklch(0.96 0.005 255);
-  --muted-foreground: oklch(0.53 0.015 260);
-  --accent: oklch(0.95 0.02 265);
-  --accent-foreground: oklch(0.35 0.06 268);
-  --destructive: oklch(0.58 0.21 27);
-  --destructive-foreground: oklch(0.99 0.002 250);
-  --border: oklch(0.91 0.006 260);
-  --input: oklch(0.91 0.006 260);
-  --ring: oklch(0.52 0.19 270);
-  --chart-1: oklch(0.55 0.18 268);
-  --chart-2: oklch(0.65 0.14 195);
-  --chart-3: oklch(0.68 0.15 150);
-  --chart-4: oklch(0.75 0.15 78);
+  --popover-foreground: oklch(0.24 0.012 258);
+
+  --primary: oklch(0.55 0.19 259);
+  --primary-foreground: oklch(1 0 0);
+
+  --secondary: oklch(0.965 0.004 252);
+  --secondary-foreground: oklch(0.33 0.015 258);
+  --muted: oklch(0.968 0.003 252);
+  --muted-foreground: oklch(0.52 0.012 256);
+  --accent: oklch(0.955 0.018 252);
+  --accent-foreground: oklch(0.36 0.06 258);
+
+  --destructive: oklch(0.577 0.212 27);
+  --destructive-foreground: oklch(1 0 0);
+  --success: oklch(0.6 0.14 155);
+  --warning: oklch(0.72 0.15 70);
+  --info: oklch(0.6 0.14 240);
+
+  --border: oklch(0.9 0.005 256);
+  --input: oklch(0.87 0.007 256);
+  --ring: oklch(0.55 0.19 259);
+
+  --field-label: oklch(0.45 0.012 256);
+  --required: oklch(0.55 0.2 25);
+
+  --chart-1: oklch(0.55 0.19 259);
+  --chart-2: oklch(0.66 0.13 195);
+  --chart-3: oklch(0.66 0.15 152);
+  --chart-4: oklch(0.75 0.15 75);
   --chart-5: oklch(0.62 0.2 12);
-  --sidebar: oklch(0.22 0.02 265);
-  --sidebar-foreground: oklch(0.88 0.01 260);
-  --sidebar-primary: oklch(0.62 0.18 270);
+
+  /* Navy chrome */
+  --topbar: oklch(0.28 0.035 262);
+  --topbar-foreground: oklch(0.97 0.005 250);
+  --sidebar: oklch(0.255 0.033 262);
+  --sidebar-foreground: oklch(0.86 0.012 252);
+  --sidebar-primary: oklch(0.58 0.19 259);
   --sidebar-primary-foreground: oklch(1 0 0);
-  --sidebar-accent: oklch(0.28 0.03 268);
-  --sidebar-accent-foreground: oklch(0.97 0.005 260);
-  --sidebar-border: oklch(0.3 0.02 265);
-  --sidebar-ring: oklch(0.62 0.18 270);
+  --sidebar-accent: oklch(0.32 0.035 262);
+  --sidebar-accent-foreground: oklch(0.98 0.004 250);
+  --sidebar-border: oklch(0.34 0.03 262);
+  --sidebar-ring: oklch(0.58 0.19 259);
 }
 
 .dark {
-  --background: oklch(0.17 0.012 265);
-  --foreground: oklch(0.95 0.005 260);
-  --card: oklch(0.21 0.015 265);
-  --card-foreground: oklch(0.95 0.005 260);
-  --popover: oklch(0.21 0.015 265);
-  --popover-foreground: oklch(0.95 0.005 260);
-  --primary: oklch(0.68 0.16 272);
-  --primary-foreground: oklch(0.17 0.012 265);
-  --secondary: oklch(0.27 0.018 265);
-  --secondary-foreground: oklch(0.95 0.005 260);
-  --muted: oklch(0.26 0.015 265);
-  --muted-foreground: oklch(0.68 0.012 260);
-  --accent: oklch(0.3 0.03 268);
-  --accent-foreground: oklch(0.95 0.005 260);
-  --destructive: oklch(0.65 0.19 25);
+  --background: oklch(0.185 0.012 260);
+  --surface: oklch(0.225 0.014 260);
+  --foreground: oklch(0.94 0.005 250);
+  --card: oklch(0.225 0.014 260);
+  --card-foreground: oklch(0.94 0.005 250);
+  --popover: oklch(0.235 0.014 260);
+  --popover-foreground: oklch(0.94 0.005 250);
+
+  --primary: oklch(0.65 0.17 258);
+  --primary-foreground: oklch(0.15 0.01 260);
+
+  --secondary: oklch(0.28 0.016 260);
+  --secondary-foreground: oklch(0.94 0.005 250);
+  --muted: oklch(0.27 0.014 260);
+  --muted-foreground: oklch(0.7 0.012 252);
+  --accent: oklch(0.31 0.028 260);
+  --accent-foreground: oklch(0.95 0.005 250);
+
+  --destructive: oklch(0.66 0.19 25);
   --destructive-foreground: oklch(0.98 0.002 250);
-  --border: oklch(0.3 0.015 265);
-  --input: oklch(0.32 0.015 265);
-  --ring: oklch(0.68 0.16 272);
-  --chart-1: oklch(0.66 0.17 270);
+  --success: oklch(0.7 0.14 155);
+  --warning: oklch(0.78 0.14 72);
+  --info: oklch(0.68 0.13 240);
+
+  --border: oklch(0.32 0.014 260);
+  --input: oklch(0.34 0.014 260);
+  --ring: oklch(0.65 0.17 258);
+
+  --field-label: oklch(0.72 0.01 252);
+  --required: oklch(0.68 0.18 25);
+
+  --chart-1: oklch(0.65 0.17 258);
   --chart-2: oklch(0.72 0.13 195);
-  --chart-3: oklch(0.74 0.14 150);
-  --chart-4: oklch(0.8 0.14 78);
+  --chart-3: oklch(0.73 0.14 152);
+  --chart-4: oklch(0.8 0.14 75);
   --chart-5: oklch(0.68 0.19 14);
-  --sidebar: oklch(0.14 0.012 265);
-  --sidebar-foreground: oklch(0.88 0.008 260);
-  --sidebar-primary: oklch(0.68 0.16 272);
-  --sidebar-primary-foreground: oklch(0.14 0.012 265);
-  --sidebar-accent: oklch(0.24 0.02 268);
-  --sidebar-accent-foreground: oklch(0.95 0.005 260);
-  --sidebar-border: oklch(0.26 0.015 265);
-  --sidebar-ring: oklch(0.68 0.16 272);
+
+  --topbar: oklch(0.2 0.016 260);
+  --topbar-foreground: oklch(0.95 0.005 250);
+  --sidebar: oklch(0.175 0.014 260);
+  --sidebar-foreground: oklch(0.86 0.01 252);
+  --sidebar-primary: oklch(0.65 0.17 258);
+  --sidebar-primary-foreground: oklch(1 0 0);
+  --sidebar-accent: oklch(0.26 0.02 260);
+  --sidebar-accent-foreground: oklch(0.95 0.005 250);
+  --sidebar-border: oklch(0.28 0.014 260);
+  --sidebar-ring: oklch(0.65 0.17 258);
 }
 
 @layer base {
@@ -123,8 +169,8 @@
   body {
     @apply bg-background text-foreground;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    -webkit-font-smoothing: antialiased;
   }
-  /* Money and document numbers align in columns */
   .tabular {
     font-variant-numeric: tabular-nums;
   }
@@ -136,12 +182,34 @@
     text-align: right;
   }
   /* Thin scrollbars for dense data screens */
-  .thin-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+  .thin-scroll::-webkit-scrollbar { width: 9px; height: 9px; }
   .thin-scroll::-webkit-scrollbar-thumb {
-    background: var(--border);
-    border-radius: 4px;
+    background: color-mix(in oklab, var(--muted-foreground) 30%, transparent);
+    border-radius: 6px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  .thin-scroll::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklab, var(--muted-foreground) 50%, transparent);
+    background-clip: content-box;
   }
   .thin-scroll::-webkit-scrollbar-track { background: transparent; }
+
+  /* Soft layered lift, used instead of heavy borders */
+  .surface-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    box-shadow: 0 1px 2px 0 oklch(0.24 0.012 258 / 0.04);
+  }
+  .surface-raised {
+    box-shadow:
+      0 1px 2px oklch(0.24 0.012 258 / 0.05),
+      0 4px 12px oklch(0.24 0.012 258 / 0.06);
+  }
+  /* Sticky form footer sits above content without a hard edge */
+  .footer-bar {
+    box-shadow: 0 -1px 3px oklch(0.24 0.012 258 / 0.07);
+  }
 }
 
 /* ── Print: invoice/report output only ──────────────────────────────────── */
