@@ -51,7 +51,8 @@ await shot('05-invoice-filled', '/sales/invoices/new', async () => {
   await page.waitForTimeout(700);
 });
 
-await shot('06-reconcile', '/banking/reconcile');
+await shot('06-banking', '/banking');
+await shot('06b-reconcile', '/banking/reconcile');
 await shot('07-reports', '/reports');
 await shot('08-trial-balance', '/reports/trial-balance');
 

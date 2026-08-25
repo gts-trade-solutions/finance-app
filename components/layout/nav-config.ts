@@ -3,7 +3,7 @@ import {
   FileText, Landmark, LayoutDashboard, type LucideIcon, Package, Receipt,
   ReceiptIndianRupee, Repeat, ScrollText, Settings, ShieldCheck, ShoppingCart,
   Truck, Users, Wallet, FileCheck2, HandCoins, ClipboardList, CalendarClock,
-  FileMinus, FileClock, Building, AlertTriangle, ArrowLeftRight, Split,
+  FileMinus, Building, AlertTriangle, Split,
 } from 'lucide-react';
 
 export interface NavItem {
@@ -19,7 +19,10 @@ export interface NavGroup {
   label: string;
   icon: LucideIcon;
   module: string;
+  /** A group with no items renders as a single link to `href`. */
+  href?: string;
   items: NavItem[];
+  badge?: NavItem['badge'];
 }
 
 export const NAV_GROUPS: NavGroup[] = [
@@ -55,17 +58,14 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    // One destination, as in Zoho. Accounts, reconcile, imports, rules,
+    // transfers and cheques all live inside the Banking workspace.
     label: 'Banking',
     icon: Landmark,
     module: 'banking',
-    items: [
-      { label: 'Accounts', href: '/banking/accounts', icon: Landmark, module: 'banking' },
-      { label: 'Reconcile', href: '/banking/reconcile', icon: Split, module: 'banking', badge: 'unmatched' },
-      { label: 'Imports & Feeds', href: '/banking/imports', icon: FileSpreadsheet, module: 'banking' },
-      { label: 'Bank Rules', href: '/banking/rules', icon: ScrollText, module: 'banking' },
-      { label: 'Transfers', href: '/banking/transfers', icon: ArrowLeftRight, module: 'banking' },
-      { label: 'Cheques & PDC', href: '/banking/cheques', icon: FileClock, module: 'banking' },
-    ],
+    href: '/banking',
+    badge: 'unmatched',
+    items: [],
   },
   {
     label: 'Accountant',

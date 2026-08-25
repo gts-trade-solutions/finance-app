@@ -1,23 +1,29 @@
 import type { Metadata } from 'next';
-import { Inter, Fraunces } from 'next/font/google';
+import { IBM_Plex_Sans, IBM_Plex_Mono } from 'next/font/google';
 import './globals.css';
 import { Toaster } from '@/components/ui/sonner';
 
-const inter = Inter({
-  variable: '--font-inter',
+/**
+ * Plex Sans is drawn on an engineering grid — even stroke, open counters, no
+ * decorative flourish. It sets the precise, technical tone the interface wants.
+ */
+const plexSans = IBM_Plex_Sans({
+  variable: '--font-sans-src',
   subsets: ['latin'],
+  weight: ['400', '500', '600', '700'],
   display: 'swap',
 });
 
 /**
- * Editorial serif for page titles and headline figures. Optical sizing lets it
- * stay elegant at 28px without turning spindly at 15px.
+ * Every figure in the app is set in Plex Mono. Monospaced numerals column up
+ * exactly, which is what makes a ledger scannable — you compare digit
+ * positions, not word shapes.
  */
-const fraunces = Fraunces({
-  variable: '--font-display',
+const plexMono = IBM_Plex_Mono({
+  variable: '--font-mono-src',
   subsets: ['latin'],
+  weight: ['400', '500', '600'],
   display: 'swap',
-  axes: ['SOFT', 'WONK', 'opsz'],
 });
 
 export const metadata: Metadata = {
@@ -37,7 +43,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
           }}
         />
       </head>
-      <body className={`${inter.variable} ${fraunces.variable} font-sans antialiased`}>
+      <body className={`${plexSans.variable} ${plexMono.variable} font-sans antialiased`}>
         {children}
         <Toaster position="bottom-right" richColors closeButton />
       </body>

@@ -21,7 +21,7 @@ const ROUTES = [
   '/purchases/bills', '/purchases/bills/new', '/purchases/payments',
   '/purchases/payments/new', '/purchases/vendor-credits', '/purchases/msme-tracker',
   // Banking
-  '/banking/accounts', '/banking/reconcile', '/banking/imports',
+  '/banking', '/banking/reconcile', '/banking/imports',
   '/banking/rules', '/banking/transfers', '/banking/cheques',
   // Accountant
   '/accountant/journals', '/accountant/chart-of-accounts',

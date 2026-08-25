@@ -1,9 +1,8 @@
 'use client';
 
-// Editorial navigation: a pale ivory column separated from the workspace by a
-// hairline, not a slab of colour. The active row is marked by a gilt bar and
-// ink-weight type rather than a filled block, which keeps the eye calm while
-// still being unmistakable.
+// Navigation as an engineered rail: a cool slate column, a hairline seam, and
+// a 2px cobalt bar marking the active row. No filled blocks — the bar plus a
+// weight change is enough, and it keeps a long nav list quiet.
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -46,7 +45,7 @@ function NavRow({ item, count, nested }: { item: NavItem; count?: number; nested
     <div className="group/row relative">
       {/* Gilt marker instead of a filled active block */}
       {active && (
-        <span className="absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-full bg-gilt" />
+        <span className="absolute left-0 top-1/2 h-5 w-[2px] -translate-y-1/2 bg-primary" />
       )}
       <Link
         href={item.href}
@@ -98,12 +97,13 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <div className="flex h-full flex-col border-r bg-sidebar" onClick={onNavigate}>
       {/* Wordmark */}
-      <Link href="/dashboard" className="flex h-16 shrink-0 flex-col justify-center gap-0.5 px-5">
-        <span className="font-display text-[19px] leading-none tracking-tight text-foreground">
-          Finora
-        </span>
-        <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-          {org?.fiscalYearLabel ?? 'Books'}
+      <Link href="/dashboard" className="flex h-16 shrink-0 items-center gap-2.5 border-b px-5">
+        <span className="h-6 w-[3px] shrink-0 bg-primary" />
+        <span className="min-w-0">
+          <span className="block text-[17px] font-semibold leading-none tracking-[-0.02em] text-foreground">
+            Finora
+          </span>
+          <span className="micro-label mt-1 block">{org?.fiscalYearLabel ?? 'Books'}</span>
         </span>
       </Link>
 
@@ -113,6 +113,16 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         ))}
 
         {NAV_GROUPS.filter((g) => visible(g.module)).map((group) => {
+          // A group with no children is a plain destination, not an accordion.
+          if (group.href && group.items.length === 0) {
+            return (
+              <NavRow
+                key={group.label}
+                item={{ label: group.label, href: group.href, icon: group.icon, module: group.module }}
+                count={group.badge ? counts[group.badge] : undefined}
+              />
+            );
+          }
           const isOpen = open[group.label] ?? false;
           const groupActive = group.items.some((i) => pathname.startsWith(i.href));
           return (

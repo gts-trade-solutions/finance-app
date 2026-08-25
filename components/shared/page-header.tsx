@@ -13,10 +13,10 @@ export function PageHeader({
 }) {
   return (
     <div className="flex flex-col gap-4 border-b pb-6 sm:flex-row sm:items-start sm:justify-between">
-      <div className="min-w-0">
-        <h1 className="display-xl rule-gilt">{title}</h1>
+      <div className="accent-bar min-w-0">
+        <h1 className="display-xl">{title}</h1>
         {description && (
-          <p className="mt-3 max-w-2xl text-[13.5px] leading-relaxed text-muted-foreground">
+          <p className="mt-2 max-w-2xl text-[13px] leading-relaxed text-muted-foreground">
             {description}
           </p>
         )}

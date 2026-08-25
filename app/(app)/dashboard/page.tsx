@@ -149,7 +149,7 @@ export default function DashboardPage() {
           sub={`Across ${cash.length} accounts`}
           icon={Landmark}
           tone="positive"
-          href="/banking/accounts"
+          href="/banking"
         />
         <StatTile
           label={stats.pl.netProfit >= 0 ? 'Profit (YTD)' : 'Loss (YTD)'}
