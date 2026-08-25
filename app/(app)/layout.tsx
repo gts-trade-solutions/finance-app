@@ -24,9 +24,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   if (!hydrated || !session) {
     return (
       <div className="flex h-screen">
-        <div className="hidden w-60 shrink-0 bg-sidebar lg:block" />
+        <div className="hidden w-64 shrink-0 border-r bg-sidebar lg:block" />
         <div className="flex-1">
-          <div className="h-14 bg-topbar" />
+          <div className="h-16 border-b bg-topbar" />
           <div className="space-y-4 p-6">
             <Skeleton className="h-8 w-64" />
             <Skeleton className="h-28 w-full" />
@@ -39,13 +39,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
-      <aside className="hidden w-60 shrink-0 lg:block">
+      <aside className="hidden w-64 shrink-0 lg:block">
         <Sidebar />
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar />
         <main className="thin-scroll flex-1 overflow-y-auto">
-          <div className="mx-auto max-w-[1500px] space-y-5 p-4 sm:p-6">{children}</div>
+          <div className="mx-auto max-w-[1440px] space-y-7 p-5 sm:p-8">{children}</div>
         </main>
       </div>
     </div>

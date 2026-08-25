@@ -1,8 +1,8 @@
 'use client';
 
-// Navy top band, matching the sidebar so the chrome reads as one frame around
-// the white workspace. Carries global search (focused with "/"), the branch
-// switcher, quick create, and the demo controls.
+// A light paper band separated from the workspace by a hairline. Carries
+// global search (focused with "/"), the branch switcher, quick create, and the
+// demo controls — all in ink, with no filled chrome.
 
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
@@ -43,7 +43,7 @@ function BandButton({
       aria-label={label}
       onClick={onClick}
       className={cn(
-        'grid size-8 place-items-center rounded text-topbar-foreground/75 transition-colors hover:bg-white/10 hover:text-topbar-foreground',
+        'grid size-9 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground',
         className,
       )}
     >
@@ -101,12 +101,12 @@ export function Topbar() {
 
   return (
     <>
-      <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 bg-topbar px-3 sm:px-4">
+      <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-2 border-b bg-topbar px-4 sm:px-6">
         {/* Mobile nav */}
         <Sheet open={mobileNav} onOpenChange={setMobileNav}>
           <SheetTrigger
             aria-label="Open navigation"
-            className="grid size-8 place-items-center rounded text-topbar-foreground/75 hover:bg-white/10 lg:hidden"
+            className="grid size-9 place-items-center rounded-md text-muted-foreground hover:bg-accent lg:hidden"
           >
             <Menu className="size-4" />
           </SheetTrigger>
@@ -121,25 +121,25 @@ export function Topbar() {
           ref={searchRef}
           type="button"
           onClick={() => setSearchOpen(true)}
-          className="flex h-8 max-w-md flex-1 items-center gap-2 rounded border border-white/15 bg-white/10 px-2.5 text-left text-[13px] text-topbar-foreground/60 transition-colors hover:bg-white/15"
+          className="flex h-9 max-w-sm flex-1 items-center gap-2.5 rounded-md border bg-background px-3 text-left text-[13px] text-muted-foreground transition-colors hover:border-foreground/20"
         >
-          <Search className="size-3.5 shrink-0" />
+          <Search className="size-4 shrink-0 opacity-70" />
           <span className="min-w-0 flex-1 truncate">Search customers, invoices, bills…</span>
-          <kbd className="hidden shrink-0 rounded border border-white/20 px-1 font-sans text-[10px] sm:inline">
+          <kbd className="hidden shrink-0 rounded border bg-muted px-1.5 font-sans text-[10px] sm:inline">
             /
           </kbd>
         </button>
 
         <div className="ml-auto flex items-center gap-1">
           {/* Demo org / test banner */}
-          <span className="mr-1 hidden text-[11px] text-topbar-foreground/60 xl:inline">
+          <span className="mr-1 hidden text-[11px] text-muted-foreground xl:inline">
             Demo data · nothing is filed with any portal
           </span>
 
           {/* Branch (GSTIN) switcher */}
           <DropdownMenu>
-            <DropdownMenuTrigger className="flex h-8 items-center gap-1.5 rounded px-2 text-[13px] text-topbar-foreground/85 transition-colors hover:bg-white/10">
-              <Building2 className="size-3.5 shrink-0" />
+            <DropdownMenuTrigger className="flex h-9 items-center gap-1.5 rounded-md px-2.5 text-[13px] text-foreground/80 transition-colors hover:bg-accent">
+              <Building2 className="size-4 shrink-0 opacity-70" />
               <span className="hidden max-w-[130px] truncate sm:inline">{branch?.name ?? 'Branch'}</span>
               <ChevronDown className="size-3 shrink-0" />
             </DropdownMenuTrigger>
@@ -164,7 +164,7 @@ export function Topbar() {
               type="button"
               onClick={() => setQuickOpen(true)}
               aria-label="Quick create"
-              className="grid size-8 place-items-center rounded bg-sidebar-primary text-white transition-opacity hover:opacity-90"
+              className="grid size-9 place-items-center rounded-md bg-primary text-primary-foreground transition-opacity hover:opacity-90"
             >
               <Plus className="size-4" />
             </button>
@@ -180,8 +180,8 @@ export function Topbar() {
 
           {/* Demo controls */}
           <DropdownMenu>
-            <DropdownMenuTrigger className="flex h-8 items-center gap-1.5 rounded px-2 text-[13px] text-topbar-foreground/85 transition-colors hover:bg-white/10">
-              <FlaskConical className="size-3.5" />
+            <DropdownMenuTrigger className="flex h-9 items-center gap-1.5 rounded-md px-2.5 text-[13px] text-foreground/80 transition-colors hover:bg-accent">
+              <FlaskConical className="size-4 opacity-70" />
               <span className="hidden md:inline">Demo</span>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-60">
@@ -226,7 +226,7 @@ export function Topbar() {
           <DropdownMenu>
             <DropdownMenuTrigger
               aria-label="Account"
-              className="ml-0.5 grid size-8 shrink-0 place-items-center rounded-full text-[11px] font-semibold text-white"
+              className="ml-0.5 grid size-9 shrink-0 place-items-center rounded-full text-[11px] font-semibold text-white"
               style={{ backgroundColor: user?.avatarColor ?? 'var(--primary)' }}
             >
               {user?.name.split(' ').map((n) => n[0]).join('') ?? '?'}

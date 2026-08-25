@@ -1,13 +1,14 @@
 'use client';
 
-// Zoho-style navigation: navy rail, collapsible module groups, and sub-items as
-// plain indented text. The active row carries a "+" that jumps straight to the
-// create form for that module — the affordance that saves a click everywhere.
+// Editorial navigation: a pale ivory column separated from the workspace by a
+// hairline, not a slab of colour. The active row is marked by a gilt bar and
+// ink-weight type rather than a filled block, which keeps the eye calm while
+// still being unmistakable.
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { ChevronRight, Plus, Wallet2 } from 'lucide-react';
+import { ChevronRight, Plus } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAppStore } from '@/lib/store';
 import { hasPermission } from '@/lib/store/hooks';
@@ -36,40 +37,31 @@ function useBadgeCounts() {
   return { einvoicePending, unmatched, msmeRisk };
 }
 
-function NavRow({
-  item,
-  count,
-  nested,
-}: {
-  item: NavItem;
-  count?: number;
-  nested?: boolean;
-}) {
+function NavRow({ item, count, nested }: { item: NavItem; count?: number; nested?: boolean }) {
   const pathname = usePathname();
   const active = pathname === item.href || pathname.startsWith(item.href + '/');
   const createHref = CREATE_HREF[item.href];
 
   return (
     <div className="group/row relative">
+      {/* Gilt marker instead of a filled active block */}
+      {active && (
+        <span className="absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-full bg-gilt" />
+      )}
       <Link
         href={item.href}
         className={cn(
-          'flex h-8 items-center gap-2.5 rounded-sm pr-2 text-[13px] transition-colors',
+          'flex h-9 items-center gap-2.5 rounded-md pr-2 text-[13.5px] transition-colors',
           nested ? 'pl-9' : 'pl-3',
           active
-            ? 'bg-sidebar-primary font-medium text-sidebar-primary-foreground'
-            : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+            ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
+            : 'text-sidebar-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground',
         )}
       >
-        {!nested && <item.icon className="size-4 shrink-0" />}
+        {!nested && <item.icon className={cn('size-[17px] shrink-0', active ? 'opacity-90' : 'opacity-70')} />}
         <span className="min-w-0 flex-1 truncate">{item.label}</span>
         {count != null && count > 0 && (
-          <span
-            className={cn(
-              'shrink-0 rounded-full px-1.5 py-px text-[10px] font-semibold tabular',
-              active ? 'bg-white/25 text-white' : 'bg-sidebar-accent text-sidebar-accent-foreground',
-            )}
-          >
+          <span className="shrink-0 rounded-full bg-foreground/8 px-1.5 py-px text-[10px] font-semibold tabular text-muted-foreground">
             {count}
           </span>
         )}
@@ -79,11 +71,7 @@ function NavRow({
           href={createHref}
           aria-label={`New ${item.label}`}
           onClick={(e) => e.stopPropagation()}
-          className={cn(
-            'absolute right-1.5 top-1/2 grid size-5 -translate-y-1/2 place-items-center rounded-full opacity-0 transition-opacity',
-            'group-hover/row:opacity-100 focus-visible:opacity-100',
-            active ? 'bg-white text-sidebar-primary' : 'bg-sidebar-primary text-white',
-          )}
+          className="absolute right-1.5 top-1/2 grid size-5 -translate-y-1/2 place-items-center rounded-full bg-primary text-primary-foreground opacity-0 transition-opacity group-hover/row:opacity-100 focus-visible:opacity-100"
         >
           <Plus className="size-3" />
         </Link>
@@ -100,7 +88,6 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
   const [open, setOpen] = useState<Record<string, boolean>>({});
 
-  // Keep the group containing the current route expanded.
   useEffect(() => {
     const group = NAV_GROUPS.find((g) => g.items.some((i) => pathname.startsWith(i.href)));
     if (group) setOpen((o) => ({ ...o, [group.label]: true }));
@@ -109,24 +96,18 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const visible = (module: string) => hasPermission(role, module, 'view');
 
   return (
-    <div className="flex h-full flex-col bg-sidebar" onClick={onNavigate}>
-      {/* Brand */}
-      <Link
-        href="/dashboard"
-        className="flex h-14 shrink-0 items-center gap-2.5 border-b border-sidebar-border px-4"
-      >
-        <div className="grid size-7 shrink-0 place-items-center rounded bg-sidebar-primary">
-          <Wallet2 className="size-4 text-white" />
-        </div>
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold leading-tight text-white">Finora</p>
-          <p className="truncate text-[10px] leading-tight text-sidebar-foreground/60">
-            {org?.fiscalYearLabel ?? 'Books'}
-          </p>
-        </div>
+    <div className="flex h-full flex-col border-r bg-sidebar" onClick={onNavigate}>
+      {/* Wordmark */}
+      <Link href="/dashboard" className="flex h-16 shrink-0 flex-col justify-center gap-0.5 px-5">
+        <span className="font-display text-[19px] leading-none tracking-tight text-foreground">
+          Finora
+        </span>
+        <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+          {org?.fiscalYearLabel ?? 'Books'}
+        </span>
       </Link>
 
-      <nav className="thin-scroll flex-1 space-y-0.5 overflow-y-auto px-2 py-3">
+      <nav className="thin-scroll flex-1 space-y-0.5 overflow-y-auto px-3 pb-4">
         {TOP_LEVEL.filter((i) => visible(i.module)).map((item) => (
           <NavRow key={item.href} item={item} />
         ))}
@@ -143,16 +124,16 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                   setOpen((o) => ({ ...o, [group.label]: !isOpen }));
                 }}
                 className={cn(
-                  'flex h-8 w-full items-center gap-2.5 rounded-sm px-3 text-[13px] transition-colors',
+                  'flex h-9 w-full items-center gap-2.5 rounded-md px-3 text-[13.5px] transition-colors',
                   groupActive && !isOpen
                     ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-                    : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+                    : 'text-sidebar-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground',
                 )}
               >
-                <group.icon className="size-4 shrink-0" />
+                <group.icon className="size-[17px] shrink-0 opacity-70" />
                 <span className="min-w-0 flex-1 truncate text-left">{group.label}</span>
                 <ChevronRight
-                  className={cn('size-3.5 shrink-0 transition-transform', isOpen && 'rotate-90')}
+                  className={cn('size-3.5 shrink-0 opacity-50 transition-transform', isOpen && 'rotate-90')}
                 />
               </button>
               {isOpen && (
@@ -171,7 +152,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           );
         })}
 
-        <div className="!mt-3 border-t border-sidebar-border pt-3">
+        <div className="!mt-4 space-y-0.5 border-t pt-4">
           {BOTTOM_LEVEL.filter((i) => visible(i.module)).map((item) => (
             <NavRow key={item.href} item={item} />
           ))}

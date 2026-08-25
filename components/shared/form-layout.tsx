@@ -107,11 +107,11 @@ export function DocumentForm({
   headerExtra?: ReactNode;
 }) {
   return (
-    <div className="-mx-4 -mt-4 flex min-h-[calc(100vh-3.5rem)] flex-col sm:-mx-6 sm:-mt-6">
+    <div className="-mx-5 -mt-5 flex min-h-[calc(100vh-4rem)] flex-col sm:-mx-8 sm:-mt-8">
       {/* Title band */}
-      <div className="sticky top-0 z-20 flex items-center gap-3 border-b bg-surface px-4 py-3 sm:px-6">
+      <div className="sticky top-0 z-20 flex items-center gap-3 border-b bg-surface px-5 py-4 sm:px-8">
         {icon}
-        <h1 className="flex-1 text-lg font-semibold tracking-tight">{title}</h1>
+        <h1 className="display-lg flex-1">{title}</h1>
         {headerExtra}
         <Link
           href={backHref}
@@ -123,12 +123,12 @@ export function DocumentForm({
       </div>
 
       {/* Body */}
-      <div className="flex-1 bg-surface px-4 py-6 sm:px-6">
-        <div className="mx-auto max-w-5xl space-y-6">{children}</div>
+      <div className="flex-1 bg-surface px-5 py-8 sm:px-8">
+        <div className="mx-auto max-w-5xl space-y-8">{children}</div>
       </div>
 
       {/* Sticky actions */}
-      <div className="footer-bar sticky bottom-0 z-20 flex flex-wrap items-center gap-3 border-t bg-surface px-4 py-3 sm:px-6">
+      <div className="footer-bar sticky bottom-0 z-20 flex flex-wrap items-center gap-3 border-t bg-surface px-5 py-3.5 sm:px-8">
         <div className="flex flex-wrap items-center gap-2">{footer}</div>
         {footerSummary && <div className="ml-auto text-right">{footerSummary}</div>}
       </div>

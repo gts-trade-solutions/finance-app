@@ -1,58 +1,87 @@
 'use client';
 
-import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 
-const TONES: Record<string, string> = {
-  draft: 'bg-muted text-muted-foreground border-transparent',
-  approved: 'bg-blue-500/12 text-blue-700 dark:text-blue-300 border-blue-500/25',
-  sent: 'bg-blue-500/12 text-blue-700 dark:text-blue-300 border-blue-500/25',
-  open: 'bg-blue-500/12 text-blue-700 dark:text-blue-300 border-blue-500/25',
-  issued: 'bg-blue-500/12 text-blue-700 dark:text-blue-300 border-blue-500/25',
-  partially_paid: 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30',
-  partially_invoiced: 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30',
-  partially_applied: 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30',
-  pending: 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30',
-  in_hand: 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30',
-  deposited: 'bg-blue-500/12 text-blue-700 dark:text-blue-300 border-blue-500/25',
-  paid: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30',
-  cleared: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30',
-  accepted: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30',
-  matched: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30',
-  submitted: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30',
-  applied: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30',
-  invoiced: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30',
-  billed: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30',
-  converted: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30',
-  recorded: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30',
-  active: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30',
-  overdue: 'bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/30',
-  failed: 'bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/30',
-  bounced: 'bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/30',
-  declined: 'bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/30',
-  mismatch: 'bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/30',
-  missing_in_2b: 'bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/30',
-  missing_in_books: 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30',
-  void: 'bg-muted text-muted-foreground line-through border-transparent',
-  cancelled: 'bg-muted text-muted-foreground border-transparent',
-  expired: 'bg-muted text-muted-foreground border-transparent',
-  excluded: 'bg-muted text-muted-foreground border-transparent',
-  closed: 'bg-muted text-muted-foreground border-transparent',
-  unmatched: 'bg-muted text-muted-foreground border-transparent',
-  not_applicable: 'bg-muted text-muted-foreground border-transparent',
-  written_off: 'bg-muted text-muted-foreground border-transparent',
-  refunded: 'bg-muted text-muted-foreground border-transparent',
-  returned: 'bg-muted text-muted-foreground border-transparent',
+/*
+  Status reads as a small dot plus quiet type, not a saturated pill. In a table
+  of thirty rows, thirty coloured pills become noise and the eye stops seeing
+  the one row that actually needs attention. The dot carries the colour; the
+  label stays ink.
+*/
+type Tone = 'neutral' | 'progress' | 'caution' | 'good' | 'bad' | 'muted';
+
+const DOT: Record<Tone, string> = {
+  neutral: 'bg-muted-foreground/45',
+  progress: 'bg-info',
+  caution: 'bg-warning',
+  good: 'bg-success',
+  bad: 'bg-destructive',
+  muted: 'bg-muted-foreground/30',
+};
+
+const TEXT: Record<Tone, string> = {
+  neutral: 'text-muted-foreground',
+  progress: 'text-foreground/75',
+  caution: 'text-foreground/75',
+  good: 'text-foreground/75',
+  bad: 'text-destructive',
+  muted: 'text-muted-foreground',
+};
+
+const TONES: Record<string, Tone> = {
+  draft: 'neutral',
+
+  approved: 'progress',
+  sent: 'progress',
+  open: 'progress',
+  issued: 'progress',
+  deposited: 'progress',
+
+  partially_paid: 'caution',
+  partially_invoiced: 'caution',
+  partially_applied: 'caution',
+  pending: 'caution',
+  in_hand: 'caution',
+  missing_in_books: 'caution',
+
+  paid: 'good',
+  cleared: 'good',
+  accepted: 'good',
+  matched: 'good',
+  submitted: 'good',
+  applied: 'good',
+  invoiced: 'good',
+  billed: 'good',
+  converted: 'good',
+  recorded: 'good',
+  active: 'good',
+
+  overdue: 'bad',
+  failed: 'bad',
+  bounced: 'bad',
+  declined: 'bad',
+  mismatch: 'bad',
+  missing_in_2b: 'bad',
+
+  void: 'muted',
+  cancelled: 'muted',
+  expired: 'muted',
+  excluded: 'muted',
+  closed: 'muted',
+  unmatched: 'muted',
+  not_applicable: 'muted',
+  written_off: 'muted',
+  refunded: 'muted',
+  returned: 'muted',
 };
 
 export function StatusBadge({ status, className }: { status: string; className?: string }) {
   const label = status.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  const tone = TONES[status] ?? 'neutral';
   return (
-    <Badge
-      variant="outline"
-      className={cn('font-medium capitalize', TONES[status] ?? TONES.draft, className)}
-    >
-      {label}
-    </Badge>
+    <span className={cn('inline-flex items-center gap-1.5 whitespace-nowrap text-[12.5px]', className)}>
+      <span className={cn('size-1.5 shrink-0 rounded-full', DOT[tone])} />
+      <span className={cn(TEXT[tone], tone === 'muted' && 'line-through decoration-1')}>{label}</span>
+    </span>
   );
 }
