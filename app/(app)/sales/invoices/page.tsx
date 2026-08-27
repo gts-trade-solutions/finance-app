@@ -3,15 +3,15 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
-import { FileCheck2, Plus, Receipt } from 'lucide-react';
+import { Plus, Receipt } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { Combobox } from '@/components/ui/combobox';
 import { PageHeader } from '@/components/shared/page-header';
 import { DataTable, type Column } from '@/components/shared/data-table';
 import { Money } from '@/components/shared/money';
 import { StatusBadge } from '@/components/shared/status-badge';
+import { EInvoiceMark, EWayMark } from '@/components/shared/einvoice-mark';
 import { EmptyState } from '@/components/shared/empty-state';
 import { useAppStore } from '@/lib/store';
 import { usePermission } from '@/lib/store/hooks';
@@ -51,13 +51,10 @@ export default function InvoicesPage() {
       header: 'Invoice #',
       sortValue: (r) => r.number,
       cell: (r) => (
-        <div>
+        <div className="flex items-center gap-1.5">
           <span className="font-medium">{r.number}</span>
-          {r.einvoice.irn && (
-            <Badge variant="outline" className="ml-2 gap-1 border-emerald-500/40 text-[10px]">
-              <FileCheck2 className="size-2.5" /> IRN
-            </Badge>
-          )}
+          <EInvoiceMark einvoice={r.einvoice} />
+          <EWayMark ewbNo={r.ewayBillNo} />
         </div>
       ),
     },

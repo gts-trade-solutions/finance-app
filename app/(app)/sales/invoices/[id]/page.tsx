@@ -26,6 +26,7 @@ import { submitToIrp, generateEwayBill } from '@/lib/mock/simulators';
 import { supplyTypeLabel } from '@/lib/tax/gst';
 import { InvoicePrintSheet } from '@/components/print/invoice-sheet';
 import { JournalTable } from '@/components/shared/journal-table';
+import { EInvoiceMark } from '@/components/shared/einvoice-mark';
 
 export default function InvoiceDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -88,6 +89,7 @@ export default function InvoiceDetailPage() {
           description={`${contactName(s, inv.customerId)} · ${supplyTypeLabel(inv.supplyType)}`}
           actions={
             <>
+              <EInvoiceMark einvoice={inv.einvoice} withLabel className="mr-1" />
               <StatusBadge status={effectiveInvoiceStatus(inv)} className="mr-1" />
               <Button variant="outline" size="sm" onClick={() => window.print()} className="gap-1.5">
                 <Printer className="size-3.5" /> Print / PDF

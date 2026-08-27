@@ -8,6 +8,7 @@ import { useAppStore } from '@/lib/store';
 import { useHydrated } from '@/lib/store/hooks';
 import { ensureSeeded } from '@/lib/mock/seed';
 import { Skeleton } from '@/components/ui/skeleton';
+import { TooltipProvider } from '@/components/ui/tooltip';
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -38,7 +39,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
+    <TooltipProvider>
+      <div className="flex h-screen overflow-hidden bg-background">
       <aside className="hidden w-64 shrink-0 lg:block">
         <Sidebar />
       </aside>
@@ -48,6 +50,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           <div className="mx-auto max-w-[1440px] space-y-7 p-5 sm:p-8">{children}</div>
         </main>
       </div>
-    </div>
+      </div>
+    </TooltipProvider>
   );
 }

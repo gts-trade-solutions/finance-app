@@ -5,7 +5,8 @@
 import { getState, setState } from '../store';
 import { buildEntry, genId } from '../ledger/posting';
 import { logAudit } from './audit';
-import type { BankRule, BankTxn, Cheque } from '../types';
+import type { Account, BankAccount, BankRule, BankTxn, Cheque } from '../types';
+import { ACC } from '../mock/seed/accounts';
 
 function nextEntryNo(): number {
   const n = getState().nextEntryNo;
@@ -165,4 +166,106 @@ export function setChequeStatus(id: string, status: Cheque['status']): void {
   });
   const c = getState().cheques.find((x) => x.id === id);
   if (c) logAudit('update', 'cheque', id, c.chequeNo, `Status → ${status}`);
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Add Bank or Credit Card
+//
+// An account in the banking screen is only half the picture — it also needs a
+// ledger account, or nothing it does can be posted. Creating one here creates
+// both, and an opening balance posts a real balanced entry rather than being
+// stored as a loose number.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface CreateBankAccountInput {
+  kind: BankAccount['kind'];
+  name: string;
+  bankName?: string;
+  accountNumber?: string;
+  ifsc?: string;
+  openingBalancePaise?: number;
+  openingDate?: string;
+  isPrimary?: boolean;
+  feedConnected?: boolean;
+}
+
+/** Next free code in the right block, so the chart of accounts stays ordered. */
+function nextAccountCode(accounts: Account[], kind: BankAccount['kind']): string {
+  const base = kind === 'card' ? 2500 : kind === 'cash' ? 1290 : kind === 'clearing' ? 1250 : 1210;
+  const used = new Set(accounts.map((a) => a.code));
+  let code = base;
+  while (used.has(String(code))) code += 1;
+  return String(code);
+}
+
+export function createBankAccount(input: CreateBankAccountInput): BankAccount {
+  const s = getState();
+
+  // A credit card is money owed, so its ledger account is a liability.
+  const isCard = input.kind === 'card';
+  const ledger: Account = {
+    id: genId('acc'),
+    code: nextAccountCode(s.accounts, input.kind),
+    name: input.name,
+    type: isCard ? 'liability' : 'asset',
+    parentId: null,
+    isSystem: false,
+    isArchived: false,
+    description: input.bankName ? `${input.bankName} — added from Banking` : undefined,
+  };
+
+  const account: BankAccount = {
+    id: genId('ba'),
+    kind: input.kind,
+    name: input.name,
+    bankName: input.bankName,
+    accountNumber: input.accountNumber,
+    accountLast4: input.accountNumber?.slice(-4),
+    ifsc: input.ifsc,
+    ledgerAccountId: ledger.id,
+    openingBalancePaise: input.openingBalancePaise ?? 0,
+    feedConnected: input.feedConnected ?? false,
+    isPrimary: input.isPrimary,
+    currency: 'INR',
+    isArchived: false,
+  };
+
+  setState({
+    accounts: [...s.accounts, ledger],
+    bankAccounts: [...s.bankAccounts, account],
+  });
+
+  const opening = input.openingBalancePaise ?? 0;
+  if (opening !== 0) {
+    // The other side is owner's capital — this money existed before the books
+    // started, so it is not income.
+    const entry = buildEntry({
+      entryNo: nextEntryNo(),
+      date: input.openingDate ?? new Date().toISOString().slice(0, 10),
+      sourceType: 'opening',
+      sourceId: account.id,
+      memo: `Opening balance — ${account.name}`,
+      lines: isCard
+        ? [
+            { accountId: ACC.CAPITAL, debit: opening },
+            { accountId: ledger.id, credit: opening },
+          ]
+        : [
+            { accountId: ledger.id, debit: opening },
+            { accountId: ACC.CAPITAL, credit: opening },
+          ],
+      createdBy: currentUserId(),
+    });
+    setState({ entries: [...getState().entries, entry] });
+  }
+
+  logAudit(
+    'create',
+    'bank_account',
+    account.id,
+    account.name,
+    `${input.kind} account added${opening ? ` with opening balance ₹${(opening / 100).toLocaleString('en-IN')}` : ''}`,
+  );
+  return account;
 }

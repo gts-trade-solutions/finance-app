@@ -151,6 +151,37 @@ await page.waitForTimeout(2500);
 check('Assistant answers a ledger question',
   await page.getByText(/invoices are overdue, totalling/).count() > 0);
 
+// ── 8c. Add Bank or Credit Card creates both the account and its ledger account
+await page.goto(`${BASE}/banking`, { waitUntil: 'networkidle' });
+await page.waitForTimeout(700);
+check('Banking shows the Add Bank or Credit Card action',
+  (await page.getByRole('button', { name: /Add Bank or Credit Card/ }).count()) > 0);
+
+await page.getByRole('button', { name: /Add Bank or Credit Card/ }).click();
+await page.waitForTimeout(600);
+await page.getByPlaceholder(/HDFC Bank – Current/).fill('Axis Bank – Current');
+await page.getByPlaceholder('HDFC Bank', { exact: true }).fill('Axis Bank');
+await page.getByRole('button', { name: 'Save account' }).click();
+await page.waitForTimeout(1200);
+check('New bank account appears on the Banking page',
+  (await page.getByText('Axis Bank – Current').count()) > 0);
+
+// The ledger account must exist too, or nothing it does can be posted.
+await page.goto(`${BASE}/accountant/chart-of-accounts`, { waitUntil: 'networkidle' });
+await page.waitForTimeout(700);
+check('A matching ledger account was created',
+  (await page.getByText('Axis Bank – Current').count()) > 0);
+
+await page.goto(`${BASE}/reports/trial-balance`, { waitUntil: 'networkidle' });
+check('Books still balance after adding an account',
+  (await page.getByText('The books balance').count()) > 0);
+
+// ── 8d. The e-invoice mark renders on invoices
+await page.goto(`${BASE}/sales/invoices`, { waitUntil: 'networkidle' });
+await page.waitForTimeout(700);
+check('Invoices carry the e-invoice mark',
+  (await page.locator('span', { hasText: /^e$/ }).count()) > 0);
+
 // ── 9b. Quick create opens and navigates (this crashed once — see command.tsx)
 await page.goto(`${BASE}/dashboard`, { waitUntil: 'networkidle' });
 await page.getByRole('button', { name: 'Quick create' }).click();

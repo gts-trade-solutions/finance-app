@@ -12,6 +12,7 @@ import { DataTable, type Column } from '@/components/shared/data-table';
 import { Money } from '@/components/shared/money';
 import { StatTile } from '@/components/shared/stat-tile';
 import { StatusBadge } from '@/components/shared/status-badge';
+import { EInvoiceMark } from '@/components/shared/einvoice-mark';
 import { useAppStore } from '@/lib/store';
 import { contactName, today } from '@/lib/selectors';
 import { submitToIrp } from '@/lib/mock/simulators';
@@ -61,7 +62,17 @@ export default function EInvoicesPage() {
   };
 
   const columns: Column<Invoice>[] = [
-    { key: 'number', header: 'Invoice #', sortValue: (r) => r.number, cell: (r) => <span className="font-medium">{r.number}</span> },
+    {
+      key: 'number',
+      header: 'Invoice #',
+      sortValue: (r) => r.number,
+      cell: (r) => (
+        <div className="flex items-center gap-1.5">
+          <span className="font-medium">{r.number}</span>
+          <EInvoiceMark einvoice={r.einvoice} />
+        </div>
+      ),
+    },
     { key: 'customer', header: 'Customer', sortValue: (r) => contactName(s, r.customerId), cell: (r) => contactName(s, r.customerId) },
     { key: 'date', header: 'Date', sortValue: (r) => r.date, cell: (r) => new Date(r.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) },
     { key: 'total', header: 'Value', align: 'right', sortValue: (r) => r.totalPaise, cell: (r) => <Money value={r.totalPaise} /> },

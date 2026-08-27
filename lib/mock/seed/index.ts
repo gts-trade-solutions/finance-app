@@ -40,10 +40,11 @@ function daysAhead(n: number): string {
 }
 
 const BANK_ACCOUNTS: BankAccount[] = [
-  { id: 'ba_hdfc', kind: 'bank', name: 'HDFC Bank – Current', accountLast4: '4412', ifsc: 'HDFC0000123', ledgerAccountId: ACC.BANK_HDFC, openingBalancePaise: R(12_50_000), feedConnected: true },
-  { id: 'ba_icici', kind: 'bank', name: 'ICICI Bank – Current', accountLast4: '8890', ifsc: 'ICIC0000456', ledgerAccountId: ACC.BANK_ICICI, openingBalancePaise: R(4_20_000), feedConnected: false },
+  { id: 'ba_hdfc', kind: 'bank', name: 'HDFC Bank – Current', bankName: 'HDFC Bank', isPrimary: true, accountLast4: '4412', ifsc: 'HDFC0000123', ledgerAccountId: ACC.BANK_HDFC, openingBalancePaise: R(12_50_000), feedConnected: true },
+  { id: 'ba_icici', kind: 'bank', name: 'ICICI Bank – Current', bankName: 'ICICI Bank', accountLast4: '8890', ifsc: 'ICIC0000456', ledgerAccountId: ACC.BANK_ICICI, openingBalancePaise: R(4_20_000), feedConnected: false },
   { id: 'ba_cash', kind: 'cash', name: 'Cash in Hand', ledgerAccountId: ACC.CASH, openingBalancePaise: R(35_000), feedConnected: false },
-  { id: 'ba_card', kind: 'card', name: 'HDFC Business Credit Card', accountLast4: '7731', ledgerAccountId: ACC.CC_HDFC, openingBalancePaise: 0, feedConnected: true },
+  { id: 'ba_card', kind: 'card', name: 'HDFC Business Credit Card', bankName: 'HDFC Bank', accountLast4: '7731', ledgerAccountId: ACC.CC_HDFC, openingBalancePaise: 0, feedConnected: true },
+  { id: 'ba_clearing', kind: 'clearing', name: 'Payment Clearing Account', ledgerAccountId: ACC.PAYMENT_CLEARING, openingBalancePaise: 0, feedConnected: false },
 ];
 
 const BANK_RULES: BankRule[] = [

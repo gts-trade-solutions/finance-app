@@ -450,7 +450,13 @@ export interface Payment {
 
 export interface BankAccount {
   id: string;
-  kind: 'bank' | 'card' | 'cash' | 'wallet';
+  /** Bank/branch name shown under the account name, as Zoho does. */
+  bankName?: string;
+  accountNumber?: string;
+  isPrimary?: boolean;
+  currency?: 'INR';
+  isArchived?: boolean;
+  kind: 'bank' | 'card' | 'cash' | 'wallet' | 'clearing';
   name: string;
   accountLast4?: string;
   ifsc?: string;
