@@ -151,6 +151,30 @@ await page.waitForTimeout(2500);
 check('Assistant answers a ledger question',
   await page.getByText(/invoices are overdue, totalling/).count() > 0);
 
+// ── 9b. Quick create opens and navigates (this crashed once — see command.tsx)
+await page.goto(`${BASE}/dashboard`, { waitUntil: 'networkidle' });
+await page.getByRole('button', { name: 'Quick create' }).click();
+await page.waitForTimeout(800);
+check('Quick create opens without crashing',
+  (await page.getByPlaceholder(/Create something/).count()) > 0);
+await page.locator('[data-slot="dialog-content"]').getByText('New Invoice', { exact: true }).click();
+await page.waitForTimeout(1200);
+check('Quick create navigates to the invoice form', page.url().includes('/sales/invoices/new'));
+
+// Every quick-create target must be a real route, not a 404.
+const quickHrefs = [
+  '/sales/invoices/new', '/purchases/bills/new', '/sales/payments/new',
+  '/purchases/payments/new', '/purchases/expenses', '/sales/customers/new',
+  '/purchases/vendors', '/sales/estimates', '/accountant/journals',
+  '/banking/reconcile',
+];
+let deadLinks = 0;
+for (const href of quickHrefs) {
+  const resp = await page.goto(`${BASE}${href}`, { waitUntil: 'domcontentloaded' });
+  if (!resp || resp.status() >= 400) deadLinks++;
+}
+check('No dead links in quick create', deadLinks === 0, `${deadLinks} dead`);
+
 // ── 10. Demo reset restores the seed
 await page.getByRole('button', { name: /Demo/ }).click();
 await page.getByRole('menuitem', { name: /Reset to seed data/ }).click();

@@ -2,14 +2,13 @@
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
 import { Money } from '@/components/shared/money';
 import {
   downloadCsv, ReportShell, ReportTable, useReportRange,
 } from '@/components/shared/report-shell';
 import { useAppStore } from '@/lib/store';
+import { Combobox } from '@/components/ui/combobox';
+import { accountOptions } from '@/lib/options';
 import { generalLedger } from '@/lib/ledger/reports';
 import { toRupees } from '@/lib/money';
 import { ACC } from '@/lib/mock/seed/accounts';
@@ -41,14 +40,15 @@ export default function GeneralLedgerPage() {
       extraActions={
         <div className="space-y-1">
           <label className="text-[11px] font-medium text-muted-foreground">Account</label>
-          <Select value={accountId} onValueChange={setAccountId}>
-            <SelectTrigger className="h-8 w-64"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {s.accounts.map((a) => (
-                <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <Combobox
+            options={accountOptions(s)}
+            value={accountId}
+            onChange={setAccountId}
+            placeholder="Select account"
+            searchPlaceholder="Search accounts by name or code"
+            showAvatar={false}
+            className="w-64"
+          />
         </div>
       }
       onExport={() =>

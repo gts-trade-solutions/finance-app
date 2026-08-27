@@ -11,13 +11,12 @@ import { Switch } from '@/components/ui/switch';
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
 import { PageHeader } from '@/components/shared/page-header';
 import { Field } from '@/components/shared/form-bits';
 import { EmptyState } from '@/components/shared/empty-state';
 import { useAppStore, getState, setState } from '@/lib/store';
+import { Combobox } from '@/components/ui/combobox';
+import { accountOptions } from '@/lib/options';
 import { applyBankRules } from '@/lib/services/banking';
 import { genId } from '@/lib/ledger/posting';
 import type { BankRule } from '@/lib/types';
@@ -83,14 +82,14 @@ export default function BankRulesPage() {
                     <Input value={f.contains} onChange={(e) => setF({ ...f, contains: e.target.value })} placeholder="BHARAT PETRO" />
                   </Field>
                   <Field label="Categorise as" required>
-                    <Select value={f.accountId} onValueChange={(v) => setF({ ...f, accountId: v })}>
-                      <SelectTrigger><SelectValue placeholder="Select account…" /></SelectTrigger>
-                      <SelectContent>
-                        {s.accounts.filter((a) => a.type === 'expense' || a.type === 'income').map((a) => (
-                          <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <Combobox
+                      options={accountOptions(s, ['expense', 'income'])}
+                      value={f.accountId}
+                      onChange={(v) => setF({ ...f, accountId: v })}
+                      placeholder="Select account"
+                      searchPlaceholder="Search accounts by name or code"
+                      showAvatar={false}
+                    />
                   </Field>
                   <div className="flex items-center justify-between gap-3 rounded-md border p-3">
                     <div>

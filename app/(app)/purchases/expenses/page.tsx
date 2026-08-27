@@ -11,17 +11,16 @@ import { Switch } from '@/components/ui/switch';
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
 import { PageHeader } from '@/components/shared/page-header';
 import { DataTable, type Column } from '@/components/shared/data-table';
 import { Money } from '@/components/shared/money';
 import { EmptyState } from '@/components/shared/empty-state';
 import { Field, MoneyInput } from '@/components/shared/form-bits';
 import { useAppStore } from '@/lib/store';
+import { Combobox } from '@/components/ui/combobox';
+import { accountOptions, bankAccountOptions, customerOptions, vendorOptions } from '@/lib/options';
 import { usePermission } from '@/lib/store/hooks';
-import { customers, today, vendors } from '@/lib/selectors';
+import { today } from '@/lib/selectors';
 import { createExpense } from '@/lib/services/purchases';
 import { GST_RATES } from '@/lib/tax/gst';
 import type { Expense } from '@/lib/types';
@@ -34,8 +33,6 @@ export default function ExpensesPage() {
     accountId: '', vendorId: '', paidThroughId: s.bankAccounts[0]?.id ?? '',
     amount: 0, gst: 18, notes: '', billable: false, customerId: '',
   });
-
-  const expenseAccounts = s.accounts.filter((a) => a.type === 'expense' && !a.isArchived);
 
   const save = () => {
     if (!f.accountId || f.amount <= 0) { toast.error('Pick a category and enter an amount.'); return; }
@@ -106,41 +103,45 @@ export default function ExpensesPage() {
                   <DialogHeader><DialogTitle>Record expense</DialogTitle></DialogHeader>
                   <div className="grid gap-4 sm:grid-cols-2">
                     <Field label="Category" required className="sm:col-span-2">
-                      <Select value={f.accountId} onValueChange={(v) => setF({ ...f, accountId: v })}>
-                        <SelectTrigger><SelectValue placeholder="Select expense account…" /></SelectTrigger>
-                        <SelectContent>
-                          {expenseAccounts.map((a) => (
-                            <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <Combobox
+                        options={accountOptions(s, ['expense'])}
+                        value={f.accountId}
+                        onChange={(v) => setF({ ...f, accountId: v })}
+                        placeholder="Select expense account"
+                        searchPlaceholder="Search accounts by name or code"
+                        showAvatar={false}
+                      />
                     </Field>
                     <Field label="Amount (before GST)" required>
                       <MoneyInput valuePaise={f.amount} onChangePaise={(p) => setF({ ...f, amount: p })} />
                     </Field>
                     <Field label="GST rate" hint="Claimable as input credit">
-                      <Select value={String(f.gst)} onValueChange={(v) => setF({ ...f, gst: Number(v) })}>
-                        <SelectTrigger><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          {GST_RATES.map((r) => <SelectItem key={r} value={String(r)}>{r}%</SelectItem>)}
-                        </SelectContent>
-                      </Select>
+                      <Combobox
+                        options={GST_RATES.map((r) => ({ value: String(r), label: `${r}%` }))}
+                        value={String(f.gst)}
+                        onChange={(v) => setF({ ...f, gst: Number(v) })}
+                        showAvatar={false}
+                        searchPlaceholder="Rate"
+                      />
                     </Field>
                     <Field label="Paid through" required>
-                      <Select value={f.paidThroughId} onValueChange={(v) => setF({ ...f, paidThroughId: v })}>
-                        <SelectTrigger><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          {s.bankAccounts.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
+                      <Combobox
+                        options={bankAccountOptions(s)}
+                        value={f.paidThroughId}
+                        onChange={(v) => setF({ ...f, paidThroughId: v })}
+                        placeholder="Select account"
+                        searchPlaceholder="Search accounts"
+                      />
                     </Field>
                     <Field label="Vendor" hint="Optional">
-                      <Select value={f.vendorId} onValueChange={(v) => setF({ ...f, vendorId: v })}>
-                        <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>
-                        <SelectContent>
-                          {vendors(s).map((v) => <SelectItem key={v.id} value={v.id}>{v.displayName}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
+                      <Combobox
+                        options={vendorOptions(s)}
+                        value={f.vendorId}
+                        onChange={(v) => setF({ ...f, vendorId: v })}
+                        placeholder="None"
+                        searchPlaceholder="Search vendors"
+                        clearable
+                      />
                     </Field>
                     <Field label="Description" className="sm:col-span-2">
                       <Input value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} placeholder="EB bill — Guindy godown" />
@@ -154,12 +155,14 @@ export default function ExpensesPage() {
                     </div>
                     {f.billable && (
                       <Field label="Customer" className="sm:col-span-2">
-                        <Select value={f.customerId} onValueChange={(v) => setF({ ...f, customerId: v })}>
-                          <SelectTrigger><SelectValue placeholder="Select…" /></SelectTrigger>
-                          <SelectContent>
-                            {customers(s).map((c) => <SelectItem key={c.id} value={c.id}>{c.displayName}</SelectItem>)}
-                          </SelectContent>
-                        </Select>
+                        <Combobox
+                          options={customerOptions(s)}
+                          value={f.customerId}
+                          onChange={(v) => setF({ ...f, customerId: v })}
+                          placeholder="Select a customer"
+                          searchPlaceholder="Search customers"
+                          clearable
+                        />
                       </Field>
                     )}
                   </div>

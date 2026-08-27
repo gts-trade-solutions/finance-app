@@ -13,13 +13,12 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
 import { PageHeader } from '@/components/shared/page-header';
 import { Money } from '@/components/shared/money';
 import { EmptyState } from '@/components/shared/empty-state';
 import { useAppStore } from '@/lib/store';
+import { Combobox } from '@/components/ui/combobox';
+import { bankAccountOptions } from '@/lib/options';
 import { cn } from '@/lib/utils';
 import { contactName } from '@/lib/selectors';
 import {
@@ -201,12 +200,14 @@ export default function ReconcilePage() {
         description="Match what the bank says against what your books say. Use ↑ ↓ to move and Enter to accept the top suggestion."
         actions={
           <>
-            <Select value={accountId} onValueChange={(v) => { setAccountId(v); setSelectedId(null); }}>
-              <SelectTrigger className="w-56"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {s.bankAccounts.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
+            <Combobox
+              options={bankAccountOptions(s)}
+              value={accountId}
+              onChange={(v) => { setAccountId(v); setSelectedId(null); }}
+              placeholder="Select account"
+              searchPlaceholder="Search accounts"
+              className="w-56"
+            />
             {account?.feedConnected && (
               <Button variant="outline" size="sm" onClick={runFeed} disabled={feedBusy} className="gap-1.5">
                 {feedBusy ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}

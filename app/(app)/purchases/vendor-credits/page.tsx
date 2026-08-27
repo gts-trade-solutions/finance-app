@@ -7,9 +7,6 @@ import { Button } from '@/components/ui/button';
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
 import { PageHeader } from '@/components/shared/page-header';
 import { DataTable, type Column } from '@/components/shared/data-table';
 import { Money } from '@/components/shared/money';
@@ -17,8 +14,11 @@ import { StatusBadge } from '@/components/shared/status-badge';
 import { EmptyState } from '@/components/shared/empty-state';
 import { Field, MoneyInput } from '@/components/shared/form-bits';
 import { useAppStore } from '@/lib/store';
+import { Combobox } from '@/components/ui/combobox';
+import { vendorOptions } from '@/lib/options';
+import { formatINR } from '@/lib/money';
 import { usePermission } from '@/lib/store/hooks';
-import { contactName, today, vendors } from '@/lib/selectors';
+import { contactName, today } from '@/lib/selectors';
 import { createVendorCredit } from '@/lib/services/purchases';
 import type { VendorCredit } from '@/lib/types';
 
@@ -86,28 +86,39 @@ export default function VendorCreditsPage() {
                 <DialogHeader><DialogTitle>New vendor credit</DialogTitle></DialogHeader>
                 <div className="space-y-4">
                   <Field label="Vendor" required>
-                    <Select value={vendorId} onValueChange={setVendorId}>
-                      <SelectTrigger><SelectValue placeholder="Select…" /></SelectTrigger>
-                      <SelectContent>
-                        {vendors(s).map((v) => <SelectItem key={v.id} value={v.id}>{v.displayName}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
+                    <Combobox
+                      options={vendorOptions(s)}
+                      value={vendorId}
+                      onChange={setVendorId}
+                      placeholder="Select a vendor"
+                      searchPlaceholder="Search vendors"
+                      clearable
+                    />
                   </Field>
                   <Field label="Against bill" hint="Optional">
-                    <Select value={billId} onValueChange={setBillId}>
-                      <SelectTrigger><SelectValue placeholder="Standalone" /></SelectTrigger>
-                      <SelectContent>
-                        {vendorBills.map((b) => <SelectItem key={b.id} value={b.id}>{b.internalNo} — {b.number}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
+                    <Combobox
+                      options={vendorBills.map((b) => ({
+                        value: b.id,
+                        label: b.internalNo,
+                        sublabel: b.number,
+                        meta: formatINR(b.totalPaise),
+                      }))}
+                      value={billId}
+                      onChange={setBillId}
+                      placeholder="Standalone"
+                      searchPlaceholder="Search bills"
+                      showAvatar={false}
+                      clearable
+                    />
                   </Field>
                   <Field label="Reason" required>
-                    <Select value={reason} onValueChange={setReason}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        {REASONS.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
+                    <Combobox
+                      options={REASONS.map((r) => ({ value: r, label: r }))}
+                      value={reason}
+                      onChange={setReason}
+                      showAvatar={false}
+                      searchPlaceholder="Search reasons"
+                    />
                   </Field>
                   <Field label="Amount" required>
                     <MoneyInput valuePaise={amount} onChangePaise={setAmount} />

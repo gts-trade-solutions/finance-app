@@ -49,10 +49,6 @@ function CommandDialog({
 }) {
   return (
     <Dialog {...props}>
-      <DialogHeader className="sr-only">
-        <DialogTitle>{title}</DialogTitle>
-        <DialogDescription>{description}</DialogDescription>
-      </DialogHeader>
       <DialogContent
         className={cn(
           "top-1/3 translate-y-0 overflow-hidden rounded-xl! p-0",
@@ -60,7 +56,20 @@ function CommandDialog({
         )}
         showCloseButton={showCloseButton}
       >
-        {children}
+        {/*
+          Title and description must live INSIDE DialogContent. Base UI's
+          Dialog.Title subscribes to the popup context, so rendering it as a
+          sibling of the content throws "cannot read properties of undefined".
+        */}
+        <DialogHeader className="sr-only">
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
+        </DialogHeader>
+        {/*
+          The <Command> root owns cmdk's store. Without it, CommandInput and
+          CommandItem have nothing to subscribe to and the dialog throws.
+        */}
+        <Command className="rounded-none! bg-transparent">{children}</Command>
       </DialogContent>
     </Dialog>
   )

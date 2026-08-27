@@ -8,9 +8,6 @@ import { Input } from '@/components/ui/input';
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
 import { PageHeader } from '@/components/shared/page-header';
 import { DataTable, type Column } from '@/components/shared/data-table';
 import { Money } from '@/components/shared/money';
@@ -18,8 +15,10 @@ import { StatusBadge } from '@/components/shared/status-badge';
 import { EmptyState } from '@/components/shared/empty-state';
 import { Field, MoneyInput } from '@/components/shared/form-bits';
 import { useAppStore } from '@/lib/store';
+import { Combobox } from '@/components/ui/combobox';
+import { customerOptions, itemOptions } from '@/lib/options';
 import { usePermission } from '@/lib/store/hooks';
-import { contactName, customers, today } from '@/lib/selectors';
+import { contactName, today } from '@/lib/selectors';
 import { convertEstimateToSO, createEstimate, setEstimateStatus } from '@/lib/services/sales';
 import type { Estimate } from '@/lib/types';
 
@@ -98,26 +97,27 @@ export default function EstimatesPage() {
                 <DialogHeader><DialogTitle>New estimate</DialogTitle></DialogHeader>
                 <div className="space-y-4">
                   <Field label="Customer" required>
-                    <Select value={customerId} onValueChange={setCustomerId}>
-                      <SelectTrigger><SelectValue placeholder="Select…" /></SelectTrigger>
-                      <SelectContent>
-                        {customers(s).map((c) => <SelectItem key={c.id} value={c.id}>{c.displayName}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
+                    <Combobox
+                      options={customerOptions(s)}
+                      value={customerId}
+                      onChange={setCustomerId}
+                      placeholder="Select a customer"
+                      searchPlaceholder="Search customers"
+                      clearable
+                    />
                   </Field>
                   <Field label="Item" required>
-                    <Select
+                    <Combobox
+                      options={itemOptions(s)}
                       value={itemId}
-                      onValueChange={(v) => {
+                      onChange={(v) => {
                         setItemId(v);
                         setRate(s.items.find((i) => i.id === v)?.salePricePaise ?? 0);
                       }}
-                    >
-                      <SelectTrigger><SelectValue placeholder="Select…" /></SelectTrigger>
-                      <SelectContent>
-                        {s.items.map((i) => <SelectItem key={i.id} value={i.id}>{i.name}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
+                      placeholder="Select an item"
+                      searchPlaceholder="Search items by name, SKU or HSN"
+                      showAvatar={false}
+                    />
                   </Field>
                   <div className="grid grid-cols-2 gap-4">
                     <Field label="Quantity">

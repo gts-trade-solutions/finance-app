@@ -10,9 +10,6 @@ import { Switch } from '@/components/ui/switch';
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
 import { PageHeader } from '@/components/shared/page-header';
 import { DataTable, type Column } from '@/components/shared/data-table';
 import { Money } from '@/components/shared/money';
@@ -21,9 +18,11 @@ import { Field } from '@/components/shared/form-bits';
 import { useAppStore, getState, setState } from '@/lib/store';
 import { usePermission } from '@/lib/store/hooks';
 import { billBalance, vendors } from '@/lib/selectors';
-import { GST_STATES, stateName } from '@/lib/tax/gst';
+import { stateName } from '@/lib/tax/gst';
 import { TDS_SECTIONS } from '@/lib/tax/tds';
 import { genId } from '@/lib/ledger/posting';
+import { Combobox } from '@/components/ui/combobox';
+import { stateOptions } from '@/lib/options';
 import { logAudit } from '@/lib/services/audit';
 import type { Contact, GstTreatment } from '@/lib/types';
 
@@ -144,33 +143,43 @@ export default function VendorsPage() {
                     <Input value={f.pan} onChange={(e) => setF({ ...f, pan: e.target.value.toUpperCase() })} className="font-mono" maxLength={10} />
                   </Field>
                   <Field label="GST treatment">
-                    <Select value={f.treatment} onValueChange={(v) => setF({ ...f, treatment: v as GstTreatment })}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="registered">Registered (regular)</SelectItem>
-                        <SelectItem value="registered_composition">Composition scheme</SelectItem>
-                        <SelectItem value="unregistered">Unregistered</SelectItem>
-                        <SelectItem value="overseas">Overseas / import</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <Combobox
+                      options={[
+                        { value: 'registered', label: 'Registered (regular)' },
+                        { value: 'registered_composition', label: 'Composition scheme' },
+                        { value: 'unregistered', label: 'Unregistered' },
+                        { value: 'overseas', label: 'Overseas / import' },
+                      ]}
+                      value={f.treatment}
+                      onChange={(v) => setF({ ...f, treatment: v as GstTreatment })}
+                      showAvatar={false}
+                      searchPlaceholder="Search treatments"
+                    />
                   </Field>
                   <Field label="State">
-                    <Select value={f.stateCode} onValueChange={(v) => setF({ ...f, stateCode: v })}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        {Object.entries(GST_STATES).map(([c, n]) => <SelectItem key={c} value={c}>{c} — {n}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
+                    <Combobox
+                      options={stateOptions()}
+                      value={f.stateCode}
+                      onChange={(v) => setF({ ...f, stateCode: v })}
+                      placeholder="Select state"
+                      searchPlaceholder="Search all 37 states"
+                      showAvatar={false}
+                    />
                   </Field>
                   <Field label="Default TDS section" hint="Applied automatically once thresholds are crossed" className="sm:col-span-2">
-                    <Select value={f.tdsSection} onValueChange={(v) => setF({ ...f, tdsSection: v })}>
-                      <SelectTrigger><SelectValue placeholder="No TDS" /></SelectTrigger>
-                      <SelectContent>
-                        {TDS_SECTIONS.map((t) => (
-                          <SelectItem key={t.code} value={t.code}>{t.code} — {t.description} ({t.ratePctWithPan}%)</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <Combobox
+                      options={TDS_SECTIONS.map((t) => ({
+                        value: t.code,
+                        label: `${t.code} — ${t.description}`,
+                        sublabel: `${t.ratePctWithPan}% with PAN`,
+                      }))}
+                      value={f.tdsSection}
+                      onChange={(v) => setF({ ...f, tdsSection: v })}
+                      placeholder="No TDS"
+                      searchPlaceholder="Search sections"
+                      showAvatar={false}
+                      clearable
+                    />
                   </Field>
                   <div className="flex items-start justify-between gap-3 rounded-md border p-3 sm:col-span-2">
                     <div className="min-w-0">

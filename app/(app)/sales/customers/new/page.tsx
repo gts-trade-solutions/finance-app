@@ -8,14 +8,13 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
 import { PageHeader } from '@/components/shared/page-header';
 import { Field, FormSection, MoneyInput } from '@/components/shared/form-bits';
 import { getState, setState } from '@/lib/store';
-import { GST_STATES, isValidGstin } from '@/lib/tax/gst';
+import { isValidGstin, stateName } from '@/lib/tax/gst';
 import { genId } from '@/lib/ledger/posting';
+import { Combobox } from '@/components/ui/combobox';
+import { stateOptions } from '@/lib/options';
 import { logAudit } from '@/lib/services/audit';
 import type { Contact, GstTreatment } from '@/lib/types';
 
@@ -66,7 +65,7 @@ export default function NewCustomerPage() {
       isArchived: false,
     };
     setState({ contacts: [contact, ...getState().contacts] });
-    logAudit('create', 'customer', contact.id, contact.displayName, `Customer created (${GST_STATES[stateCode]})`);
+    logAudit('create', 'customer', contact.id, contact.displayName, `Customer created (${stateName(stateCode)})`);
     toast.success(`${name} added`);
     router.push('/sales/customers');
   };
@@ -101,16 +100,19 @@ export default function NewCustomerPage() {
           <FormSection title="Tax details" description="These drive how GST is calculated on every invoice.">
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="GST treatment" required>
-                <Select value={treatment} onValueChange={(v) => setTreatment(v as GstTreatment)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="registered">Registered business (regular)</SelectItem>
-                    <SelectItem value="registered_composition">Registered — composition</SelectItem>
-                    <SelectItem value="unregistered">Unregistered / B2C</SelectItem>
-                    <SelectItem value="overseas">Overseas — export</SelectItem>
-                    <SelectItem value="sez">SEZ unit</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Combobox
+                  options={[
+                    { value: 'registered', label: 'Registered business (regular)' },
+                    { value: 'registered_composition', label: 'Registered — composition' },
+                    { value: 'unregistered', label: 'Unregistered / B2C' },
+                    { value: 'overseas', label: 'Overseas — export' },
+                    { value: 'sez', label: 'SEZ unit' },
+                  ]}
+                  value={treatment}
+                  onChange={(v) => setTreatment(v as GstTreatment)}
+                  showAvatar={false}
+                  searchPlaceholder="Search treatments"
+                />
               </Field>
               <Field
                 label="GSTIN"
@@ -141,14 +143,14 @@ export default function NewCustomerPage() {
                 </div>
               </Field>
               <Field label="State" required hint="Decides intra-state vs inter-state tax" className="sm:col-span-2">
-                <Select value={stateCode} onValueChange={setStateCode}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {Object.entries(GST_STATES).map(([code, n]) => (
-                      <SelectItem key={code} value={code}>{code} — {n}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Combobox
+                  options={stateOptions()}
+                  value={stateCode}
+                  onChange={setStateCode}
+                  placeholder="Select state"
+                  searchPlaceholder="Search all 37 states"
+                  showAvatar={false}
+                />
               </Field>
             </div>
           </FormSection>

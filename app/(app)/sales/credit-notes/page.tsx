@@ -7,9 +7,6 @@ import { Button } from '@/components/ui/button';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
 import { PageHeader } from '@/components/shared/page-header';
 import { DataTable, type Column } from '@/components/shared/data-table';
 import { Money } from '@/components/shared/money';
@@ -17,8 +14,11 @@ import { StatusBadge } from '@/components/shared/status-badge';
 import { EmptyState } from '@/components/shared/empty-state';
 import { Field, MoneyInput } from '@/components/shared/form-bits';
 import { useAppStore } from '@/lib/store';
+import { Combobox } from '@/components/ui/combobox';
+import { customerOptions } from '@/lib/options';
+import { formatINR } from '@/lib/money';
 import { usePermission } from '@/lib/store/hooks';
-import { contactName, customers, today } from '@/lib/selectors';
+import { contactName, today } from '@/lib/selectors';
 import { createCreditNote } from '@/lib/services/sales';
 import type { CreditNote } from '@/lib/types';
 
@@ -95,40 +95,52 @@ export default function CreditNotesPage() {
                 </DialogHeader>
                 <div className="space-y-4">
                   <Field label="Customer" required>
-                    <Select value={customerId} onValueChange={setCustomerId}>
-                      <SelectTrigger><SelectValue placeholder="Select…" /></SelectTrigger>
-                      <SelectContent>
-                        {customers(s).map((c) => <SelectItem key={c.id} value={c.id}>{c.displayName}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
+                    <Combobox
+                      options={customerOptions(s)}
+                      value={customerId}
+                      onChange={setCustomerId}
+                      placeholder="Select a customer"
+                      searchPlaceholder="Search customers"
+                      clearable
+                    />
                   </Field>
                   <Field label="Against invoice" hint="Optional — leave blank for a standalone credit">
-                    <Select value={invoiceId} onValueChange={setInvoiceId}>
-                      <SelectTrigger><SelectValue placeholder="Standalone credit note" /></SelectTrigger>
-                      <SelectContent>
-                        {custInvoices.map((i) => <SelectItem key={i.id} value={i.id}>{i.number}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
+                    <Combobox
+                      options={custInvoices.map((i) => ({
+                        value: i.id,
+                        label: i.number,
+                        sublabel: new Date(i.date).toLocaleDateString('en-IN'),
+                        meta: formatINR(i.totalPaise),
+                      }))}
+                      value={invoiceId}
+                      onChange={setInvoiceId}
+                      placeholder="Standalone credit note"
+                      searchPlaceholder="Search invoices"
+                      showAvatar={false}
+                      clearable
+                    />
                   </Field>
                   <Field label="Reason" required>
-                    <Select value={reason} onValueChange={setReason}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        {REASONS.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
+                    <Combobox
+                      options={REASONS.map((r) => ({ value: r, label: r }))}
+                      value={reason}
+                      onChange={setReason}
+                      showAvatar={false}
+                      searchPlaceholder="Search reasons"
+                    />
                   </Field>
                   <div className="grid grid-cols-2 gap-4">
                     <Field label="Taxable amount" required>
                       <MoneyInput valuePaise={amount} onChangePaise={setAmount} />
                     </Field>
                     <Field label="GST rate">
-                      <Select value={String(gstRate)} onValueChange={(v) => setGstRate(Number(v))}>
-                        <SelectTrigger><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          {[0, 5, 12, 18, 28].map((r) => <SelectItem key={r} value={String(r)}>{r}%</SelectItem>)}
-                        </SelectContent>
-                      </Select>
+                      <Combobox
+                        options={[0, 5, 12, 18, 28].map((r) => ({ value: String(r), label: `${r}%` }))}
+                        value={String(gstRate)}
+                        onChange={(v) => setGstRate(Number(v))}
+                        showAvatar={false}
+                        searchPlaceholder="Rate"
+                      />
                     </Field>
                   </div>
                 </div>

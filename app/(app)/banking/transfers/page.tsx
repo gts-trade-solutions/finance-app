@@ -9,14 +9,13 @@ import { Input } from '@/components/ui/input';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
 import { PageHeader } from '@/components/shared/page-header';
 import { Field, MoneyInput } from '@/components/shared/form-bits';
 import { Money } from '@/components/shared/money';
 import { EmptyState } from '@/components/shared/empty-state';
 import { useAppStore } from '@/lib/store';
+import { Combobox } from '@/components/ui/combobox';
+import { bankAccountOptions } from '@/lib/options';
 import { today } from '@/lib/selectors';
 import { createTransfer } from '@/lib/services/banking';
 
@@ -56,20 +55,22 @@ export default function TransfersPage() {
               </DialogHeader>
               <div className="space-y-4">
                 <Field label="From account" required>
-                  <Select value={from} onValueChange={setFrom}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {s.bankAccounts.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
+                  <Combobox
+                    options={bankAccountOptions(s)}
+                    value={from}
+                    onChange={setFrom}
+                    placeholder="Select account"
+                    searchPlaceholder="Search accounts"
+                  />
                 </Field>
                 <Field label="To account" required>
-                  <Select value={to} onValueChange={setTo}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {s.bankAccounts.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
+                  <Combobox
+                    options={bankAccountOptions(s)}
+                    value={to}
+                    onChange={setTo}
+                    placeholder="Select account"
+                    searchPlaceholder="Search accounts"
+                  />
                 </Field>
                 <div className="grid grid-cols-2 gap-4">
                   <Field label="Amount" required>

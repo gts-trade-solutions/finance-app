@@ -6,17 +6,24 @@ import {
 } from '@/components/ui/command';
 import { NAV_GROUPS, BOTTOM_LEVEL, TOP_LEVEL } from './nav-config';
 import {
-  FileText, Receipt, Wallet, CreditCard, Users, Building2, Split, BookOpen,
+  Banknote, FileText, Receipt, Wallet, CreditCard, Users, Building2, Split, BookOpen,
 } from 'lucide-react';
 
+/*
+  Every href here must be a real route. Expenses, vendors and manual journals
+  are created from a dialog on their list page, so they link to the list — not
+  to a /new route that does not exist.
+*/
 const CREATE_ACTIONS = [
   { label: 'New Invoice', href: '/sales/invoices/new', icon: Receipt },
   { label: 'New Bill', href: '/purchases/bills/new', icon: FileText },
   { label: 'Record Payment Received', href: '/sales/payments/new', icon: Wallet },
-  { label: 'Record Expense', href: '/purchases/expenses/new', icon: CreditCard },
+  { label: 'Record Payment Made', href: '/purchases/payments/new', icon: Banknote },
+  { label: 'Record Expense', href: '/purchases/expenses', icon: CreditCard },
   { label: 'New Customer', href: '/sales/customers/new', icon: Users },
-  { label: 'New Vendor', href: '/purchases/vendors/new', icon: Building2 },
-  { label: 'New Manual Journal', href: '/accountant/journals/new', icon: BookOpen },
+  { label: 'New Vendor', href: '/purchases/vendors', icon: Building2 },
+  { label: 'New Estimate', href: '/sales/estimates', icon: FileText },
+  { label: 'New Manual Journal', href: '/accountant/journals', icon: BookOpen },
   { label: 'Reconcile Bank', href: '/banking/reconcile', icon: Split },
 ];
 

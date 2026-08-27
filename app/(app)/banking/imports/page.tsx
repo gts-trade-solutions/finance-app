@@ -7,12 +7,11 @@ import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
 import { PageHeader } from '@/components/shared/page-header';
 import { Field } from '@/components/shared/form-bits';
 import { useAppStore } from '@/lib/store';
+import { Combobox } from '@/components/ui/combobox';
+import { bankAccountOptions } from '@/lib/options';
 import { importBankTxns } from '@/lib/services/banking';
 import { fetchBankFeed } from '@/lib/mock/simulators';
 
@@ -116,12 +115,13 @@ export default function BankImportsPage() {
           </div>
 
           <Field label="Import into account">
-            <Select value={accountId} onValueChange={setAccountId}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {s.bankAccounts.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
+            <Combobox
+              options={bankAccountOptions(s)}
+              value={accountId}
+              onChange={setAccountId}
+              placeholder="Select account"
+              searchPlaceholder="Search accounts"
+            />
           </Field>
 
           <div

@@ -10,15 +10,14 @@ import { Input } from '@/components/ui/input';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
 import { PageHeader } from '@/components/shared/page-header';
 import { DataTable, type Column } from '@/components/shared/data-table';
 import { Money } from '@/components/shared/money';
 import { Field, MoneyInput } from '@/components/shared/form-bits';
 import { JournalTable } from '@/components/shared/journal-table';
 import { useAppStore } from '@/lib/store';
+import { Combobox } from '@/components/ui/combobox';
+import { accountOptions } from '@/lib/options';
 import { usePermission } from '@/lib/store/hooks';
 import { today } from '@/lib/selectors';
 import { createManualJournal, reverseEntry } from '@/lib/services/journal';
@@ -166,14 +165,15 @@ export default function JournalsPage() {
                       {rows.map((r) => (
                         <tr key={r.key} className="border-b last:border-0">
                           <td className="px-3 py-2">
-                            <Select value={r.accountId} onValueChange={(v) => update(r.key, { accountId: v })}>
-                              <SelectTrigger className="h-8"><SelectValue placeholder="Select…" /></SelectTrigger>
-                              <SelectContent>
-                                {s.accounts.map((a) => (
-                                  <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
+                            <Combobox
+                              options={accountOptions(s)}
+                              value={r.accountId}
+                              onChange={(v) => update(r.key, { accountId: v })}
+                              placeholder="Select account"
+                              searchPlaceholder="Search accounts by name or code"
+                              showAvatar={false}
+                              className="h-8"
+                            />
                           </td>
                           <td className="px-3 py-2">
                             <Input
