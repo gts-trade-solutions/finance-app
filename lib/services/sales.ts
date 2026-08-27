@@ -588,3 +588,87 @@ export function receiveRetainerPayment(retainerId: string, bankAccountId: string
   });
   logAudit('update', 'retainer', ret.id, ret.number, 'Payment received — held as Unearned Revenue');
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Document actions — the row of things Zoho offers on an invoice once it
+// exists: clone it, write it off, or share a payment link.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Copy an invoice into a fresh draft. Nothing posts until it is approved. */
+export function cloneInvoice(invoiceId: string): Invoice {
+  const src = getState().invoices.find((i) => i.id === invoiceId)!;
+  const date = new Date().toISOString().slice(0, 10);
+  const due = new Date(date);
+  const term = Math.round(
+    (new Date(src.dueDate).getTime() - new Date(src.date).getTime()) / 86_400_000,
+  );
+  due.setDate(due.getDate() + (Number.isFinite(term) ? term : 30));
+
+  return createInvoice({
+    branchId: src.branchId,
+    customerId: src.customerId,
+    date,
+    dueDate: due.toISOString().slice(0, 10),
+    placeOfSupply: src.placeOfSupply,
+    status: 'draft',
+    orderNumber: src.orderNumber,
+    subject: src.subject,
+    paymentTerms: src.paymentTerms,
+    salespersonId: src.salespersonId,
+    notes: src.notes,
+    terms: src.terms,
+    shippingChargePaise: src.shippingChargePaise,
+    adjustmentPaise: src.adjustmentPaise,
+    adjustmentLabel: src.adjustmentLabel,
+    lines: src.lines.map((l) => ({
+      itemId: l.itemId,
+      description: l.description,
+      hsnSac: l.hsnSac,
+      qty: l.qty,
+      uqc: l.uqc,
+      ratePaise: l.ratePaise,
+      discountPct: l.discountPct,
+      gstRatePct: l.gstRatePct,
+    })),
+  });
+}
+
+/**
+ * Write off the unpaid balance as a bad debt. The receivable is genuinely gone,
+ * so it moves to an expense rather than the invoice being deleted — the sale
+ * still happened and the GST on it was still declared.
+ */
+export function writeOffInvoice(invoiceId: string, reason: string): void {
+  const s = getState();
+  const inv = s.invoices.find((i) => i.id === invoiceId);
+  if (!inv) return;
+  const balance = inv.totalPaise - inv.amountPaidPaise;
+  if (balance <= 0) throw new Error('Nothing left to write off on this invoice');
+
+  const customer = s.contacts.find((c) => c.id === inv.customerId)!;
+  const entry = buildEntry({
+    entryNo: nextEntryNo(),
+    date: new Date().toISOString().slice(0, 10),
+    sourceType: 'invoice',
+    sourceId: inv.id,
+    memo: `Write-off ${inv.number} — ${reason}`,
+    lines: [
+      { accountId: ACC.WRITE_OFF, debit: balance, description: reason },
+      {
+        accountId: ACC.AR,
+        credit: balance,
+        contactId: customer.id,
+        description: `Bad debt — ${customer.displayName}`,
+      },
+    ],
+    createdBy: currentUserId(),
+  });
+
+  setState({
+    entries: [...getState().entries, entry],
+    invoices: getState().invoices.map((i) =>
+      i.id === invoiceId ? { ...i, status: 'written_off' as Invoice['status'] } : i,
+    ),
+  });
+  logAudit('update', 'invoice', inv.id, inv.number, `Written off — ${reason}`);
+}

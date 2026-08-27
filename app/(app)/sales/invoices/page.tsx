@@ -3,10 +3,10 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
-import { Plus, Receipt } from 'lucide-react';
+import { Download, FileCheck2, Plus, Receipt, Send } from 'lucide-react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { Combobox } from '@/components/ui/combobox';
 import { PageHeader } from '@/components/shared/page-header';
 import { DataTable, type Column } from '@/components/shared/data-table';
 import { Money } from '@/components/shared/money';
@@ -16,15 +16,29 @@ import { EmptyState } from '@/components/shared/empty-state';
 import { useAppStore } from '@/lib/store';
 import { usePermission } from '@/lib/store/hooks';
 import { contactName, effectiveInvoiceStatus, invoiceBalance } from '@/lib/selectors';
-import { formatINRCompact } from '@/lib/money';
+import { formatINRCompact, toRupees } from '@/lib/money';
+import { downloadCsv } from '@/components/shared/report-shell';
+import { markInvoiceSent } from '@/lib/services/sales';
+import { submitToIrp } from '@/lib/mock/simulators';
 import type { Invoice } from '@/lib/types';
 
 const FILTERS = ['all', 'draft', 'sent', 'partially_paid', 'overdue', 'paid', 'void'] as const;
+
+const TAB_LABEL: Record<(typeof FILTERS)[number], string> = {
+  all: 'All',
+  draft: 'Draft',
+  sent: 'Sent',
+  partially_paid: 'Partially Paid',
+  overdue: 'Overdue',
+  paid: 'Paid',
+  void: 'Void',
+};
 
 export default function InvoicesPage() {
   const router = useRouter();
   const s = useAppStore();
   const canCreate = usePermission('sales', 'create');
+  const canEdit = usePermission('sales', 'edit');
   const [filter, setFilter] = useState<string>('all');
 
   const rows = useMemo(() => {
@@ -32,6 +46,21 @@ export default function InvoicesPage() {
     if (filter === 'all') return list;
     return list.filter((i) => effectiveInvoiceStatus(i) === filter);
   }, [s.invoices, filter]);
+
+  // Counts sit on the tabs, so the shape of the workload is visible without
+  // clicking through each filter.
+  const tabs = useMemo(
+    () =>
+      FILTERS.map((f) => ({
+        value: f,
+        label: TAB_LABEL[f],
+        count:
+          f === 'all'
+            ? s.invoices.length
+            : s.invoices.filter((i) => effectiveInvoiceStatus(i) === f).length,
+      })).filter((t) => t.value === 'all' || t.count > 0),
+    [s.invoices],
+  );
 
   const summary = useMemo(() => {
     const live = s.invoices.filter((i) => i.status !== 'void');
@@ -166,19 +195,65 @@ export default function InvoicesPage() {
           onRowClick={(r) => router.push(`/sales/invoices/${r.id}`)}
           searchPlaceholder="Search invoice no. or customer…"
           initialSort={{ key: 'date', dir: 'desc' }}
-          toolbar={
-            <Combobox
-              options={FILTERS.map((f) => ({
-                value: f,
-                label: f === 'all' ? 'All statuses' : f.replace('_', ' ').replace(/^\w/, (c) => c.toUpperCase()),
-              }))}
-              value={filter}
-              onChange={setFilter}
-              showAvatar={false}
-              searchPlaceholder="Filter status"
-              className="w-44"
-            />
-          }
+          tabs={tabs}
+          activeTab={filter}
+          onTabChange={setFilter}
+          selectable={canEdit}
+          bulkActions={(selected, clear) => (
+            <>
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => {
+                  const n = selected.filter((i) => i.status === 'approved').length;
+                  selected.forEach((i) => markInvoiceSent(i.id));
+                  toast.success(`${n || selected.length} invoice(s) emailed`);
+                  clear();
+                }}
+                className="gap-1"
+              >
+                <Send className="size-3" /> Send
+              </Button>
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={async () => {
+                  const pending = selected.filter(
+                    (i) => i.einvoice.status === 'pending' || i.einvoice.status === 'failed',
+                  );
+                  if (pending.length === 0) {
+                    toast.info('Nothing to report — all selected invoices already have an IRN.');
+                    return;
+                  }
+                  toast.info(`Submitting ${pending.length} invoice(s) to the IRP…`);
+                  let ok = 0;
+                  for (const i of pending) if ((await submitToIrp(i.id)).ok) ok += 1;
+                  toast.success(`${ok} of ${pending.length} registered`);
+                  clear();
+                }}
+                className="gap-1"
+              >
+                <FileCheck2 className="size-3" /> Submit to IRP
+              </Button>
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => {
+                  downloadCsv('invoices.csv', [
+                    ['Invoice', 'Customer', 'Date', 'Due', 'Status', 'Total', 'Balance'],
+                    ...selected.map((i) => [
+                      i.number, contactName(s, i.customerId), i.date, i.dueDate,
+                      effectiveInvoiceStatus(i), toRupees(i.totalPaise), toRupees(invoiceBalance(i)),
+                    ]),
+                  ]);
+                  toast.success(`${selected.length} invoice(s) exported`);
+                }}
+                className="gap-1"
+              >
+                <Download className="size-3" /> Export
+              </Button>
+            </>
+          )}
         />
       )}
     </>

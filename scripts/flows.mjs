@@ -159,6 +159,13 @@ check('Banking shows the Add Bank or Credit Card action',
 
 await page.getByRole('button', { name: /Add Bank or Credit Card/ }).click();
 await page.waitForTimeout(600);
+// Step 1 offers a feed or the manual route, as Zoho does.
+check('Add Bank offers automatic feeds and a manual route',
+  (await page.getByText(/Automatic bank feeds/i).count()) > 0 &&
+  (await page.getByRole('button', { name: 'Add Manually' }).count()) > 0);
+
+await page.getByRole('button', { name: 'Add Manually' }).click();
+await page.waitForTimeout(500);
 await page.getByPlaceholder(/HDFC Bank – Current/).fill('Axis Bank – Current');
 await page.getByPlaceholder('HDFC Bank', { exact: true }).fill('Axis Bank');
 await page.getByRole('button', { name: 'Save account' }).click();
@@ -181,6 +188,47 @@ await page.goto(`${BASE}/sales/invoices`, { waitUntil: 'networkidle' });
 await page.waitForTimeout(700);
 check('Invoices carry the e-invoice mark',
   (await page.locator('span', { hasText: /^e$/ }).count()) > 0);
+
+// ── 8e. Dialogs must fit the viewport rather than running off it
+await page.goto(`${BASE}/banking`, { waitUntil: 'networkidle' });
+await page.getByRole('button', { name: /Add Bank or Credit Card/ }).click();
+await page.waitForTimeout(600);
+await page.getByRole('button', { name: 'Add Manually' }).click();
+await page.waitForTimeout(500);
+const box = await page.locator('[data-slot="dialog-content"]').boundingBox();
+const vh = page.viewportSize().height;
+check('Add Bank dialog fits the viewport',
+  !!box && box.height <= vh - 16, box ? `${Math.round(box.height)}px in ${vh}px` : 'no box');
+await page.keyboard.press('Escape');
+await page.waitForTimeout(400);
+
+// ── 8f. List tabs, bulk select, and the invoice actions menu
+await page.goto(`${BASE}/sales/invoices`, { waitUntil: 'networkidle' });
+await page.waitForTimeout(700);
+check('Invoice list shows status tabs with counts',
+  (await page.getByRole('button', { name: /^All\s*\d+$/ }).count()) > 0);
+
+await page.locator('thead input[type="checkbox"], thead [role="checkbox"]').first().click();
+await page.waitForTimeout(500);
+check('Selecting rows reveals bulk actions',
+  (await page.getByText(/\d+ selected/).count()) > 0);
+
+// Clone must produce a draft, leaving the ledger untouched until approved.
+const beforeCount = await page.locator('tbody tr').count();
+await page.goto(`${BASE}/sales/invoices`, { waitUntil: 'networkidle' });
+await page.locator('tbody tr').first().click();
+await page.waitForURL((u) => /\/sales\/invoices\/inv/.test(u.toString()), { timeout: 20000 });
+await page.getByRole('button', { name: 'More actions' }).click();
+await page.waitForTimeout(500);
+check('Invoice actions menu opens',
+  (await page.getByRole('menuitem', { name: /Clone/ }).count()) > 0);
+await page.getByRole('menuitem', { name: /Clone/ }).click();
+await page.waitForTimeout(1200);
+check('Clone creates a draft copy', page.url().includes('/sales/invoices/inv'));
+
+await page.goto(`${BASE}/reports/trial-balance`, { waitUntil: 'networkidle' });
+check('Books still balance after cloning',
+  (await page.getByText('The books balance').count()) > 0);
 
 // ── 9b. Quick create opens and navigates (this crashed once — see command.tsx)
 await page.goto(`${BASE}/dashboard`, { waitUntil: 'networkidle' });

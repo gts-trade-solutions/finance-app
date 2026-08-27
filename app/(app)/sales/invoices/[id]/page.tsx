@@ -1,10 +1,11 @@
 'use client';
 
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useState } from 'react';
 import {
-  Ban, BookOpen, FileCheck2, Loader2, Printer, Send, Truck, Wallet,
+  Ban, BookOpen, Copy, FileCheck2, FileMinus, Link as LinkIcon, Loader2,
+  MoreHorizontal, Printer, Repeat, Send, Truck, Wallet,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
@@ -15,13 +16,17 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
+  DropdownMenuSeparator, DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { PageHeader } from '@/components/shared/page-header';
 import { Money } from '@/components/shared/money';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { useAppStore } from '@/lib/store';
 import { usePermission } from '@/lib/store/hooks';
 import { contactName, effectiveInvoiceStatus, invoiceBalance } from '@/lib/selectors';
-import { markInvoiceSent, voidInvoice } from '@/lib/services/sales';
+import { cloneInvoice, markInvoiceSent, voidInvoice, writeOffInvoice } from '@/lib/services/sales';
 import { submitToIrp, generateEwayBill } from '@/lib/mock/simulators';
 import { supplyTypeLabel } from '@/lib/tax/gst';
 import { InvoicePrintSheet } from '@/components/print/invoice-sheet';
@@ -30,6 +35,7 @@ import { EInvoiceMark } from '@/components/shared/einvoice-mark';
 
 export default function InvoiceDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
   const s = useAppStore();
   const canEdit = usePermission('sales', 'edit');
   const canVoid = usePermission('sales', 'void');
@@ -41,6 +47,8 @@ export default function InvoiceDetailPage() {
   const [distance, setDistance] = useState('120');
   const [voidOpen, setVoidOpen] = useState(false);
   const [voidReason, setVoidReason] = useState('');
+  const [writeOffOpen, setWriteOffOpen] = useState(false);
+  const [writeOffReason, setWriteOffReason] = useState('');
 
   const inv = s.invoices.find((i) => i.id === id);
   if (!inv) {
@@ -106,11 +114,63 @@ export default function InvoiceDetailPage() {
                   </Link>
                 </Button>
               )}
-              {canVoid && inv.status !== 'void' && (
-                <Button variant="destructive" size="sm" onClick={() => setVoidOpen(true)} className="gap-1.5">
-                  <Ban className="size-3.5" /> Void
-                </Button>
-              )}
+              {/* Everything else lives behind one menu, as Zoho does. */}
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  aria-label="More actions"
+                  className="grid size-9 place-items-center rounded-md border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  <MoreHorizontal className="size-4" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  {canEdit && (
+                    <DropdownMenuItem
+                      onClick={() => {
+                        const copy = cloneInvoice(inv.id);
+                        toast.success(`Cloned to ${copy.number}`, {
+                          description: 'Saved as a draft so you can edit before it posts.',
+                        });
+                        router.push(`/sales/invoices/${copy.id}`);
+                      }}
+                    >
+                      <Copy className="mr-2 size-4" /> Clone
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuItem
+                    onClick={() => {
+                      navigator.clipboard
+                        ?.writeText(`${window.location.origin}/portal?invoice=${inv.number}`)
+                        .then(() => toast.success('Payment link copied', {
+                          description: 'Send it to the customer to pay from the portal.',
+                        }))
+                        .catch(() => toast.error('Could not copy the link'));
+                    }}
+                  >
+                    <LinkIcon className="mr-2 size-4" /> Copy payment link
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => window.print()}>
+                    <Printer className="mr-2 size-4" /> Download PDF
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => router.push('/sales/recurring')}>
+                    <Repeat className="mr-2 size-4" /> Make recurring
+                  </DropdownMenuItem>
+                  {canVoid && invoiceBalance(inv) > 0 && inv.status !== 'void' && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={() => setWriteOffOpen(true)}>
+                        <FileMinus className="mr-2 size-4" /> Write off balance
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                  {canVoid && inv.status !== 'void' && (
+                    <DropdownMenuItem variant="destructive" onClick={() => setVoidOpen(true)}>
+                      <Ban className="mr-2 size-4" /> Void invoice
+                    </DropdownMenuItem>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
             </>
           }
         />
@@ -260,6 +320,47 @@ export default function InvoiceDetailPage() {
             <Button onClick={runEwb} disabled={ewbBusy} className="gap-1.5">
               {ewbBusy && <Loader2 className="size-3.5 animate-spin" />}
               Generate
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Write-off dialog */}
+      <Dialog open={writeOffOpen} onOpenChange={setWriteOffOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Write off the unpaid balance</DialogTitle>
+            <DialogDescription>
+              The sale still happened and its GST was still declared, so the invoice is not
+              removed. The amount you no longer expect to collect moves to Bad Debts as an
+              expense — which is what makes your profit honest.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-md border bg-muted/40 p-3 text-sm">
+            <span className="text-muted-foreground">Amount to write off: </span>
+            <Money value={invoiceBalance(inv)} className="font-semibold" />
+          </div>
+          <Input
+            value={writeOffReason}
+            onChange={(e) => setWriteOffReason(e.target.value)}
+            placeholder="e.g. Customer has ceased trading"
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setWriteOffOpen(false)}>Cancel</Button>
+            <Button
+              onClick={() => {
+                try {
+                  writeOffInvoice(inv.id, writeOffReason || 'No reason given');
+                  toast.success('Balance written off', {
+                    description: 'Posted to Bad Debts Written Off. The invoice stays on record.',
+                  });
+                  setWriteOffOpen(false);
+                } catch (e) {
+                  toast.error((e as Error).message);
+                }
+              }}
+            >
+              Write off
             </Button>
           </DialogFooter>
         </DialogContent>
