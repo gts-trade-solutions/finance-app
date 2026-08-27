@@ -22,6 +22,10 @@ export interface User {
   email: string;
   role: RoleName;
   avatarColor: string;
+  /** Home branch. Documents this user raises default to it. */
+  branchId: string;
+  /** Branches this user may raise documents for; defaults to [branchId]. */
+  branchAccess?: string[];
 }
 
 export interface Branch {

@@ -87,6 +87,22 @@ export function branchOptions(s: AppState): ComboboxOption[] {
   }));
 }
 
+/**
+ * The registrations the signed-in user may raise documents for. A user is
+ * attached to one branch by default, which is why the branch picker stays
+ * hidden for most people — there is nothing for them to choose.
+ */
+export function userBranches(s: AppState): string[] {
+  const user = s.users.find((u) => u.id === s.session?.userId);
+  if (!user) return s.branches.map((b) => b.id);
+  return user.branchAccess?.length ? user.branchAccess : [user.branchId];
+}
+
+export function branchOptionsForUser(s: AppState): ComboboxOption[] {
+  const allowed = new Set(userBranches(s));
+  return branchOptions(s).filter((o) => allowed.has(o.value));
+}
+
 export function userOptions(s: AppState): ComboboxOption[] {
   return s.users.map((u) => ({
     value: u.id,

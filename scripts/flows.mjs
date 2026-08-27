@@ -129,11 +129,22 @@ await page.goto(`${BASE}/sales/items`, { waitUntil: 'networkidle' });
 const costCol = await page.getByRole('columnheader', { name: /Cost price/ }).count();
 check('Sales role cannot see cost prices', costCol === 0);
 
+// ── 8b. A single-branch user is never shown the branch picker
+await page.goto(`${BASE}/sales/invoices/new`, { waitUntil: 'networkidle' });
+await page.waitForTimeout(700);
+const branchFieldForSales = await page.getByText('Branch (GSTIN)').count();
+check('Single-branch user sees no branch picker', branchFieldForSales === 0);
+
 // ── 9. AI assistant answers from the live ledger
 await page.goto(`${BASE}/dashboard`, { waitUntil: 'networkidle' });
 await page.getByRole('button', { name: /Demo/ }).click();
 await page.getByRole('menuitem', { name: /Arun Kumar/ }).click();
 await page.waitForTimeout(600);
+await page.goto(`${BASE}/sales/invoices/new`, { waitUntil: 'networkidle' });
+await page.waitForTimeout(700);
+check('Multi-branch user still gets the branch picker',
+  (await page.getByText('Branch (GSTIN)').count()) > 0);
+
 await page.goto(`${BASE}/ai`, { waitUntil: 'networkidle' });
 await page.getByRole('button', { name: 'Which invoices are overdue?' }).click();
 await page.waitForTimeout(2500);

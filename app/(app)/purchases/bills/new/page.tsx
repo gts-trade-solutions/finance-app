@@ -19,7 +19,8 @@ import {
 import { useAppStore } from '@/lib/store';
 import { today } from '@/lib/selectors';
 import {
-  branchOptions, dueDateFor, termsForDays, termsOptions, vendorOptions,
+  branchOptionsForUser, dueDateFor, termsForDays, termsOptions, userBranches,
+  vendorOptions,
 } from '@/lib/options';
 import { createBill, vendorFyTaxable } from '@/lib/services/purchases';
 import { peekNumber } from '@/lib/series';
@@ -48,11 +49,12 @@ export default function NewBillPage() {
   const [attachments, setAttachments] = useState(0);
   const [saving, setSaving] = useState(false);
 
-  // Only surface the branch picker when there is more than one registration.
-  const multiBranch = s.branches.length > 1;
+  // Only surface the picker when this user has more than one registration.
+  const allowedBranches = useMemo(() => userBranches(s), [s]);
+  const multiBranch = allowedBranches.length > 1;
 
   const vendors = useMemo(() => vendorOptions(s), [s]);
-  const branches = useMemo(() => branchOptions(s), [s]);
+  const branches = useMemo(() => branchOptionsForUser(s), [s]);
   const internalNo = useMemo(
     () => (branchId ? peekNumber(s.series, branchId, 'BILL', FY_SHORT) : ''),
     [s.series, branchId],

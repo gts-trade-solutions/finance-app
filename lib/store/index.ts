@@ -122,7 +122,15 @@ export const useAppStore = create<AppState>()(
   persist(
     (set) => ({
       ...EMPTY_COLLECTIONS,
-      login: (userId, role) => set({ session: { userId, role } }),
+      login: (userId, role) =>
+        set((s) => {
+          // A user works within their branch, so signing in adopts it.
+          const home = s.users.find((u) => u.id === userId)?.branchId;
+          return {
+            session: { userId, role },
+            activeBranchId: home ?? s.activeBranchId,
+          };
+        }),
       logout: () => set({ session: null }),
       setActiveBranch: (branchId) => set({ activeBranchId: branchId }),
     }),

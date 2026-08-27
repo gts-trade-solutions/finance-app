@@ -37,8 +37,26 @@ export const SEED_BRANCHES: Branch[] = [
 ];
 
 export const SEED_USERS: User[] = [
-  { id: 'u_arun', name: 'Arun Kumar', email: 'arun@raceautospares.in', role: 'admin', avatarColor: '#6366f1' },
-  { id: 'u_priya', name: 'Priya Raman', email: 'priya@raceautospares.in', role: 'accountant', avatarColor: '#0ea5e9' },
-  { id: 'u_vikram', name: 'Vikram Shetty', email: 'vikram@raceautospares.in', role: 'sales', avatarColor: '#f59e0b' },
-  { id: 'u_deepa', name: 'Deepa Nair', email: 'deepa@raceautospares.in', role: 'viewer', avatarColor: '#10b981' },
+  // Arun and Priya work across both registrations; Vikram sells out of the
+  // Bengaluru depot only, which is the common case — a user has one branch.
+  {
+    id: 'u_arun', name: 'Arun Kumar', email: 'arun@raceautospares.in',
+    role: 'admin', avatarColor: '#4f7ce8',
+    branchId: 'br_chennai', branchAccess: ['br_chennai', 'br_bengaluru'],
+  },
+  {
+    id: 'u_priya', name: 'Priya Raman', email: 'priya@raceautospares.in',
+    role: 'accountant', avatarColor: '#2fa4a0',
+    branchId: 'br_chennai', branchAccess: ['br_chennai', 'br_bengaluru'],
+  },
+  {
+    id: 'u_vikram', name: 'Vikram Shetty', email: 'vikram@raceautospares.in',
+    role: 'sales', avatarColor: '#e0883a',
+    branchId: 'br_bengaluru',
+  },
+  {
+    id: 'u_deepa', name: 'Deepa Nair', email: 'deepa@raceautospares.in',
+    role: 'viewer', avatarColor: '#3f9f5f',
+    branchId: 'br_chennai',
+  },
 ];

@@ -70,8 +70,7 @@ function ThemeToggle() {
 
 export function Topbar() {
   const router = useRouter();
-  const { branches, activeBranchId, users, session } = useAppStore();
-  const setActiveBranch = useAppStore((s) => s.setActiveBranch);
+  const { org, branches, activeBranchId, users, session } = useAppStore();
   const logout = useAppStore((s) => s.logout);
   const login = useAppStore((s) => s.login);
   const [quickOpen, setQuickOpen] = useState(false);
@@ -136,25 +135,38 @@ export function Topbar() {
             Demo data · nothing is filed with any portal
           </span>
 
-          {/* Branch (GSTIN) switcher */}
+          {/*
+            Organisation switcher, as in Zoho. Branch is deliberately NOT here:
+            a user works within their own branch, so it comes from their profile
+            and is only editable on a document when they have access to more
+            than one registration.
+          */}
           <DropdownMenu>
             <DropdownMenuTrigger className="flex h-9 items-center gap-1.5 rounded-md px-2.5 text-[13px] text-foreground/80 transition-colors hover:bg-accent">
               <Building2 className="size-4 shrink-0 opacity-70" />
-              <span className="hidden max-w-[130px] truncate sm:inline">{branch?.name ?? 'Branch'}</span>
+              <span className="hidden max-w-[170px] truncate sm:inline">{org?.name ?? 'Organisation'}</span>
               <ChevronDown className="size-3 shrink-0" />
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-72">
-              <DropdownMenuLabel>Branch &amp; GST registration</DropdownMenuLabel>
+            <DropdownMenuContent align="end" className="w-80">
+              <DropdownMenuLabel>Organisation</DropdownMenuLabel>
               <DropdownMenuSeparator />
-              {branches.map((b) => (
-                <DropdownMenuItem key={b.id} onClick={() => setActiveBranch(b.id)}>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate font-medium">{b.name}</p>
-                    <p className="truncate font-mono text-[10px] text-muted-foreground">{b.gstin}</p>
-                  </div>
-                  {b.id === activeBranchId && <Badge variant="secondary" className="ml-2 text-[9px]">Active</Badge>}
-                </DropdownMenuItem>
-              ))}
+              <DropdownMenuItem className="items-start gap-2.5 py-2">
+                <Building2 className="mt-0.5 size-4 shrink-0 opacity-70" />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-medium">{org?.name}</p>
+                  <p className="truncate text-[11px] text-muted-foreground">
+                    {org?.fiscalYearLabel} · PAN {org?.pan}
+                  </p>
+                  <p className="mt-1 truncate text-[11px] text-muted-foreground">
+                    {branch?.name} · <span className="font-mono">{branch?.gstin}</span>
+                  </p>
+                </div>
+                <Badge variant="secondary" className="text-[9px]">Active</Badge>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => router.push('/settings')}>
+                <Settings className="mr-2 size-4" /> Manage organisation
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
 

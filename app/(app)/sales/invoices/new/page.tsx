@@ -21,8 +21,8 @@ import {
 import { useAppStore } from '@/lib/store';
 import { today } from '@/lib/selectors';
 import {
-  branchOptions, customerOptions, dueDateFor, stateOptions, termsForDays,
-  termsOptions, userOptions,
+  branchOptionsForUser, customerOptions, dueDateFor, stateOptions, termsForDays,
+  termsOptions, userBranches, userOptions,
 } from '@/lib/options';
 import { createInvoice, markInvoiceSent } from '@/lib/services/sales';
 import { peekNumber } from '@/lib/series';
@@ -66,11 +66,12 @@ export default function NewInvoicePage() {
     [s.series, branchId],
   );
 
-  // A branch picker is only meaningful with more than one GST registration.
-  const multiBranch = s.branches.length > 1;
+  // Only meaningful when this user is attached to more than one registration.
+  const allowedBranches = useMemo(() => userBranches(s), [s]);
+  const multiBranch = allowedBranches.length > 1;
 
   const customers = useMemo(() => customerOptions(s), [s]);
-  const branches = useMemo(() => branchOptions(s), [s]);
+  const branches = useMemo(() => branchOptionsForUser(s), [s]);
   const salespeople = useMemo(() => userOptions(s), [s]);
   const states = useMemo(() => stateOptions(), []);
 
