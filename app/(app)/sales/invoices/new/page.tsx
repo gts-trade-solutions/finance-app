@@ -66,6 +66,9 @@ export default function NewInvoicePage() {
     [s.series, branchId],
   );
 
+  // A branch picker is only meaningful with more than one GST registration.
+  const multiBranch = s.branches.length > 1;
+
   const customers = useMemo(() => customerOptions(s), [s]);
   const branches = useMemo(() => branchOptions(s), [s]);
   const salespeople = useMemo(() => userOptions(s), [s]);
@@ -318,17 +321,45 @@ export default function NewInvoicePage() {
 
         <FormSectionRule label="GST" />
 
-        <FormRowPair>
-          <FormRow label="Branch (GSTIN)" required>
-            <Combobox
-              options={branches}
-              value={branchId}
-              onChange={setBranchId}
-              placeholder="Select branch"
-              searchPlaceholder="Search branches"
-            />
-          </FormRow>
-          <FormRow label="Place of Supply" required>
+        {/*
+          Branch only appears when the business actually holds more than one GST
+          registration — otherwise there is nothing to choose and the field is
+          noise. Zoho behaves the same way: no Branch field until Branches is
+          enabled and a second registration exists. Single-branch orgs get the
+          branch implicitly from the top-bar switcher.
+        */}
+        {multiBranch ? (
+          <FormRowPair>
+            <FormRow
+              label="Branch (GSTIN)"
+              required
+              hint="Which of your GST registrations raises this invoice"
+            >
+              <Combobox
+                options={branches}
+                value={branchId}
+                onChange={setBranchId}
+                placeholder="Select branch"
+                searchPlaceholder="Search branches"
+              />
+            </FormRow>
+            <FormRow label="Place of Supply" required>
+              <Combobox
+                options={states}
+                value={pos}
+                onChange={setPlaceOfSupply}
+                placeholder="Select state"
+                searchPlaceholder="Search states"
+                showAvatar={false}
+              />
+            </FormRow>
+          </FormRowPair>
+        ) : (
+          <FormRow
+            label="Place of Supply"
+            required
+            hint={branch ? `Supplying from ${branch.gstin}` : undefined}
+          >
             <Combobox
               options={states}
               value={pos}
@@ -338,7 +369,7 @@ export default function NewInvoicePage() {
               showAvatar={false}
             />
           </FormRow>
-        </FormRowPair>
+        )}
 
         {customer && branch && (
           <div className="flex items-start gap-2.5 rounded-md border border-primary/25 bg-primary/5 px-3 py-2.5 sm:ml-[166px]">

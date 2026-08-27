@@ -48,6 +48,9 @@ export default function NewBillPage() {
   const [attachments, setAttachments] = useState(0);
   const [saving, setSaving] = useState(false);
 
+  // Only surface the branch picker when there is more than one registration.
+  const multiBranch = s.branches.length > 1;
+
   const vendors = useMemo(() => vendorOptions(s), [s]);
   const branches = useMemo(() => branchOptions(s), [s]);
   const internalNo = useMemo(
@@ -249,14 +252,22 @@ export default function NewBillPage() {
           <FormRow label="Due Date">
             <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
           </FormRow>
-          <FormRow label="Branch (GSTIN)" required>
-            <Combobox
-              options={branches}
-              value={branchId}
-              onChange={setBranchId}
-              placeholder="Select branch"
-            />
-          </FormRow>
+          {multiBranch ? (
+            <FormRow
+              label="Branch (GSTIN)"
+              required
+              hint="Which registration receives this purchase"
+            >
+              <Combobox
+                options={branches}
+                value={branchId}
+                onChange={setBranchId}
+                placeholder="Select branch"
+              />
+            </FormRow>
+          ) : (
+            <div />
+          )}
         </FormRowPair>
 
         <FormRow label="Subject" width="lg">
