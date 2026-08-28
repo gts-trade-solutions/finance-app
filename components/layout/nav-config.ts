@@ -3,7 +3,7 @@ import {
   FileText, Landmark, LayoutDashboard, type LucideIcon, Package, Receipt,
   ReceiptIndianRupee, Repeat, ScrollText, Settings, ShieldCheck, ShoppingCart,
   Truck, Users, Wallet, FileCheck2, HandCoins, ClipboardList, CalendarClock,
-  FileMinus, Building, AlertTriangle, Split,
+  FileMinus, Building, AlertTriangle, Split, Lock,
 } from 'lucide-react';
 
 export interface NavItem {
@@ -71,11 +71,15 @@ export const NAV_GROUPS: NavGroup[] = [
     label: 'Accountant',
     icon: BookOpen,
     module: 'accountant',
+    // Ordered as Zoho's Accountant module: journals first, then the chart,
+    // then the controls that sit over them.
     items: [
       { label: 'Manual Journals', href: '/accountant/journals', icon: BookOpen, module: 'accountant' },
+      { label: 'Recurring Journals', href: '/accountant/recurring-journals', icon: Repeat, module: 'accountant' },
       { label: 'Chart of Accounts', href: '/accountant/chart-of-accounts', icon: ScrollText, module: 'accountant' },
       { label: 'Opening Balances', href: '/accountant/opening-balances', icon: FileCheck2, module: 'accountant' },
       { label: 'Budgets', href: '/accountant/budgets', icon: BarChart3, module: 'accountant' },
+      { label: 'Transaction Locking', href: '/accountant/transaction-locking', icon: Lock, module: 'accountant' },
       { label: 'Period Close', href: '/accountant/period-close', icon: CalendarClock, module: 'accountant' },
       { label: 'Audit Trail', href: '/accountant/audit-trail', icon: ShieldCheck, module: 'accountant' },
     ],

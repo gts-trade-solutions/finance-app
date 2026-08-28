@@ -230,6 +230,45 @@ await page.goto(`${BASE}/reports/trial-balance`, { waitUntil: 'networkidle' });
 check('Books still balance after cloning',
   (await page.getByText('The books balance').count()) > 0);
 
+// ── 8g. Reports catalogue: search and favourites
+await page.goto(`${BASE}/reports`, { waitUntil: 'networkidle' });
+await page.waitForTimeout(700);
+const groups = await page.locator('h2').count();
+check("Reports index shows Zoho's categories", groups >= 9, `${groups} groups`);
+
+await page.getByPlaceholder('Search reports').fill('ageing');
+await page.waitForTimeout(600);
+check('Report search filters the catalogue',
+  (await page.getByText(/result.* for/).count()) > 0);
+await page.getByPlaceholder('Search reports').fill('');
+await page.waitForTimeout(500);
+
+await page.locator('button[aria-label="Add to favourites"]').first().click();
+await page.waitForTimeout(500);
+check('Starring a report pins it to Favourites',
+  (await page.getByText('Favourites').count()) > 0);
+
+// ── 8h. New accountant tools
+await page.goto(`${BASE}/accountant/recurring-journals`, { waitUntil: 'networkidle' });
+await page.waitForTimeout(700);
+const beforeEntries = await page.evaluate(() =>
+  JSON.parse(localStorage.getItem('finance-app-demo-v1') ?? '{}')?.state?.entries?.length ?? 0);
+await page.getByRole('button', { name: 'Post now' }).first().click();
+await page.waitForTimeout(1200);
+const afterEntries = await page.evaluate(() =>
+  JSON.parse(localStorage.getItem('finance-app-demo-v1') ?? '{}')?.state?.entries?.length ?? 0);
+check('Recurring journal posts a real entry', afterEntries === beforeEntries + 1,
+  `${beforeEntries} → ${afterEntries}`);
+
+await page.goto(`${BASE}/reports/trial-balance`, { waitUntil: 'networkidle' });
+check('Books still balance after a recurring journal posts',
+  (await page.getByText('The books balance').count()) > 0);
+
+await page.goto(`${BASE}/accountant/transaction-locking`, { waitUntil: 'networkidle' });
+await page.waitForTimeout(700);
+check('Transaction locking offers a lock per module',
+  (await page.getByRole('button', { name: 'Lock' }).count()) === 4);
+
 // ── 9b. Quick create opens and navigates (this crashed once — see command.tsx)
 await page.goto(`${BASE}/dashboard`, { waitUntil: 'networkidle' });
 await page.getByRole('button', { name: 'Quick create' }).click();

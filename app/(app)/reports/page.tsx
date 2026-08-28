@@ -1,107 +1,244 @@
 'use client';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Reports index, following Zoho Books' catalogue: the same nine categories in
+// the same order, with search and starred favourites. Every figure is derived
+// live from journal entries — there is no stored report data anywhere.
+// ─────────────────────────────────────────────────────────────────────────────
+
 import Link from 'next/link';
-import {
-  BarChart3, BookOpen, Boxes, Building2, CalendarClock, FileSpreadsheet, FileText,
-  Landmark, type LucideIcon, Receipt, ScrollText, ShieldCheck, TrendingUp, Users, Wallet,
-} from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Search, Star } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/shared/page-header';
+import { useAppStore } from '@/lib/store';
+import { cn } from '@/lib/utils';
 
 interface ReportDef {
   title: string;
   href: string;
-  icon: LucideIcon;
   description: string;
-  live?: boolean;
+  /** Not yet built — shown but not linked. */
+  soon?: boolean;
 }
 
-const GROUPS: { group: string; blurb: string; reports: ReportDef[] }[] = [
+/** Zoho's categories, in Zoho's order. */
+const CATALOGUE: { group: string; blurb: string; reports: ReportDef[] }[] = [
   {
-    group: 'Business overview',
-    blurb: 'The three statements every business and every lender asks for.',
+    group: 'Business Overview',
+    blurb: 'How the business performed, and what it is worth.',
     reports: [
-      { title: 'Profit & Loss', href: '/reports/profit-and-loss', icon: TrendingUp, description: 'Did we make money over a period?', live: true },
-      { title: 'Balance Sheet', href: '/reports/balance-sheet', icon: Landmark, description: 'What we own and owe, on a given date.', live: true },
-      { title: 'Cash Flow', href: '/reports/cash-flow', icon: Wallet, description: 'Where cash actually came from and went.', live: true },
+      { title: 'Profit and Loss', href: '/reports/profit-and-loss', description: 'Income less expenses over a period — did we make money?' },
+      { title: 'Cash Flow Statement', href: '/reports/cash-flow', description: 'Where cash actually came from and went.' },
+      { title: 'Balance Sheet', href: '/reports/balance-sheet', description: 'What we own and owe on a single date.' },
+      { title: 'Business Performance Ratios', href: '/reports/business-ratios', description: 'Margin, liquidity and collection speed, explained in plain terms.' },
+      { title: 'Movement of Equity', href: '/reports/movement-of-equity', description: "How the owners' stake changed, and why." },
     ],
   },
   {
-    group: 'Accounting',
-    blurb: 'The raw books — every report here reads the same journal entries.',
+    group: 'Accountant',
+    blurb: 'The raw books. Every other report is a view over these.',
     reports: [
-      { title: 'Trial Balance', href: '/reports/trial-balance', icon: ScrollText, description: 'Proof the books balance, account by account.', live: true },
-      { title: 'General Ledger', href: '/reports/general-ledger', icon: BookOpen, description: 'Every movement through one account.', live: true },
-      { title: 'Day Book', href: '/reports/day-book', icon: CalendarClock, description: 'Everything that happened, in date order.', live: true },
-      { title: 'Journal Report', href: '/reports/journal-report', icon: FileText, description: 'All journal entries with their source document.', live: true },
+      { title: 'Account Transactions', href: '/reports/account-transactions', description: 'Every journal line, across every account.' },
+      { title: 'Account Type Summary', href: '/reports/account-type-summary', description: 'The five account families at a glance.' },
+      { title: 'General Ledger', href: '/reports/general-ledger', description: 'One account, in order, with a running balance.' },
+      { title: 'Journal Report', href: '/reports/journal-report', description: 'Every entry with its full double-entry detail.' },
+      { title: 'Trial Balance', href: '/reports/trial-balance', description: 'Proof the books balance, account by account.' },
+      { title: 'Day Book', href: '/reports/day-book', description: 'Everything that happened, day by day.' },
     ],
   },
   {
-    group: 'Receivables & payables',
-    blurb: 'Who owes you, who you owe, and how late everyone is.',
+    group: 'Sales',
+    blurb: 'What sold, to whom, and through whom.',
     reports: [
-      { title: 'AR Ageing', href: '/reports/ar-ageing', icon: Receipt, description: 'Outstanding customer invoices by age bucket.', live: true },
-      { title: 'AP Ageing', href: '/reports/ap-ageing', icon: FileSpreadsheet, description: 'Unpaid supplier bills by age bucket.', live: true },
-      { title: 'Sales by Customer', href: '/reports/sales-by-customer', icon: Users, description: 'Revenue ranked by who generated it.', live: true },
-      { title: 'Sales by Item', href: '/reports/sales-by-item', icon: Boxes, description: 'What actually sells, by value and quantity.', live: true },
-      { title: 'Purchases by Vendor', href: '/reports/purchases-by-vendor', icon: Building2, description: 'Spending ranked by supplier.', live: true },
-      { title: 'Expenses by Category', href: '/reports/expenses-by-category', icon: BarChart3, description: 'Where the money goes, by account.', live: true },
+      { title: 'Sales by Customer', href: '/reports/sales-by-customer', description: 'Revenue ranked by who generated it.' },
+      { title: 'Sales by Item', href: '/reports/sales-by-item', description: 'What actually sells, by value and quantity.' },
+      { title: 'Sales by Salesperson', href: '/reports/sales-by-salesperson', description: 'Who booked it, and how much they collected.' },
     ],
   },
   {
-    group: 'Tax & compliance',
+    group: 'Receivables',
+    blurb: 'Who owes you, and how long they have owed it.',
+    reports: [
+      { title: 'Customer Balances', href: '/reports/customer-balances', description: 'Invoiced, received and outstanding, per customer.' },
+      { title: 'AR Ageing Summary', href: '/reports/ar-ageing', description: 'Outstanding invoices by age bucket.' },
+      { title: 'Invoice Details', href: '/reports/invoice-details', description: 'Every invoice raised, with its balance.' },
+    ],
+  },
+  {
+    group: 'Payments Received',
+    blurb: 'Money in, and how quickly it arrives.',
+    reports: [
+      { title: 'Payments Received', href: '/reports/payments-received', description: 'Every receipt, with TDS withheld and amounts on account.' },
+      { title: 'Credit Note Details', href: '/reports/credit-note-details', description: 'Credits issued, and the reason GST requires on each.' },
+    ],
+  },
+  {
+    group: 'Payables',
+    blurb: 'What you owe, and to whom.',
+    reports: [
+      { title: 'Vendor Balances', href: '/reports/vendor-balances', description: 'Billed, paid and outstanding, per supplier.' },
+      { title: 'AP Ageing Summary', href: '/reports/ap-ageing', description: 'Unpaid bills by age bucket.' },
+      { title: 'Bill Details', href: '/reports/bill-details', description: 'Every supplier bill, with TDS withheld.' },
+      { title: 'Payments Made', href: '/reports/payments-made', description: 'Every payment out, and the account it left from.' },
+    ],
+  },
+  {
+    group: 'Purchases and Expenses',
+    blurb: 'Where the money goes.',
+    reports: [
+      { title: 'Purchases by Vendor', href: '/reports/purchases-by-vendor', description: 'Spending ranked by supplier.' },
+      { title: 'Expenses by Category', href: '/reports/expenses-by-category', description: 'Spend grouped by expense account.' },
+      { title: 'Expense Details', href: '/reports/expense-details', description: 'Every expense line, with input credit claimed.' },
+    ],
+  },
+  {
+    group: 'Taxes',
     blurb: 'Everything the GST portal and your CA will ask for.',
     reports: [
-      { title: 'GSTR-1 Summary', href: '/gst/gstr1', icon: FileText, description: 'Outward supplies, section by section.', live: true },
-      { title: 'GSTR-3B Summary', href: '/gst/gstr3b', icon: FileSpreadsheet, description: 'Monthly liability with input credit set-off.', live: true },
-      { title: 'ITC Reconciliation', href: '/gst/itc-reconciliation', icon: ShieldCheck, description: 'Your books against the government’s GSTR-2B.', live: true },
-      { title: 'TDS & TCS', href: '/gst/tds-tcs', icon: Receipt, description: 'Tax withheld, by section and vendor.', live: true },
-      { title: 'Audit Trail', href: '/accountant/audit-trail', icon: ShieldCheck, description: 'Who changed what, and when. Never editable.', live: true },
+      { title: 'GSTR-1 Summary', href: '/gst/gstr1', description: 'Outward supplies, section by section.' },
+      { title: 'GSTR-3B Summary', href: '/gst/gstr3b', description: 'Monthly liability with input credit set-off.' },
+      { title: 'ITC Reconciliation', href: '/gst/itc-reconciliation', description: "Your books against the government's GSTR-2B." },
+      { title: 'TDS & TCS', href: '/gst/tds-tcs', description: 'Tax withheld, by section and party.' },
+      { title: 'E-invoice Register', href: '/gst/einvoices', description: 'IRN status and the 30-day reporting window.' },
+    ],
+  },
+  {
+    group: 'Activity',
+    blurb: 'Who did what, and when.',
+    reports: [
+      { title: 'Audit Trail', href: '/accountant/audit-trail', description: 'Every create, change and void. Never editable.' },
     ],
   },
 ];
 
+const ALL = CATALOGUE.flatMap((g) => g.reports.map((r) => ({ ...r, group: g.group })));
+const FAV_KEY = 'finora-report-favourites';
+
 export default function ReportsPage() {
+  const entryCount = useAppStore((s) => s.entries.length);
+  const [query, setQuery] = useState('');
+  const [favourites, setFavourites] = useState<string[]>([]);
+
+  // Favourites are a per-viewer convenience, so local storage is the right home.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(FAV_KEY);
+      if (raw) setFavourites(JSON.parse(raw));
+    } catch {
+      /* storage can be unavailable; favourites are optional */
+    }
+  }, []);
+
+  const toggleFav = (href: string) => {
+    setFavourites((f) => {
+      const next = f.includes(href) ? f.filter((x) => x !== href) : [...f, href];
+      try {
+        localStorage.setItem(FAV_KEY, JSON.stringify(next));
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  };
+
+  const matches = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return null;
+    return ALL.filter(
+      (r) =>
+        r.title.toLowerCase().includes(q) ||
+        r.description.toLowerCase().includes(q) ||
+        r.group.toLowerCase().includes(q),
+    );
+  }, [query]);
+
+  const favReports = ALL.filter((r) => favourites.includes(r.href));
+
+  const ReportCard = ({ r }: { r: ReportDef & { group?: string } }) => (
+    <Card className="group relative h-full p-4 transition-colors hover:border-primary/40">
+      <button
+        type="button"
+        aria-label={favourites.includes(r.href) ? 'Remove from favourites' : 'Add to favourites'}
+        onClick={(e) => {
+          e.preventDefault();
+          toggleFav(r.href);
+        }}
+        className="absolute right-3 top-3 z-10 text-muted-foreground/50 transition-colors hover:text-warning"
+      >
+        <Star className={cn('size-3.5', favourites.includes(r.href) && 'fill-warning text-warning')} />
+      </button>
+      <Link href={r.href} className="block pr-6">
+        <p className="text-sm font-medium">{r.title}</p>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{r.description}</p>
+        {r.group && query && (
+          <Badge variant="secondary" className="mt-2 text-[9px]">{r.group}</Badge>
+        )}
+      </Link>
+    </Card>
+  );
+
   return (
     <>
       <PageHeader
         title="Reports"
-        description="No report data is stored anywhere. Every figure below is calculated live from your journal entries, which is why they can never disagree with each other."
+        description={`No report data is stored anywhere. Every figure below is calculated live from ${entryCount} journal entries, which is why they can never disagree with each other.`}
+        actions={
+          <div className="relative w-full max-w-xs">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search reports"
+              className="pl-8"
+            />
+          </div>
+        }
       />
 
-      {GROUPS.map((g) => (
-        <section key={g.group} className="space-y-3">
-          <div>
-            <h2 className="text-sm font-semibold">{g.group}</h2>
-            <p className="text-xs text-muted-foreground">{g.blurb}</p>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {g.reports.map((r) => (
-              <Link key={r.href} href={r.href}>
-                <Card className="group h-full p-4 transition-all hover:border-primary/40 hover:shadow-sm">
-                  <div className="flex items-start gap-3">
-                    <div className="rounded-lg bg-primary/10 p-2">
-                      <r.icon className="size-4 text-primary" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <p className="font-medium">{r.title}</p>
-                        {r.live && (
-                          <Badge variant="outline" className="border-emerald-500/40 text-[9px] text-emerald-700 dark:text-emerald-300">
-                            Live
-                          </Badge>
-                        )}
-                      </div>
-                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{r.description}</p>
-                    </div>
-                  </div>
-                </Card>
-              </Link>
-            ))}
-          </div>
+      {matches ? (
+        <section className="space-y-3">
+          <h2 className="micro-label">
+            {matches.length} result{matches.length === 1 ? '' : 's'} for “{query}”
+          </h2>
+          {matches.length === 0 ? (
+            <Card className="p-10 text-center text-sm text-muted-foreground">
+              No report matches that. Try a category name like “payables” or “tax”.
+            </Card>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {matches.map((r) => <ReportCard key={r.href} r={r} />)}
+            </div>
+          )}
         </section>
-      ))}
+      ) : (
+        <>
+          {favReports.length > 0 && (
+            <section className="space-y-3">
+              <h2 className="micro-label flex items-center gap-1.5">
+                <Star className="size-3 fill-warning text-warning" /> Favourites
+              </h2>
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {favReports.map((r) => <ReportCard key={r.href} r={r} />)}
+              </div>
+            </section>
+          )}
+
+          {CATALOGUE.map((g) => (
+            <section key={g.group} className="space-y-3">
+              <div>
+                <h2 className="micro-label">{g.group}</h2>
+                <p className="mt-1 text-xs text-muted-foreground">{g.blurb}</p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {g.reports.map((r) => <ReportCard key={r.href} r={r} />)}
+              </div>
+            </section>
+          ))}
+        </>
+      )}
     </>
   );
 }

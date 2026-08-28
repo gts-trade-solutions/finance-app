@@ -54,6 +54,8 @@ await shot('05-invoice-filled', '/sales/invoices/new', async () => {
 await shot('06-banking', '/banking');
 await shot('06b-reconcile', '/banking/reconcile');
 await shot('07-reports', '/reports');
+await shot('09-account-transactions', '/reports/account-transactions');
+await shot('10-transaction-locking', '/accountant/transaction-locking');
 await shot('08-trial-balance', '/reports/trial-balance');
 
 await browser.close();

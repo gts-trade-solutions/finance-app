@@ -24,8 +24,9 @@ const ROUTES = [
   '/banking', '/banking/reconcile', '/banking/imports',
   '/banking/rules', '/banking/transfers', '/banking/cheques',
   // Accountant
-  '/accountant/journals', '/accountant/chart-of-accounts',
-  '/accountant/opening-balances', '/accountant/budgets',
+  '/accountant/journals', '/accountant/recurring-journals',
+  '/accountant/chart-of-accounts', '/accountant/opening-balances',
+  '/accountant/budgets', '/accountant/transaction-locking',
   '/accountant/period-close', '/accountant/audit-trail',
   // GST
   '/gst/einvoices', '/gst/eway-bills', '/gst/gstr1', '/gst/gstr3b',
@@ -38,6 +39,13 @@ const ROUTES = [
   '/reports/day-book', '/reports/journal-report', '/reports/ar-ageing',
   '/reports/ap-ageing', '/reports/sales-by-customer', '/reports/sales-by-item',
   '/reports/purchases-by-vendor', '/reports/expenses-by-category',
+  '/reports/account-transactions', '/reports/account-type-summary',
+  '/reports/movement-of-equity', '/reports/business-ratios',
+  '/reports/customer-balances', '/reports/vendor-balances',
+  '/reports/invoice-details', '/reports/bill-details',
+  '/reports/payments-received', '/reports/payments-made',
+  '/reports/expense-details', '/reports/sales-by-salesperson',
+  '/reports/credit-note-details',
   // Depth
   '/ai', '/settings', '/portal',
 ];
