@@ -136,7 +136,7 @@ export default function VendorCreditsPage() {
       {s.vendorCredits.length === 0 ? (
         <EmptyState icon={FileMinus} title="No vendor credits" description="Raise one when you return goods or a supplier over-bills you." />
       ) : (
-        <DataTable rows={s.vendorCredits} columns={columns} getRowId={(r) => r.id} initialSort={{ key: 'date', dir: 'desc' }} />
+        <DataTable rows={s.vendorCredits} columns={columns} getRowId={(r) => r.id} initialSort={{ key: 'date', dir: 'desc' }} dateFilter={{ getDate: (r) => r.date }} />
       )}
     </>
   );

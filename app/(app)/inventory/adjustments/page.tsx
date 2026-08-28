@@ -67,7 +67,7 @@ export default function AdjustmentsPage() {
       {s.stockMoves.length === 0 ? (
         <EmptyState icon={ClipboardList} title="No stock movements" description="Opening stock and adjustments appear here." />
       ) : (
-        <DataTable rows={s.stockMoves} columns={columns} getRowId={(r) => r.id} initialSort={{ key: 'date', dir: 'desc' }} searchPlaceholder="Search item or note…" />
+        <DataTable rows={s.stockMoves} columns={columns} getRowId={(r) => r.id} initialSort={{ key: 'date', dir: 'desc' }} searchPlaceholder="Search item or note…" dateFilter={{ getDate: (r) => r.date }} />
       )}
     </>
   );

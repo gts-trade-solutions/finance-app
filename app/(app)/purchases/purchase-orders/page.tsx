@@ -37,7 +37,7 @@ export default function PurchaseOrdersPage() {
       {s.purchaseOrders.length === 0 ? (
         <EmptyState icon={ClipboardList} title="No purchase orders" description="Raise a PO to formalise what you've ordered." />
       ) : (
-        <DataTable rows={s.purchaseOrders} columns={columns} getRowId={(r) => r.id} initialSort={{ key: 'date', dir: 'desc' }} />
+        <DataTable rows={s.purchaseOrders} columns={columns} getRowId={(r) => r.id} initialSort={{ key: 'date', dir: 'desc' }} dateFilter={{ getDate: (r) => r.date }} />
       )}
     </>
   );

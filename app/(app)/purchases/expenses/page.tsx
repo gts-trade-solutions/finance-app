@@ -179,7 +179,7 @@ export default function ExpensesPage() {
       {s.expenses.length === 0 ? (
         <EmptyState icon={CreditCard} title="No expenses" description="Record day-to-day spending here." />
       ) : (
-        <DataTable rows={s.expenses} columns={columns} getRowId={(r) => r.id} initialSort={{ key: 'date', dir: 'desc' }} searchPlaceholder="Search description or category…" />
+        <DataTable rows={s.expenses} columns={columns} getRowId={(r) => r.id} initialSort={{ key: 'date', dir: 'desc' }} searchPlaceholder="Search description or category…" dateFilter={{ getDate: (r) => r.date }} />
       )}
     </>
   );

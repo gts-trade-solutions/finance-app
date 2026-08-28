@@ -11,7 +11,21 @@ import { Button } from '@/components/ui/button';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
+import { DateRangePicker } from '@/components/shared/date-range-picker';
+import { ALL_TIME, describeRange, fromPreset, withinRange, type RangeValue } from '@/lib/date-range';
+import { today } from '@/lib/selectors';
 import { cn } from '@/lib/utils';
+
+export interface DateFilterConfig<T> {
+  /** Pulls the date off a row. Supplying this is what turns the filter on. */
+  getDate: (row: T) => string;
+  /** Preset key to open on. Lists default to every date; reports do not. */
+  initial?: 'all' | string;
+  /** Controlled value — pass both when the page needs the range for its own counts. */
+  value?: RangeValue;
+  onChange?: (v: RangeValue) => void;
+  label?: string;
+}
 
 export interface TableTab {
   value: string;
@@ -48,6 +62,7 @@ export function DataTable<T>({
   onTabChange,
   selectable = false,
   bulkActions,
+  dateFilter,
 }: {
   rows: T[];
   columns: Column<T>[];
@@ -67,9 +82,20 @@ export function DataTable<T>({
   /** Adds a checkbox column and a bulk action bar when rows are selected. */
   selectable?: boolean;
   bulkActions?: (selected: T[], clear: () => void) => ReactNode;
+  /** Adds the shared date picker to the toolbar and filters rows by it. */
+  dateFilter?: DateFilterConfig<T>;
 }) {
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Uncontrolled fallback. When the page passes value/onChange it owns the
+  // range instead, so its tab counts and this table agree on the period.
+  const [ownRange, setOwnRange] = useState<RangeValue>(() =>
+    !dateFilter || (dateFilter.initial ?? 'all') === 'all'
+      ? { ...ALL_TIME, mode: 'all' }
+      : fromPreset(dateFilter.initial as string, today()),
+  );
+  const range = dateFilter?.value ?? ownRange;
+  const setRange = dateFilter?.onChange ?? setOwnRange;
   const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' } | null>(initialSort ?? null);
 
   const searchText = (row: T) =>
@@ -80,6 +106,11 @@ export function DataTable<T>({
 
   const filtered = useMemo(() => {
     let out = rows;
+    // Date first: it is the cheapest filter and usually the most selective.
+    // Skipped when the page is already filtering by a range it controls.
+    if (dateFilter && !dateFilter.value && range.mode !== 'all') {
+      out = out.filter((r) => withinRange(dateFilter.getDate(r), range));
+    }
     if (query.trim()) {
       const q = query.toLowerCase();
       out = out.filter((r) => searchText(r).includes(q));
@@ -99,10 +130,10 @@ export function DataTable<T>({
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, query, sort, columns]);
+  }, [rows, query, sort, columns, range, dateFilter]);
 
   // Selecting rows then changing the filter would act on invisible records.
-  useEffect(() => setSelected(new Set()), [activeTab, query]);
+  useEffect(() => setSelected(new Set()), [activeTab, query, range]);
 
   const visibleIds = filtered.map(getRowId);
   const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selected.has(id));
@@ -138,6 +169,8 @@ export function DataTable<T>({
               <button
                 key={t.value}
                 type="button"
+                data-slot="table-tab"
+                data-tab={t.value}
                 onClick={() => onTabChange?.(t.value)}
                 className={cn(
                   '-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-[13px] transition-colors',
@@ -177,7 +210,7 @@ export function DataTable<T>({
         </div>
       )}
 
-      {(searchable || toolbar) && (
+      {(searchable || toolbar || dateFilter) && (
         <div className="flex flex-wrap items-center gap-2 no-print">
           {searchable && (
             <div className="relative w-full max-w-xs">
@@ -190,7 +223,21 @@ export function DataTable<T>({
               />
             </div>
           )}
+          {dateFilter && (
+            <DateRangePicker
+              value={range}
+              onChange={setRange}
+              allowAll
+              align="start"
+              dataDates={rows.map(dateFilter.getDate)}
+            />
+          )}
           {toolbar}
+          {range.mode !== 'all' && (
+            <span className="text-xs text-muted-foreground">
+              {filtered.length} of {rows.length} in this period
+            </span>
+          )}
         </div>
       )}
 
@@ -236,7 +283,21 @@ export function DataTable<T>({
             {filtered.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={columns.length + (selectable ? 1 : 0)} className="h-28 text-center text-sm text-muted-foreground">
-                  {emptyMessage}
+                  {/* Say which filter is hiding things, or the table looks broken. */}
+                  {range.mode !== 'all' ? (
+                    <span className="space-y-2">
+                      <span className="block">Nothing in {describeRange(range).toLowerCase()}.</span>
+                      <Button
+                        variant="outline"
+                        size="xs"
+                        onClick={() => setRange({ ...ALL_TIME, mode: 'all' })}
+                      >
+                        Show all dates
+                      </Button>
+                    </span>
+                  ) : (
+                    emptyMessage
+                  )}
                 </TableCell>
               </TableRow>
             ) : (

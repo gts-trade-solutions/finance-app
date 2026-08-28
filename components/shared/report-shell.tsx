@@ -11,18 +11,18 @@ import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
 import { useAppStore } from '@/lib/store';
 import { today } from '@/lib/selectors';
+import { DateRangePicker } from '@/components/shared/date-range-picker';
+import { describeRangeLong, fromPreset, type RangeValue } from '@/lib/date-range';
 
-export interface DateRange {
-  from: string;
-  to: string;
-}
+export type { DateRange } from '@/lib/date-range';
 
-export function useReportRange(): [DateRange, (r: DateRange) => void] {
-  const org = useAppStore((s) => s.org);
-  const [range, setRange] = useState<DateRange>({
-    from: org?.fiscalYearStart ?? '2026-04-01',
-    to: today(),
-  });
+/**
+ * Reports open on the current financial year, because that is the period a
+ * report is almost always wanted for and it matches the figures the org's
+ * returns are filed against.
+ */
+export function useReportRange(): [RangeValue, (r: RangeValue) => void] {
+  const [range, setRange] = useState<RangeValue>(() => fromPreset('this_fy', today()));
   return [range, setRange];
 }
 
@@ -50,16 +50,19 @@ export function ReportShell({
   onExport,
   children,
   extraActions,
+  dataDates,
 }: {
   title: string;
   description: string;
-  range?: DateRange;
-  onRangeChange?: (r: DateRange) => void;
+  range?: RangeValue;
+  onRangeChange?: (r: RangeValue) => void;
   showRange?: boolean;
   asOfOnly?: boolean;
   onExport?: () => void;
   children: ReactNode;
   extraActions?: ReactNode;
+  /** Transaction dates, so the picker only offers financial years with data. */
+  dataDates?: string[];
 }) {
   const s = useAppStore();
 
@@ -77,30 +80,26 @@ export function ReportShell({
           </div>
           <div className="flex flex-wrap items-end gap-2">
             {showRange && range && onRangeChange && (
-              <>
-                {!asOfOnly && (
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-medium text-muted-foreground">From</label>
-                    <Input
-                      type="date"
-                      value={range.from}
-                      onChange={(e) => onRangeChange({ ...range, from: e.target.value })}
-                      className="h-8 w-36"
-                    />
-                  </div>
-                )}
+              asOfOnly ? (
+                // A balance sheet is a snapshot, not a period — offering a
+                // range here would invite a question the report cannot answer.
                 <div className="space-y-1">
-                  <label className="text-[11px] font-medium text-muted-foreground">
-                    {asOfOnly ? 'As at' : 'To'}
-                  </label>
+                  <label className="text-[11px] font-medium text-muted-foreground">As at</label>
                   <Input
                     type="date"
                     value={range.to}
-                    onChange={(e) => onRangeChange({ ...range, to: e.target.value })}
-                    className="h-8 w-36"
+                    onChange={(e) => onRangeChange({ ...range, to: e.target.value, mode: 'day' })}
+                    className="h-9 w-40"
                   />
                 </div>
-              </>
+              ) : (
+                <DateRangePicker
+                  value={range}
+                  onChange={onRangeChange}
+                  dataDates={dataDates}
+                  label="Period"
+                />
+              )
             )}
             {extraActions}
             {onExport && (
@@ -123,7 +122,7 @@ export function ReportShell({
           <p className="text-xs text-neutral-600">
             {asOfOnly
               ? `As at ${new Date(range.to).toLocaleDateString('en-IN')}`
-              : `${new Date(range.from).toLocaleDateString('en-IN')} to ${new Date(range.to).toLocaleDateString('en-IN')}`}
+              : describeRangeLong(range)}
           </p>
         )}
       </div>

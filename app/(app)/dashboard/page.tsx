@@ -13,8 +13,8 @@ import {
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Combobox } from '@/components/ui/combobox';
 import { PageHeader } from '@/components/shared/page-header';
+import { DateRangePicker } from '@/components/shared/date-range-picker';
 import { StatTile } from '@/components/shared/stat-tile';
 import { Money } from '@/components/shared/money';
 import { StatusBadge } from '@/components/shared/status-badge';
@@ -31,35 +31,18 @@ import {
   billedVsCollected, goodsVsServices, grossMargin, pctChange, previousWindow,
   receivableBuckets, salesPerformance, topCreditors, topDebtors, type Window,
 } from '@/lib/analytics';
+import { describeRange, fromPreset, type RangeValue } from '@/lib/date-range';
 import { formatINR, formatINRCompact } from '@/lib/money';
 import { profitAndLoss, trialBalance } from '@/lib/ledger/reports';
 import { detectAnomalies } from '@/lib/mock/simulators';
 import { CHART_COLORS, axisProps, axisRupee, rupeeFormatter, tooltipStyle } from '@/components/charts/chart-bits';
 
-/** Comparison windows offered above the sales block. */
-const PERIODS = [
-  { value: 'this_month', label: 'This month' },
-  { value: 'last_3', label: 'Last 3 months' },
-  { value: 'last_6', label: 'Last 6 months' },
-  { value: 'fy', label: 'This financial year' },
-];
-
-function windowFor(period: string, fyStart: string): Window {
-  const to = today();
-  const d = new Date(to);
-  if (period === 'fy') return { from: fyStart, to };
-  if (period === 'this_month') {
-    return { from: `${to.slice(0, 7)}-01`, to };
-  }
-  const months = period === 'last_6' ? 6 : 3;
-  const from = new Date(d.getFullYear(), d.getMonth() - (months - 1), 1);
-  return { from: from.toISOString().slice(0, 10), to };
-}
-
 export default function DashboardPage() {
   const s = useAppStore();
   const canSeeCosts = useCanSeeCosts();
-  const [period, setPeriod] = useState('last_3');
+  // Same picker the lists and reports use, so "last quarter" means the same
+  // thing everywhere in the app.
+  const [range, setRange] = useState<RangeValue>(() => fromPreset('last_90', today()));
 
   const fyStart = s.org?.fiscalYearStart ?? '2026-04-01';
 
@@ -76,7 +59,7 @@ export default function DashboardPage() {
   }, [s, fyStart]);
 
   // ── Sales block: the chosen window, and the one immediately before it ──────
-  const win = useMemo(() => windowFor(period, fyStart), [period, fyStart]);
+  const win = useMemo<Window>(() => ({ from: range.from, to: range.to }), [range]);
   const prev = useMemo(() => previousWindow(win), [win]);
   const perf = useMemo(() => salesPerformance(s, win), [s, win]);
   const perfPrev = useMemo(() => salesPerformance(s, prev), [s, prev]);
@@ -114,7 +97,7 @@ export default function DashboardPage() {
     [stats.pl],
   );
 
-  const periodLabel = PERIODS.find((p) => p.value === period)?.label.toLowerCase() ?? 'period';
+  const periodLabel = describeRange(range).toLowerCase();
   const statusTotal = perf.paid + perf.partial + perf.unpaid;
   const sharePct = (n: number) => (statusTotal ? ((n / statusTotal) * 100).toFixed(0) : '0');
 
@@ -217,9 +200,11 @@ export default function DashboardPage() {
             {' before it. Draft invoices are excluded throughout.'}
           </p>
         </div>
-        <div className="w-48">
-          <Combobox options={PERIODS} value={period} onChange={setPeriod} showAvatar={false} />
-        </div>
+        <DateRangePicker
+          value={range}
+          onChange={setRange}
+          dataDates={s.invoices.map((i) => i.date)}
+        />
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">

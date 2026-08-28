@@ -260,6 +260,7 @@ export default function JournalsPage() {
       </Card>
 
       <DataTable
+          dateFilter={{ getDate: (r) => r.date }}
         rows={manual}
         columns={columns}
         getRowId={(r) => r.id}

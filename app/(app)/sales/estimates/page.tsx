@@ -140,7 +140,7 @@ export default function EstimatesPage() {
       {s.estimates.length === 0 ? (
         <EmptyState icon={FileText} title="No estimates" description="Send a quote before committing to an invoice." />
       ) : (
-        <DataTable rows={s.estimates} columns={columns} getRowId={(r) => r.id} initialSort={{ key: 'date', dir: 'desc' }} />
+        <DataTable rows={s.estimates} columns={columns} getRowId={(r) => r.id} initialSort={{ key: 'date', dir: 'desc' }} dateFilter={{ getDate: (r) => r.date }} />
       )}
     </>
   );

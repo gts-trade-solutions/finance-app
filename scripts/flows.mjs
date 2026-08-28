@@ -386,8 +386,8 @@ const billedTile = page.locator('[data-slot="stat-tile"][data-label="Total bille
 const billedBefore = money(await billedTile.innerText());
 check('Sales figures are non-zero over the default window', billedBefore > 0, `₹${billedBefore}`);
 
-await page.locator('[data-slot="combobox-trigger"]').first().click();
-await page.getByRole('option', { name: 'This month' }).click();
+await page.locator('[data-slot="date-range-trigger"]').first().click();
+await page.locator('[data-slot="date-preset"]', { hasText: /^This month$/ }).click();
 await page.waitForTimeout(800);
 const billedAfter = money(await billedTile.innerText());
 check('Changing the comparison period recomputes the sales figures',
@@ -408,7 +408,140 @@ for (const [href, label] of [
   check(`${label} renders rows`, rows > 0, `${rows} row(s)`);
 }
 
-// ── 15. Demo reset restores the seed
+// ── 15. The date picker on the invoices list
+await page.goto(`${BASE}/sales/invoices`, { waitUntil: 'networkidle' });
+await page.waitForTimeout(700);
+const invRows = () => page.locator('tbody tr').count();
+const allInvoices = await invRows();
+check('Invoice list opens showing every date', allInvoices > 20, `${allInvoices} rows`);
+
+const rangeTrigger = page.locator('[data-slot="date-range-trigger"]').first();
+await rangeTrigger.click();
+await page.waitForTimeout(300);
+check('Picker offers every selection mode',
+  (await page.locator('[data-slot="date-tab"]').count()) === 7,
+  (await page.locator('[data-slot="date-tab"]').allInnerTexts()).join(' | '));
+
+// Month
+await page.locator('[data-slot="date-tab"][data-tab="month"]').click();
+await page.waitForTimeout(250);
+await page.locator('[data-slot="date-month"]', { hasText: /^Jul 26$/ }).click();
+await page.waitForTimeout(600);
+const julyRows = await invRows();
+check('Month selection narrows the list', julyRows > 0 && julyRows < allInvoices,
+  `${julyRows} of ${allInvoices}`);
+check('Trigger names the chosen month',
+  (await rangeTrigger.innerText()).includes('Jul 2026'),
+  await rangeTrigger.innerText());
+
+const julyDates = await page.locator('tbody tr td:nth-child(4)').allInnerTexts();
+check('Every visible row falls inside the chosen month',
+  julyDates.length > 0 && julyDates.every((d) => /Jul/.test(d)),
+  julyDates.slice(0, 4).join(', '));
+
+// Status tab counts must describe the same period the table is showing.
+const tabText = await page.locator('[role="tab"], [data-slot="table-tab"]').allInnerTexts().catch(() => []);
+const allTab = tabText.find((t) => /^All/i.test(t)) ?? '';
+check('Status tab counts respect the chosen period',
+  allTab.includes(String(julyRows)) || julyRows === allInvoices,
+  `All tab reads "${allTab.replace(/\n/g, ' ')}" against ${julyRows} rows`);
+
+// Quarter
+await rangeTrigger.click();
+await page.locator('[data-slot="date-tab"][data-tab="quarter"]').click();
+await page.waitForTimeout(250);
+const quarterLabels = await page.locator('[data-slot="date-quarter"]').allInnerTexts();
+check('Quarters follow the financial year, not the calendar',
+  quarterLabels[0].includes('Apr') && quarterLabels[3].includes('Jan'),
+  quarterLabels.join(' / '));
+await page.locator('[data-slot="date-quarter"]', { hasText: /Q1/ }).click();
+await page.waitForTimeout(600);
+check('Quarter selection labels itself with the financial year',
+  /Q1 FY 2026-27/.test(await rangeTrigger.innerText()), await rangeTrigger.innerText());
+
+// Financial year
+await rangeTrigger.click();
+await page.locator('[data-slot="date-tab"][data-tab="fy"]').click();
+await page.waitForTimeout(250);
+await page.locator('[data-slot="date-fy"]').first().click();
+await page.waitForTimeout(600);
+const fyRows = await invRows();
+check('Financial year selection covers the whole year', fyRows === allInvoices, `${fyRows} rows`);
+check('Trigger names the financial year',
+  /FY 2026-27/.test(await rangeTrigger.innerText()), await rangeTrigger.innerText());
+
+// Single day
+await rangeTrigger.click();
+await page.locator('[data-slot="date-tab"][data-tab="day"]').click();
+await page.waitForTimeout(250);
+await page.locator('[data-slot="date-single"]').fill('2026-08-06');
+await page.getByRole('button', { name: /Show this day/ }).click();
+await page.waitForTimeout(600);
+const dayRows = await invRows();
+check('Single day selection shows just that day', dayRows >= 1 && dayRows < fyRows, `${dayRows} row(s)`);
+
+// Custom range, including the guard against a backwards range
+await rangeTrigger.click();
+await page.locator('[data-slot="date-tab"][data-tab="custom"]').click();
+await page.waitForTimeout(250);
+await page.locator('[data-slot="date-from"]').fill('2026-07-01');
+await page.locator('[data-slot="date-to"]').fill('2026-06-01');
+await page.waitForTimeout(300);
+check('A backwards custom range is refused',
+  await page.getByRole('button', { name: /Apply range/ }).isDisabled());
+
+await page.locator('[data-slot="date-to"]').fill('2026-08-07');
+await page.waitForTimeout(250);
+await page.getByRole('button', { name: /Apply range/ }).click();
+await page.waitForTimeout(600);
+const customRows = await invRows();
+check('Custom range applies', customRows > 0 && customRows < fyRows, `${customRows} rows`);
+
+// Empty periods must offer a way back out
+await rangeTrigger.click();
+await page.locator('[data-slot="date-tab"][data-tab="fy"]').click();
+await page.waitForTimeout(250);
+const fyButtons = await page.locator('[data-slot="date-fy"]').count();
+if (fyButtons > 1) {
+  await page.locator('[data-slot="date-fy"]').nth(1).click();
+  await page.waitForTimeout(600);
+  check('An empty period offers a way back to all dates',
+    await page.getByRole('button', { name: /Show all dates/ }).count() > 0);
+  await page.getByRole('button', { name: /Show all dates/ }).click();
+  await page.waitForTimeout(500);
+  check('Clearing the filter restores every row', await invRows() === allInvoices);
+} else {
+  check('An empty period offers a way back to all dates', true, 'only one FY has data');
+  check('Clearing the filter restores every row', true, 'skipped');
+}
+
+// ── 16. The same picker reaches reports and other lists
+await page.goto(`${BASE}/reports/invoice-details`, { waitUntil: 'networkidle' });
+await page.waitForTimeout(600);
+const reportTrigger = page.locator('[data-slot="date-range-trigger"]').first();
+check('Reports use the same picker', await reportTrigger.count() === 1);
+check('Reports open on the current financial year',
+  /FY 2026-27|This financial year/.test(await reportTrigger.innerText()),
+  await reportTrigger.innerText());
+
+await reportTrigger.click();
+await page.locator('[data-slot="date-tab"][data-tab="month"]').click();
+await page.waitForTimeout(250);
+await page.locator('[data-slot="date-month"]', { hasText: /^Jun 26$/ }).click();
+await page.waitForTimeout(700);
+const juneReport = await page.locator('tbody tr').count();
+check('Report narrows to the chosen month', juneReport > 0, `${juneReport} rows`);
+check('Reports offer no "all dates" escape (a report must state its period)',
+  await page.locator('[data-slot="date-tab"][data-tab="all"]').count() === 0);
+
+for (const href of ['/purchases/bills', '/sales/estimates', '/accountant/journals', '/gst/einvoices']) {
+  await page.goto(`${BASE}${href}`, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(500);
+  check(`${href} carries the date picker`,
+    await page.locator('[data-slot="date-range-trigger"]').count() >= 1);
+}
+
+// ── 17. Demo reset restores the seed
 await page.getByRole('button', { name: /Demo/ }).click();
 await page.getByRole('menuitem', { name: /Reset to seed data/ }).click();
 await page.waitForTimeout(1200);

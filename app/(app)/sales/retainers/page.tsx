@@ -47,7 +47,7 @@ export default function RetainersPage() {
       {s.retainers.length === 0 ? (
         <EmptyState icon={HandCoins} title="No retainers" description="Collect an advance and it will be held as a liability until you invoice against it." />
       ) : (
-        <DataTable rows={s.retainers} columns={columns} getRowId={(r) => r.id} initialSort={{ key: 'date', dir: 'desc' }} />
+        <DataTable rows={s.retainers} columns={columns} getRowId={(r) => r.id} initialSort={{ key: 'date', dir: 'desc' }} dateFilter={{ getDate: (r) => r.date }} />
       )}
     </>
   );

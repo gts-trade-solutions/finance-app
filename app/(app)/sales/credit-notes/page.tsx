@@ -156,7 +156,7 @@ export default function CreditNotesPage() {
       {s.creditNotes.length === 0 ? (
         <EmptyState icon={FileMinus} title="No credit notes" description="Issue one when goods come back or a discount is agreed after invoicing." />
       ) : (
-        <DataTable rows={s.creditNotes} columns={columns} getRowId={(r) => r.id} initialSort={{ key: 'date', dir: 'desc' }} />
+        <DataTable rows={s.creditNotes} columns={columns} getRowId={(r) => r.id} initialSort={{ key: 'date', dir: 'desc' }} dateFilter={{ getDate: (r) => r.date }} />
       )}
     </>
   );

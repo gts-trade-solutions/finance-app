@@ -14,6 +14,7 @@ import { StatusBadge } from '@/components/shared/status-badge';
 import { EInvoiceMark, EWayMark } from '@/components/shared/einvoice-mark';
 import { EmptyState } from '@/components/shared/empty-state';
 import { useAppStore } from '@/lib/store';
+import { ALL_TIME, withinRange, type RangeValue } from '@/lib/date-range';
 import { usePermission } from '@/lib/store/hooks';
 import { contactName, effectiveInvoiceStatus, invoiceBalance } from '@/lib/selectors';
 import { formatINRCompact, toRupees } from '@/lib/money';
@@ -40,12 +41,21 @@ export default function InvoicesPage() {
   const canCreate = usePermission('sales', 'create');
   const canEdit = usePermission('sales', 'edit');
   const [filter, setFilter] = useState<string>('all');
+  // The range is held here rather than inside the table, so the status tabs and
+  // the summary tiles describe the same period the table is showing. A tab
+  // reading "Paid 44" above five visible rows is worse than no count at all.
+  const [range, setRange] = useState<RangeValue>(() => ({ ...ALL_TIME, mode: 'all' }));
+
+  const inPeriod = useMemo(
+    () => (range.mode === 'all' ? s.invoices : s.invoices.filter((i) => withinRange(i.date, range))),
+    [s.invoices, range],
+  );
 
   const rows = useMemo(() => {
-    const list = [...s.invoices].sort((a, b) => b.date.localeCompare(a.date));
+    const list = [...inPeriod].sort((a, b) => b.date.localeCompare(a.date));
     if (filter === 'all') return list;
     return list.filter((i) => effectiveInvoiceStatus(i) === filter);
-  }, [s.invoices, filter]);
+  }, [inPeriod, filter]);
 
   // Counts sit on the tabs, so the shape of the workload is visible without
   // clicking through each filter.
@@ -56,14 +66,14 @@ export default function InvoicesPage() {
         label: TAB_LABEL[f],
         count:
           f === 'all'
-            ? s.invoices.length
-            : s.invoices.filter((i) => effectiveInvoiceStatus(i) === f).length,
+            ? inPeriod.length
+            : inPeriod.filter((i) => effectiveInvoiceStatus(i) === f).length,
       })).filter((t) => t.value === 'all' || t.count > 0),
-    [s.invoices],
+    [inPeriod],
   );
 
   const summary = useMemo(() => {
-    const live = s.invoices.filter((i) => i.status !== 'void');
+    const live = inPeriod.filter((i) => i.status !== 'void');
     return {
       count: live.length,
       total: live.reduce((t, i) => t + i.totalPaise, 0),
@@ -72,7 +82,7 @@ export default function InvoicesPage() {
         (i) => i.einvoice.status === 'pending' || i.einvoice.status === 'failed',
       ).length,
     };
-  }, [s.invoices]);
+  }, [inPeriod]);
 
   const columns: Column<Invoice>[] = [
     {
@@ -198,6 +208,7 @@ export default function InvoicesPage() {
           tabs={tabs}
           activeTab={filter}
           onTabChange={setFilter}
+          dateFilter={{ getDate: (r) => r.date, value: range, onChange: setRange }}
           selectable={canEdit}
           bulkActions={(selected, clear) => (
             <>

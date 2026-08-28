@@ -86,7 +86,7 @@ export default function EwayBillsPage() {
           description="Open a registered invoice and use “Generate e-way bill” to create one."
         />
       ) : (
-        <DataTable rows={s.ewayBills} columns={columns} getRowId={(r) => r.id} initialSort={{ key: 'valid', dir: 'asc' }} />
+        <DataTable rows={s.ewayBills} columns={columns} getRowId={(r) => r.id} initialSort={{ key: 'valid', dir: 'asc' }} dateFilter={{ getDate: (r) => r.generatedAt.slice(0, 10) }} />
       )}
     </>
   );

@@ -46,7 +46,7 @@ export default function PaymentsReceivedPage() {
       {rows.length === 0 ? (
         <EmptyState icon={Wallet} title="No payments yet" description="Record your first customer receipt." />
       ) : (
-        <DataTable rows={rows} columns={columns} getRowId={(r) => r.id} initialSort={{ key: 'date', dir: 'desc' }} searchPlaceholder="Search payment or customer…" />
+        <DataTable rows={rows} columns={columns} getRowId={(r) => r.id} initialSort={{ key: 'date', dir: 'desc' }} searchPlaceholder="Search payment or customer…" dateFilter={{ getDate: (r) => r.date }} />
       )}
     </>
   );

@@ -100,6 +100,7 @@ export default function BillsPage() {
         <EmptyState icon={FileText} title="No bills yet" description="Record your first supplier invoice." />
       ) : (
         <DataTable
+          dateFilter={{ getDate: (r) => r.date }}
           rows={s.bills}
           columns={columns}
           getRowId={(r) => r.id}

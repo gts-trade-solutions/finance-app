@@ -43,7 +43,7 @@ export default function ChallansPage() {
       {s.challans.length === 0 ? (
         <EmptyState icon={Truck} title="No delivery challans" description="Used when goods leave your premises but no sale has happened yet." />
       ) : (
-        <DataTable rows={s.challans} columns={columns} getRowId={(r) => r.id} initialSort={{ key: 'date', dir: 'desc' }} />
+        <DataTable rows={s.challans} columns={columns} getRowId={(r) => r.id} initialSort={{ key: 'date', dir: 'desc' }} dateFilter={{ getDate: (r) => r.date }} />
       )}
     </>
   );

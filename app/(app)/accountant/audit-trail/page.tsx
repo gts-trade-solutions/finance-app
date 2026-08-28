@@ -116,6 +116,7 @@ export default function AuditTrailPage() {
         <EmptyState icon={ShieldCheck} title="No activity recorded yet" description="Actions you take will appear here immediately." />
       ) : (
         <DataTable
+          dateFilter={{ getDate: (r) => r.at.slice(0, 10) }}
           rows={rows}
           columns={columns}
           getRowId={(r) => r.id}

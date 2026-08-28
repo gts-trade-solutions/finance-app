@@ -103,10 +103,10 @@ export default function ChequesPage() {
             <TabsTrigger value="issued">Issued ({issued.length})</TabsTrigger>
           </TabsList>
           <TabsContent value="received" className="mt-4">
-            <DataTable rows={received} columns={cols('received')} getRowId={(r) => r.id} searchable={false} />
+            <DataTable rows={received} columns={cols('received')} getRowId={(r) => r.id} searchable={false} dateFilter={{ getDate: (r) => r.maturityDate }} />
           </TabsContent>
           <TabsContent value="issued" className="mt-4">
-            <DataTable rows={issued} columns={cols('issued')} getRowId={(r) => r.id} searchable={false} />
+            <DataTable rows={issued} columns={cols('issued')} getRowId={(r) => r.id} searchable={false} dateFilter={{ getDate: (r) => r.maturityDate }} />
           </TabsContent>
         </Tabs>
       )}

@@ -169,6 +169,7 @@ export default function EInvoicesPage() {
       </div>
 
       <DataTable
+          dateFilter={{ getDate: (r) => r.date }}
         rows={applicable}
         columns={columns}
         getRowId={(r) => r.id}

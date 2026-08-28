@@ -65,7 +65,7 @@ export default function SalesOrdersPage() {
           description="Accept an estimate and convert it to an order to see it here."
         />
       ) : (
-        <DataTable rows={s.salesOrders} columns={columns} getRowId={(r) => r.id} initialSort={{ key: 'date', dir: 'desc' }} />
+        <DataTable rows={s.salesOrders} columns={columns} getRowId={(r) => r.id} initialSort={{ key: 'date', dir: 'desc' }} dateFilter={{ getDate: (r) => r.date }} />
       )}
     </>
   );

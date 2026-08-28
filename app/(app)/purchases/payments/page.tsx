@@ -50,7 +50,7 @@ export default function PaymentsMadePage() {
       {rows.length === 0 ? (
         <EmptyState icon={Banknote} title="No vendor payments" description="Settle outstanding bills to see them here." />
       ) : (
-        <DataTable rows={rows} columns={columns} getRowId={(r) => r.id} initialSort={{ key: 'date', dir: 'desc' }} searchPlaceholder="Search payment or vendor…" />
+        <DataTable rows={rows} columns={columns} getRowId={(r) => r.id} initialSort={{ key: 'date', dir: 'desc' }} searchPlaceholder="Search payment or vendor…" dateFilter={{ getDate: (r) => r.date }} />
       )}
     </>
   );
