@@ -1,5 +1,7 @@
 'use client';
 
+import Link from 'next/link';
+
 import { useState } from 'react';
 import {
   Building2, Code2, FileText, KeyRound, Plug, ScrollText,
@@ -114,6 +116,19 @@ export default function SettingsPage() {
               Each state you operate in needs its own GST registration, and each registration keeps its own invoice
               number series. That&apos;s why branches sit at the heart of the app rather than being an afterthought.
             </p>
+          </Card>
+
+          <Card className="flex flex-wrap items-center gap-4 p-5">
+            <div className="min-w-0 flex-1">
+              <h3 className="text-sm font-semibold">HSN &amp; SAC codes</h3>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                The approved code list your team may pick from on invoice lines. Nothing outside it can be
+                entered, which is what keeps GSTR-1 from bouncing on an invalid code.
+              </p>
+            </div>
+            <Button variant="outline" size="sm" asChild>
+              <Link href="/settings/hsn-codes">Manage codes</Link>
+            </Button>
           </Card>
         </TabsContent>
 

@@ -45,9 +45,12 @@ const ROUTES = [
   '/reports/invoice-details', '/reports/bill-details',
   '/reports/payments-received', '/reports/payments-made',
   '/reports/expense-details', '/reports/sales-by-salesperson',
-  '/reports/credit-note-details',
+  '/reports/credit-note-details', '/reports/ar-ageing-details',
+  '/reports/retainer-details', '/reports/sales-order-details',
+  '/reports/estimate-details', '/reports/time-to-get-paid',
+  '/reports/refund-history',
   // Depth
-  '/ai', '/settings', '/portal',
+  '/ai', '/settings', '/settings/hsn-codes', '/portal',
 ];
 
 /** Browser noise that says nothing about our code. */

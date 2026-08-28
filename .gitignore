@@ -49,3 +49,4 @@ build.log
 # local screenshots
 /scripts/shots/
 dev.log
+/.next-verify/

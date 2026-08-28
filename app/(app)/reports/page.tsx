@@ -64,7 +64,11 @@ const CATALOGUE: { group: string; blurb: string; reports: ReportDef[] }[] = [
     reports: [
       { title: 'Customer Balances', href: '/reports/customer-balances', description: 'Invoiced, received and outstanding, per customer.' },
       { title: 'AR Ageing Summary', href: '/reports/ar-ageing', description: 'Outstanding invoices by age bucket.' },
+      { title: 'AR Ageing Details', href: '/reports/ar-ageing-details', description: 'Every unpaid invoice, aged individually.' },
       { title: 'Invoice Details', href: '/reports/invoice-details', description: 'Every invoice raised, with its balance.' },
+      { title: 'Retainer Invoice Details', href: '/reports/retainer-details', description: 'Advances collected, and how much is still unearned.' },
+      { title: 'Sales Order Details', href: '/reports/sales-order-details', description: 'Confirmed orders and what is left to invoice.' },
+      { title: 'Quote Details', href: '/reports/estimate-details', description: 'Quotes sent, and what became of them.' },
     ],
   },
   {
@@ -72,7 +76,9 @@ const CATALOGUE: { group: string; blurb: string; reports: ReportDef[] }[] = [
     blurb: 'Money in, and how quickly it arrives.',
     reports: [
       { title: 'Payments Received', href: '/reports/payments-received', description: 'Every receipt, with TDS withheld and amounts on account.' },
+      { title: 'Time to Get Paid', href: '/reports/time-to-get-paid', description: 'How long invoices really take to settle.' },
       { title: 'Credit Note Details', href: '/reports/credit-note-details', description: 'Credits issued, and the reason GST requires on each.' },
+      { title: 'Refund History', href: '/reports/refund-history', description: 'Credits settled in cash, in both directions.' },
     ],
   },
   {

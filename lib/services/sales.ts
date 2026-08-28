@@ -17,7 +17,7 @@ import { FY_SHORT } from '../mock/seed/org';
 import { logAudit } from './audit';
 import type {
   CreditNote, DeliveryChallan, DocLine, Estimate, Invoice, Payment,
-  PaymentAllocation, PaymentMode, RetainerInvoice, SalesOrder, SupplyType,
+  PaymentAllocation, PaymentMode, RetainerInvoice, SalesOrder, SupplyKind, SupplyType,
 } from '../types';
 
 export interface LineInput {
@@ -88,6 +88,8 @@ export interface CreateInvoiceInput {
   dueDate: string;
   lines: LineInput[];
   placeOfSupply?: string; // defaults to customer state
+  /** Omit to infer from the lines — goods, services, or a mix of both. */
+  supplyKind?: SupplyKind;
   exportWithTax?: boolean;
   notes?: string;
   terms?: string;
@@ -121,6 +123,21 @@ export function createInvoice(input: CreateInvoiceInput): Invoice {
   const lines = buildDocLines(input.lines, supplyType);
   const tax = sumTax(lines.map((l) => l.tax));
 
+  // When the caller doesn't declare it, read it off the lines: SAC codes begin
+  // 99, HSN codes never do. Seeded and imported invoices get it for free.
+  const supplyKind: SupplyKind =
+    input.supplyKind ??
+    (() => {
+      const kinds = new Set(
+        lines.map((l) => {
+          const item = s.items.find((i) => i.id === l.itemId);
+          if (item) return item.kind === 'service' ? 'service' : 'goods';
+          return l.hsnSac.startsWith('99') ? 'service' : 'goods';
+        }),
+      );
+      return kinds.size > 1 ? 'both' : kinds.has('service') ? 'service' : 'goods';
+    })();
+
   // Shipping and adjustment sit outside the line tax, as they do in Zoho.
   const shipping = input.shippingChargePaise ?? 0;
   const adjustment = input.adjustmentPaise ?? 0;
@@ -141,6 +158,7 @@ export function createInvoice(input: CreateInvoiceInput): Invoice {
     dueDate: input.dueDate,
     placeOfSupply,
     supplyType,
+    supplyKind,
     status: input.status ?? 'draft',
     lines,
     subtotalPaise: tax.taxablePaise,

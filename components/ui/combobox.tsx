@@ -53,6 +53,7 @@ export function Combobox({
   clearable = false,
   disabled = false,
   invalid = false,
+  matchMode = 'contains',
   className,
   contentClassName,
   id,
@@ -69,6 +70,13 @@ export function Combobox({
   clearable?: boolean;
   disabled?: boolean;
   invalid?: boolean;
+  /**
+   * 'prefix' anchors the label match to the start of the string — typing "1"
+   * lists 1001, 1005… but not 4011. Codes are searched that way (chapter first,
+   * then narrower); names are not. The description still matches anywhere, so
+   * you can find a code by what it is as well as by what it starts with.
+   */
+  matchMode?: 'contains' | 'prefix';
   className?: string;
   contentClassName?: string;
   id?: string;
@@ -84,13 +92,21 @@ export function Combobox({
   const filtered = React.useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return options;
+    if (matchMode === 'prefix') {
+      // Codes anchor to the start; the description still matches anywhere. The
+      // meta column is deliberately NOT searched — it holds the tax rate, and
+      // "18%" would otherwise make every rated code a match for the digit 1.
+      return options.filter(
+        (o) => o.label.toLowerCase().startsWith(q) || o.sublabel?.toLowerCase().includes(q),
+      );
+    }
     return options.filter(
       (o) =>
         o.label.toLowerCase().includes(q) ||
         o.sublabel?.toLowerCase().includes(q) ||
         o.meta?.toLowerCase().includes(q),
     );
-  }, [options, query]);
+  }, [options, query, matchMode]);
 
   // Group headings, preserving the order groups first appear in.
   const grouped = React.useMemo(() => {

@@ -154,3 +154,44 @@ export function dueDateFor(termsValue: string, invoiceDate: string): string {
 export function termsForDays(days: number): string {
   return PAYMENT_TERMS.find((t) => t.days === days)?.value ?? 'net_30';
 }
+
+/**
+ * The organisation's approved HSN / SAC codes, narrowed to what this document
+ * is for. `supplyKind` of 'both' offers everything, grouped so goods and
+ * services stay visually separate.
+ *
+ * Typing "1" in the picker filters to codes *starting* with 1, because that is
+ * how anyone who knows their codes searches — chapter first, then narrower.
+ */
+export function hsnOptions(
+  s: AppState,
+  supplyKind: 'goods' | 'service' | 'both' = 'both',
+): ComboboxOption[] {
+  return s.hsnCodes
+    .filter((h) => h.isActive)
+    .filter((h) =>
+      supplyKind === 'both' ? true : supplyKind === 'goods' ? h.kind === 'hsn' : h.kind === 'sac',
+    )
+    .sort((a, b) => a.code.localeCompare(b.code))
+    .map((h) => ({
+      value: h.code,
+      label: h.code,
+      sublabel: h.description,
+      meta: `${h.gstRatePct}%`,
+      group: h.kind === 'sac' ? 'Services (SAC)' : 'Goods (HSN)',
+    }));
+}
+
+/** Items narrowed to what this document is for. */
+export function itemOptionsFor(
+  s: AppState,
+  supplyKind: 'goods' | 'service' | 'both',
+  priceMode: 'sale' | 'purchase' = 'sale',
+): ComboboxOption[] {
+  const all = itemOptions(s, priceMode);
+  if (supplyKind === 'both') return all;
+  const allowed = new Set(
+    s.items.filter((i) => i.kind === (supplyKind === 'goods' ? 'goods' : 'service')).map((i) => i.id),
+  );
+  return all.filter((o) => allowed.has(o.value));
+}

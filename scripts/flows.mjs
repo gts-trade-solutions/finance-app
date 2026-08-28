@@ -293,7 +293,122 @@ for (const href of quickHrefs) {
 }
 check('No dead links in quick create', deadLinks === 0, `${deadLinks} dead`);
 
-// ── 10. Demo reset restores the seed
+// ── 10. HSN/SAC is restricted to the organisation's approved list
+await page.goto(`${BASE}/sales/invoices/new`, { waitUntil: 'networkidle' });
+// Line comboboxes: 5 = item picker, 6 = HSN/SAC picker on the first row.
+await page.locator('[data-slot="combobox-trigger"]').nth(6).click();
+const hsnSearch = page.locator('input[placeholder="Type the first digits"]');
+await hsnSearch.fill('1');
+await page.waitForTimeout(300);
+check('Typing "1" matches no approved code (prefix search, not contains)',
+  await page.locator('[role="option"]').count() === 0);
+
+await hsnSearch.fill('87');
+await page.waitForTimeout(300);
+const eightySeven = await page.locator('[role="option"]').allInnerTexts();
+check('Typing "87" lists only codes starting 87',
+  eightySeven.length > 0 && eightySeven.every((t) => /^\s*87/.test(t)),
+  eightySeven.map((t) => t.split('\n')[0]).join(', '));
+
+await page.getByRole('option', { name: /8708/ }).first().click();
+await page.waitForTimeout(300);
+check('Picking an approved code fills the HSN cell',
+  (await page.locator('[data-slot="combobox-trigger"]').nth(6).innerText()).includes('8708'));
+
+// ── 11. "Invoice For" narrows both the items and the codes on offer
+await page.locator('[data-slot="supply-kind"][data-kind="service"]').click();
+await page.waitForTimeout(300);
+await page.locator('[data-slot="supply-kind"][data-kind="goods"]').click();
+await page.waitForTimeout(300);
+check('Turning Goods off leaves Services selected',
+  await page.locator('[data-slot="supply-kind"][data-kind="service"][aria-checked="true"]').count() === 1);
+
+await page.locator('[data-slot="combobox-trigger"]').nth(6).click();
+await page.waitForTimeout(300);
+const sacOnly = await page.locator('[role="option"]').allInnerTexts();
+check('A services invoice offers SAC codes only',
+  sacOnly.length > 0 && sacOnly.every((t) => /^\s*99/.test(t)),
+  `${sacOnly.length} codes, all beginning 99`);
+await page.keyboard.press('Escape');
+
+await page.locator('[data-slot="combobox-trigger"]').nth(5).click();
+await page.waitForTimeout(300);
+const serviceItems = await page.locator('[role="option"]').allInnerTexts();
+check('A services invoice offers service items only',
+  serviceItems.length > 0 && serviceItems.every((t) => /Fitment|Labour/i.test(t)),
+  `${serviceItems.length} item(s)`);
+await page.keyboard.press('Escape');
+
+// ── 12. Admin curates the approved list
+await page.goto(`${BASE}/settings/hsn-codes`, { waitUntil: 'networkidle' });
+const codeRows = await page.locator('tbody tr').count();
+check('HSN settings lists the seeded codes', codeRows >= 14, `${codeRows} codes`);
+
+await page.locator('input[placeholder="Type the first digits, or a description"]').fill('87');
+await page.waitForTimeout(300);
+const searched = await page.locator('tbody tr').count();
+check('Code search filters by prefix', searched > 0 && searched < codeRows, `${searched} of ${codeRows}`);
+
+await page.locator('input[placeholder="Type the first digits, or a description"]').fill('');
+await page.getByRole('button', { name: /New Code/ }).click();
+await page.waitForTimeout(400);
+await page.locator('input[placeholder="8708"]').fill('8544');
+await page.locator('input[placeholder="Parts and accessories of motor vehicles"]')
+  .fill('Insulated wire, cable and wiring harnesses');
+await page.getByRole('button', { name: /Add code/ }).click();
+await page.waitForTimeout(600);
+check('Adding a code grows the approved list',
+  await page.locator('tbody tr').count() === codeRows + 1);
+
+await page.goto(`${BASE}/sales/invoices/new`, { waitUntil: 'networkidle' });
+await page.locator('[data-slot="combobox-trigger"]').nth(6).click();
+await page.locator('input[placeholder="Type the first digits"]').fill('8544');
+await page.waitForTimeout(300);
+check('The newly approved code is immediately selectable on an invoice',
+  await page.getByRole('option', { name: /8544/ }).count() === 1);
+await page.keyboard.press('Escape');
+
+// ── 13. Dashboard carries percentages, debtors and creditors
+await page.goto(`${BASE}/dashboard`, { waitUntil: 'networkidle' });
+await page.waitForTimeout(900);
+const dash = await page.locator('body').innerText();
+check('Dashboard shows a debtor ranking', dash.includes('Who owes us the most'));
+check('Dashboard shows a creditor ranking', dash.includes('Who we owe the most'));
+check('Dashboard shows a goods vs services split', dash.includes('Goods vs services'));
+check('Dashboard shows billed against collected', dash.includes('Billed vs collected'));
+check('Dashboard shows the invoice status split', /partly paid/i.test(dash));
+check('Dashboard figures carry percentages as well as amounts',
+  (dash.match(/\d+\.\d%/g) || []).length >= 5,
+  `${(dash.match(/\d+\.\d%/g) || []).length} percentage figures`);
+check('Gross margin block is shown to an owner', dash.includes('Gross margin'));
+
+const billedTile = page.locator('[data-slot="stat-tile"][data-label="Total billed"] [data-slot="stat-value"]');
+const billedBefore = money(await billedTile.innerText());
+check('Sales figures are non-zero over the default window', billedBefore > 0, `₹${billedBefore}`);
+
+await page.locator('[data-slot="combobox-trigger"]').first().click();
+await page.getByRole('option', { name: 'This month' }).click();
+await page.waitForTimeout(800);
+const billedAfter = money(await billedTile.innerText());
+check('Changing the comparison period recomputes the sales figures',
+  billedAfter > 0 && billedAfter !== billedBefore, `3 months ₹${billedBefore} → this month ₹${billedAfter}`);
+
+// ── 14. The newly added Zoho reports return real rows
+for (const [href, label] of [
+  ['/reports/ar-ageing-details', 'AR Ageing Details'],
+  ['/reports/sales-order-details', 'Sales Order Details'],
+  ['/reports/estimate-details', 'Quote Details'],
+  ['/reports/retainer-details', 'Retainer Invoice Details'],
+  ['/reports/time-to-get-paid', 'Time to Get Paid'],
+  ['/reports/refund-history', 'Refund History'],
+]) {
+  await page.goto(`${BASE}${href}`, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(500);
+  const rows = await page.locator('tbody tr').count();
+  check(`${label} renders rows`, rows > 0, `${rows} row(s)`);
+}
+
+// ── 15. Demo reset restores the seed
 await page.getByRole('button', { name: /Demo/ }).click();
 await page.getByRole('menuitem', { name: /Reset to seed data/ }).click();
 await page.waitForTimeout(1200);

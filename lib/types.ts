@@ -243,6 +243,8 @@ export interface Invoice {
   dueDate: string;
   placeOfSupply: string; // state code
   supplyType: SupplyType;
+  /** Goods, services, or a mixed invoice. Restricts the HSN/SAC codes offered. */
+  supplyKind: SupplyKind;
   status: InvoiceStatus;
   lines: DocLine[];
   subtotalPaise: Paise; // Σ line taxable before doc discount
@@ -614,3 +616,24 @@ export interface WebhookEndpoint {
   isActive: boolean;
   lastDelivery?: { at: string; status: number };
 }
+
+// ── HSN / SAC master ─────────────────────────────────────────────────────────
+// GST law requires a valid HSN (goods) or SAC (services) code on every taxable
+// line, and GSTR-1 has a dedicated HSN summary table that the portal validates.
+// Free-typed codes are the single biggest cause of GSTR-1 rejection, so the
+// organisation curates its own short list here and invoices may only pick from
+// it. There is no "custom code" escape hatch by design.
+export interface HsnCode {
+  id: string;
+  /** 4, 6 or 8 digits for HSN; 6 digits beginning 99 for SAC. */
+  code: string;
+  kind: 'hsn' | 'sac';
+  description: string;
+  /** Default GST rate applied when a line picks this code with no item. */
+  gstRatePct: number;
+  uqc?: string;
+  isActive: boolean;
+}
+
+/** What an invoice is being raised for. Drives which codes and items are offered. */
+export type SupplyKind = 'goods' | 'service' | 'both';

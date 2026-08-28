@@ -18,6 +18,7 @@ import {
 import {
   LineItemsEditor, effectiveDiscountPct, newEditorLine, type EditorLine,
 } from '@/components/forms/document-lines';
+import { SupplyKindPicker } from '@/components/forms/supply-kind-picker';
 import { useAppStore } from '@/lib/store';
 import { today } from '@/lib/selectors';
 import {
@@ -32,6 +33,7 @@ import {
   TCS_RATE_PCT,
 } from '@/lib/tax/gst';
 import { formatINR, roundToRupee, toRupees } from '@/lib/money';
+import type { SupplyKind } from '@/lib/types';
 
 export default function NewInvoicePage() {
   const router = useRouter();
@@ -47,6 +49,7 @@ export default function NewInvoicePage() {
   const [salespersonId, setSalespersonId] = useState('');
   const [subject, setSubject] = useState('');
   const [placeOfSupply, setPlaceOfSupply] = useState('');
+  const [supplyKind, setSupplyKind] = useState<SupplyKind>('goods');
   const [lines, setLines] = useState<EditorLine[]>([newEditorLine('l1')]);
   const [notes, setNotes] = useState('Thanks for your business.');
   const [terms, setTerms] = useState(
@@ -150,6 +153,7 @@ export default function NewInvoicePage() {
       date,
       dueDate,
       placeOfSupply: pos,
+      supplyKind,
       status: mode === 'draft' ? 'draft' : 'approved',
       number: number && number !== nextNumber ? number : undefined,
       orderNumber: orderNumber || undefined,
@@ -322,6 +326,15 @@ export default function NewInvoicePage() {
 
         <FormSectionRule label="GST" />
 
+        <FormRow
+          label="Invoice For"
+          required
+          width="lg"
+          hint="Goods take an HSN code, services take a SAC. Pick both for a mixed invoice."
+        >
+          <SupplyKindPicker value={supplyKind} onChange={setSupplyKind} />
+        </FormRow>
+
         {/*
           Branch only appears when the business actually holds more than one GST
           registration — otherwise there is nothing to choose and the field is
@@ -392,7 +405,12 @@ export default function NewInvoicePage() {
       {/* ── Item table ────────────────────────────────────────────────── */}
       <div className="space-y-3">
         <h2 className="text-sm font-semibold">Item Table</h2>
-        <LineItemsEditor lines={lines} onChange={setLines} supplyType={supplyType} />
+        <LineItemsEditor
+          lines={lines}
+          onChange={setLines}
+          supplyType={supplyType}
+          supplyKind={supplyKind}
+        />
       </div>
 
       {/* ── Notes + totals ────────────────────────────────────────────── */}

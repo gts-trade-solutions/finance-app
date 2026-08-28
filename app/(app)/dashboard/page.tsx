@@ -1,41 +1,70 @@
 'use client';
 
 import Link from 'next/link';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
-  AlertTriangle, ArrowRight, Banknote, FileCheck2, Landmark, Receipt,
-  ShieldAlert, TrendingUp, Wallet,
+  AlertTriangle, ArrowRight, Banknote, CheckCircle2, Clock, FileCheck2, Landmark,
+  Lock, Package, Receipt, ShieldAlert, TrendingUp, Wallet, Wrench, XCircle,
 } from 'lucide-react';
 import {
-  Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend, Pie, PieChart,
-  ResponsiveContainer, Tooltip, XAxis, YAxis,
+  Area, AreaChart, Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer,
+  Tooltip, XAxis, YAxis,
 } from 'recharts';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Combobox } from '@/components/ui/combobox';
 import { PageHeader } from '@/components/shared/page-header';
 import { StatTile } from '@/components/shared/stat-tile';
 import { Money } from '@/components/shared/money';
 import { StatusBadge } from '@/components/shared/status-badge';
+import { ShareDonut } from '@/components/charts/share-donut';
+import { RankedBars } from '@/components/charts/ranked-bars';
 import { useAppStore } from '@/lib/store';
+import { useCanSeeCosts } from '@/lib/store/hooks';
 import {
   cashPosition, contactName, effectiveInvoiceStatus, invoiceBalance, monthlySeries,
-  msmeTracker, openInvoices, overdueReceivable, receivablesAgeing, today,
+  msmeTracker, openInvoices, overdueReceivable, today,
   totalCash, totalPayable, totalReceivable,
 } from '@/lib/selectors';
-import { formatINRCompact } from '@/lib/money';
+import {
+  billedVsCollected, goodsVsServices, grossMargin, pctChange, previousWindow,
+  receivableBuckets, salesPerformance, topCreditors, topDebtors, type Window,
+} from '@/lib/analytics';
+import { formatINR, formatINRCompact } from '@/lib/money';
 import { profitAndLoss, trialBalance } from '@/lib/ledger/reports';
 import { detectAnomalies } from '@/lib/mock/simulators';
 import { CHART_COLORS, axisProps, axisRupee, rupeeFormatter, tooltipStyle } from '@/components/charts/chart-bits';
 
+/** Comparison windows offered above the sales block. */
+const PERIODS = [
+  { value: 'this_month', label: 'This month' },
+  { value: 'last_3', label: 'Last 3 months' },
+  { value: 'last_6', label: 'Last 6 months' },
+  { value: 'fy', label: 'This financial year' },
+];
+
+function windowFor(period: string, fyStart: string): Window {
+  const to = today();
+  const d = new Date(to);
+  if (period === 'fy') return { from: fyStart, to };
+  if (period === 'this_month') {
+    return { from: `${to.slice(0, 7)}-01`, to };
+  }
+  const months = period === 'last_6' ? 6 : 3;
+  const from = new Date(d.getFullYear(), d.getMonth() - (months - 1), 1);
+  return { from: from.toISOString().slice(0, 10), to };
+}
+
 export default function DashboardPage() {
   const s = useAppStore();
+  const canSeeCosts = useCanSeeCosts();
+  const [period, setPeriod] = useState('last_3');
+
+  const fyStart = s.org?.fiscalYearStart ?? '2026-04-01';
 
   const stats = useMemo(() => {
-    const pl = profitAndLoss(s.accounts, s.entries, {
-      from: s.org?.fiscalYearStart ?? '2026-04-01',
-      to: today(),
-    });
+    const pl = profitAndLoss(s.accounts, s.entries, { from: fyStart, to: today() });
     return {
       receivable: totalReceivable(s),
       overdue: overdueReceivable(s),
@@ -44,10 +73,21 @@ export default function DashboardPage() {
       pl,
       tb: trialBalance(s.accounts, s.entries),
     };
-  }, [s]);
+  }, [s, fyStart]);
+
+  // ── Sales block: the chosen window, and the one immediately before it ──────
+  const win = useMemo(() => windowFor(period, fyStart), [period, fyStart]);
+  const prev = useMemo(() => previousWindow(win), [win]);
+  const perf = useMemo(() => salesPerformance(s, win), [s, win]);
+  const perfPrev = useMemo(() => salesPerformance(s, prev), [s, prev]);
+  const margin = useMemo(() => grossMargin(s, win), [s, win]);
+  const mix = useMemo(() => goodsVsServices(s, win), [s, win]);
 
   const series = useMemo(() => monthlySeries(s, 6), [s]);
-  const ageing = useMemo(() => receivablesAgeing(s).slice(0, 6), [s]);
+  const bvc = useMemo(() => billedVsCollected(s, 6), [s]);
+  const debtors = useMemo(() => topDebtors(s, 6), [s]);
+  const creditors = useMemo(() => topCreditors(s, 6), [s]);
+  const buckets = useMemo(() => receivableBuckets(s), [s]);
   // detectAnomalies reads the store directly, so `s` is the dependency that
   // tells us the underlying data changed even though it isn't referenced here.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -67,13 +107,16 @@ export default function DashboardPage() {
 
   const expenseMix = useMemo(
     () =>
-      stats.pl.expenseRows.slice(0, 5).map((r, idx) => ({
-        name: r.account.name.length > 22 ? r.account.name.slice(0, 20) + '…' : r.account.name,
-        value: r.amount / 100,
-        fill: CHART_COLORS[idx % CHART_COLORS.length],
+      stats.pl.expenseRows.slice(0, 6).map((r) => ({
+        name: r.account.name.length > 24 ? `${r.account.name.slice(0, 22)}…` : r.account.name,
+        value: r.amount,
       })),
     [stats.pl],
   );
+
+  const periodLabel = PERIODS.find((p) => p.value === period)?.label.toLowerCase() ?? 'period';
+  const statusTotal = perf.paid + perf.partial + perf.unpaid;
+  const sharePct = (n: number) => (statusTotal ? ((n / statusTotal) * 100).toFixed(0) : '0');
 
   return (
     <>
@@ -126,7 +169,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Headline numbers */}
+      {/* Headline numbers — position, not performance */}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatTile
           label="Receivables"
@@ -161,14 +204,202 @@ export default function DashboardPage() {
         />
       </div>
 
-      {/* Charts */}
+      {/* ── Sales performance ──────────────────────────────────────────────── */}
+      <div className="flex flex-wrap items-end justify-between gap-3 border-t pt-5">
+        <div>
+          <h2 className="text-sm font-semibold">Sales performance</h2>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {new Date(win.from).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+            {' – '}
+            {new Date(win.to).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+            {', compared with the '}
+            {periodLabel}
+            {' before it. Draft invoices are excluded throughout.'}
+          </p>
+        </div>
+        <div className="w-48">
+          <Combobox options={PERIODS} value={period} onChange={setPeriod} showAvatar={false} />
+        </div>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatTile
+          label="Total billed"
+          value={formatINRCompact(perf.billed)}
+          delta={pctChange(perf.billed, perfPrev.billed)}
+          sub={`${perf.invoiceCount} invoices · ${perf.customerCount} customers`}
+          icon={Receipt}
+          href="/reports/invoice-details"
+        />
+        <StatTile
+          label="Collected"
+          value={formatINRCompact(perf.collected)}
+          delta={pctChange(perf.collected, perfPrev.collected)}
+          sub="Cash actually received in the period"
+          icon={Wallet}
+          tone="positive"
+          href="/reports/payments-received"
+        />
+        <StatTile
+          label="Outstanding"
+          value={formatINRCompact(perf.outstanding)}
+          delta={pctChange(perf.outstanding, perfPrev.outstanding)}
+          deltaGoodWhen="down"
+          sub="Still unpaid, from invoices raised in the period"
+          icon={Clock}
+          tone={perf.outstanding > 0 ? 'warning' : 'default'}
+          href="/reports/ar-ageing"
+        />
+        <StatTile
+          label="Average invoice"
+          value={formatINRCompact(perf.avgInvoice)}
+          delta={pctChange(perf.avgInvoice, perfPrev.avgInvoice)}
+          sub={`Across ${perf.invoiceCount} invoices`}
+          icon={TrendingUp}
+        />
+      </div>
+
+      {/* Invoice status split — counts and shares */}
+      <div className="grid gap-3 sm:grid-cols-3">
+        {[
+          { label: 'Paid', count: perf.paid, icon: CheckCircle2, klass: 'border-emerald-500/40 bg-emerald-500/5', ink: 'text-emerald-600 dark:text-emerald-400', hint: 'settled in full' },
+          { label: 'Partly paid', count: perf.partial, icon: Clock, klass: 'border-amber-500/40 bg-amber-500/5', ink: 'text-amber-600 dark:text-amber-400', hint: 'part payment received' },
+          { label: 'Unpaid', count: perf.unpaid, icon: XCircle, klass: 'border-red-500/40 bg-red-500/5', ink: 'text-red-600 dark:text-red-400', hint: 'nothing received yet' },
+        ].map((b) => (
+          <Card key={b.label} className={`flex items-center gap-3 p-4 ${b.klass}`}>
+            <div className="min-w-0 flex-1">
+              <p className="micro-label">{b.label}</p>
+              <div className="mt-1 flex items-baseline gap-2">
+                <span className="tabular text-2xl font-semibold">{b.count}</span>
+                <span className="tabular text-xs text-muted-foreground">{sharePct(b.count)}% of {statusTotal}</span>
+              </div>
+              <p className="mt-0.5 text-xs text-muted-foreground">{b.hint}</p>
+            </div>
+            <b.icon className={`size-5 shrink-0 ${b.ink}`} />
+          </Card>
+        ))}
+      </div>
+
+      {/*
+        Gross margin is owner-only because it exposes what we pay for stock.
+        It is also explicitly *indicative*: purchases are expensed when billed
+        rather than valued into inventory, so this figure will not tie to the
+        Profit and Loss and is not meant to. Saying so on the card itself is
+        cheaper than fielding the question every month.
+      */}
+      {canSeeCosts && (
+        <Card className="accent-bar p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-semibold">Gross margin</h2>
+                <Badge variant="outline" className="gap-1 text-[9px]">
+                  <Lock className="size-2.5" /> Owner only
+                </Badge>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Sales value less the catalogue purchase price of what went out the door.
+              </p>
+            </div>
+            <TrendingUp className="size-5 text-emerald-600 dark:text-emerald-400" />
+          </div>
+
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <div>
+              <p className="micro-label">Gross margin</p>
+              <p className="mt-1 tabular text-2xl font-semibold text-emerald-600 dark:text-emerald-400">
+                {formatINR(margin.gross)}
+              </p>
+              <p className="mt-0.5 text-xs text-muted-foreground">{margin.marginPct.toFixed(1)}% of sales</p>
+            </div>
+            <div>
+              <p className="micro-label">Revenue (excl. GST)</p>
+              <p className="mt-1 tabular text-lg font-medium">{formatINR(margin.revenue)}</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">{perf.invoiceCount} invoices</p>
+            </div>
+            <div>
+              <p className="micro-label">Cost of goods sold</p>
+              <p className="mt-1 tabular text-lg font-medium">{formatINR(margin.cogs)}</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">purchase price of sold units</p>
+            </div>
+            <div>
+              <p className="micro-label">Units sold</p>
+              <p className="mt-1 tabular text-lg font-medium">{margin.units.toLocaleString('en-IN')}</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">in the period</p>
+            </div>
+          </div>
+
+          <div className="mt-4 rounded-md border bg-muted/40 px-3 py-2.5 text-xs">
+            <span className="text-muted-foreground">Revenue </span>
+            <span className="tabular font-medium">{formatINR(margin.revenue)}</span>
+            <span className="text-muted-foreground"> − COGS </span>
+            <span className="tabular font-medium">{formatINR(margin.cogs)}</span>
+            <span className="text-muted-foreground"> = Gross margin </span>
+            <span className="tabular font-medium text-emerald-600 dark:text-emerald-400">
+              {formatINR(margin.gross)}
+            </span>
+            <span className="text-muted-foreground"> ({margin.marginPct.toFixed(1)}%)</span>
+          </div>
+
+          <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+            Indicative only — it will not agree with the Profit and Loss, because purchases are expensed when
+            billed rather than valued into stock. Use it for pricing, not for filing.
+            {margin.linesWithoutCost > 0 && (
+              <> {margin.linesWithoutCost} line(s) have no cost price on file, so the margin is flattered by that much.</>
+            )}
+          </p>
+        </Card>
+      )}
+
+      {/* Billed vs collected, and what we actually sell */}
       <div className="grid gap-4 lg:grid-cols-3">
         <Card className="p-4 lg:col-span-2">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <h2 className="text-sm font-semibold">Sales vs expenses</h2>
-              <p className="text-xs text-muted-foreground">Last 6 months, excluding GST</p>
+          <div className="mb-4">
+            <h2 className="text-sm font-semibold">Billed vs collected</h2>
+            <p className="text-xs text-muted-foreground">
+              Last 6 months. The gap between the two bars is the money you have earned but not yet been paid.
+            </p>
+          </div>
+          <ResponsiveContainer width="100%" height={240}>
+            <BarChart data={bvc} margin={{ left: -10, right: 8, top: 4 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+              <XAxis dataKey="month" {...axisProps} />
+              <YAxis tickFormatter={axisRupee} {...axisProps} width={64} />
+              <Tooltip formatter={rupeeFormatter} cursor={{ fill: 'var(--accent)' }} contentStyle={tooltipStyle} />
+              <Legend iconType="circle" wrapperStyle={{ fontSize: 12 }} />
+              <Bar dataKey="billed" name="Billed" fill="var(--chart-1)" radius={[3, 3, 0, 0]} />
+              <Bar dataKey="collected" name="Collected" fill="var(--chart-2)" radius={[3, 3, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+
+        <Card className="p-4">
+          <h2 className="mb-1 text-sm font-semibold">Goods vs services</h2>
+          <p className="mb-3 text-xs text-muted-foreground">
+            Taxable value for the {periodLabel}. Services carry a SAC, goods an HSN.
+          </p>
+          <ShareDonut
+            data={mix.map((m) => ({ name: m.label, value: m.value }))}
+            centreLabel="Taxable"
+            emptyMessage="No invoices in this period."
+          />
+          <div className="mt-3 grid grid-cols-2 gap-2 border-t pt-3 text-xs">
+            <div className="flex items-center gap-1.5 text-muted-foreground">
+              <Package className="size-3.5" /> {mix[0].lines} goods lines
             </div>
+            <div className="flex items-center gap-1.5 text-muted-foreground">
+              <Wrench className="size-3.5" /> {mix[1].lines} service lines
+            </div>
+          </div>
+        </Card>
+      </div>
+
+      {/* Trend + expense mix */}
+      <div className="grid gap-4 lg:grid-cols-3">
+        <Card className="p-4 lg:col-span-2">
+          <div className="mb-4">
+            <h2 className="text-sm font-semibold">Sales vs expenses</h2>
+            <p className="text-xs text-muted-foreground">Last 6 months, excluding GST</p>
           </div>
           <ResponsiveContainer width="100%" height={260}>
             <AreaChart data={series} margin={{ left: -10, right: 8, top: 4 }}>
@@ -184,15 +415,8 @@ export default function DashboardPage() {
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
               <XAxis dataKey="month" {...axisProps} />
-              <YAxis
-                tickFormatter={axisRupee}
-                {...axisProps}
-                width={64}
-              />
-              <Tooltip
-                formatter={rupeeFormatter}
-                contentStyle={tooltipStyle}
-              />
+              <YAxis tickFormatter={axisRupee} {...axisProps} width={64} />
+              <Tooltip formatter={rupeeFormatter} contentStyle={tooltipStyle} />
               <Legend iconType="circle" wrapperStyle={{ fontSize: 12 }} />
               <Area type="monotone" dataKey="sales" name="Sales" stroke="var(--chart-1)" strokeWidth={2} fill="url(#gSales)" />
               <Area type="monotone" dataKey="expenses" name="Expenses" stroke="var(--chart-5)" strokeWidth={2} fill="url(#gExp)" />
@@ -202,57 +426,141 @@ export default function DashboardPage() {
 
         <Card className="p-4">
           <h2 className="mb-1 text-sm font-semibold">Where the money goes</h2>
-          <p className="mb-3 text-xs text-muted-foreground">Top expense accounts, YTD</p>
-          <ResponsiveContainer width="100%" height={230}>
-            <PieChart>
-              <Pie data={expenseMix} dataKey="value" nameKey="name" innerRadius={52} outerRadius={82} paddingAngle={2}>
-                {expenseMix.map((e, i) => (
-                  <Cell key={i} fill={e.fill} />
-                ))}
-              </Pie>
-              <Tooltip
-                formatter={rupeeFormatter}
-                contentStyle={tooltipStyle}
-              />
-            </PieChart>
-          </ResponsiveContainer>
-          <div className="space-y-1.5">
-            {expenseMix.map((e) => (
-              <div key={e.name} className="flex items-center gap-2 text-xs">
-                <span className="size-2.5 rounded-sm" style={{ background: e.fill }} />
-                <span className="truncate text-muted-foreground">{e.name}</span>
-                <span className="ml-auto num tabular">₹{e.value.toLocaleString('en-IN')}</span>
-              </div>
-            ))}
-          </div>
+          <p className="mb-3 text-xs text-muted-foreground">Top expense accounts, year to date</p>
+          <ShareDonut data={expenseMix} centreLabel="Expenses" emptyMessage="No expenses posted yet." />
         </Card>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-3">
-        {/* Receivables ageing */}
-        <Card className="p-4 lg:col-span-2">
-          <div className="mb-3 flex items-center justify-between">
+      {/* ── Debtors and creditors, side by side ───────────────────────────── */}
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card className="p-4">
+          <div className="mb-3 flex items-start justify-between gap-3">
             <div>
               <h2 className="text-sm font-semibold">Who owes us the most</h2>
-              <p className="text-xs text-muted-foreground">Outstanding by customer</p>
+              <p className="text-xs text-muted-foreground">
+                Debtors — customers with an unpaid balance. Share of total receivables.
+              </p>
             </div>
             <Button variant="ghost" size="sm" asChild>
-              <Link href="/reports/ar-ageing">Full ageing <ArrowRight className="ml-1 size-3.5" /></Link>
+              <Link href="/reports/customer-balances">All <ArrowRight className="ml-1 size-3.5" /></Link>
             </Button>
           </div>
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={ageing.map((a) => ({ name: a.name.split(' ')[0], value: a.total / 100 }))} margin={{ left: -10, right: 8 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-              <XAxis dataKey="name" {...axisProps} />
-              <YAxis tickFormatter={axisRupee} {...axisProps} width={56} />
-              <Tooltip
-                formatter={rupeeFormatter}
-                cursor={{ fill: 'var(--accent)' }}
-                contentStyle={tooltipStyle}
-              />
-              <Bar dataKey="value" name="Outstanding" fill="var(--chart-1)" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+          <RankedBars
+            rows={debtors.map((d) => ({
+              id: d.contactId,
+              name: d.name,
+              value: d.value,
+              pct: d.pct,
+              alert: d.overdue > 0,
+              href: `/reports/ar-ageing`,
+              note:
+                d.overdue > 0
+                  ? `${formatINR(d.overdue)} of this is past due · ${d.count} invoice(s)`
+                  : `${d.count} invoice(s), none past due`,
+            }))}
+            emptyMessage="Nobody owes you anything. Enviable."
+          />
+        </Card>
+
+        <Card className="p-4">
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold">Who we owe the most</h2>
+              <p className="text-xs text-muted-foreground">
+                Creditors — suppliers with an unpaid bill. Share of total payables.
+              </p>
+            </div>
+            <Button variant="ghost" size="sm" asChild>
+              <Link href="/reports/vendor-balances">All <ArrowRight className="ml-1 size-3.5" /></Link>
+            </Button>
+          </div>
+          <RankedBars
+            tone="warning"
+            rows={creditors.map((c) => ({
+              id: c.contactId,
+              name: c.name,
+              value: c.value,
+              pct: c.pct,
+              alert: c.overdue > 0,
+              href: `/reports/ap-ageing`,
+              note:
+                c.overdue > 0
+                  ? `${formatINR(c.overdue)} of this is overdue · ${c.count} bill(s)`
+                  : `${c.count} bill(s), none overdue`,
+            }))}
+            emptyMessage="You owe nobody anything."
+          />
+        </Card>
+      </div>
+
+      {/* Ageing buckets, with each bucket's share */}
+      <Card className="p-4">
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold">Outstanding by age</h2>
+            <p className="text-xs text-muted-foreground">
+              How long the money has been owed. Anything past 60 days is usually a collections problem, not a
+              timing one.
+            </p>
+          </div>
+          <Button variant="ghost" size="sm" asChild>
+            <Link href="/reports/ar-ageing">Full ageing <ArrowRight className="ml-1 size-3.5" /></Link>
+          </Button>
+        </div>
+        <div className="grid gap-x-8 gap-y-2.5 sm:grid-cols-2">
+          {buckets.map((b, i) => (
+            <div key={b.bucket}>
+              <div className="flex items-baseline gap-2">
+                <span className="min-w-0 flex-1 truncate text-xs font-medium">
+                  {b.bucket === 'Current' ? 'Current (not yet due)' : `${b.bucket} days overdue`}
+                </span>
+                <span className="shrink-0 tabular text-xs font-medium">{formatINR(b.value)}</span>
+                <span className="w-11 shrink-0 text-right tabular text-[11px] text-muted-foreground">
+                  {b.pct.toFixed(1)}%
+                </span>
+              </div>
+              <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full"
+                  style={{
+                    width: `${Math.max(b.value > 0 ? 2 : 0, b.pct)}%`,
+                    background: CHART_COLORS[i % CHART_COLORS.length],
+                  }}
+                />
+              </div>
+              <p className="mt-1 text-[11px] text-muted-foreground">{b.count} invoice(s)</p>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        {/* Recent invoices */}
+        <Card className="p-4 lg:col-span-2">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-sm font-semibold">Recent invoices</h2>
+            <Button variant="ghost" size="sm" asChild>
+              <Link href="/sales/invoices">View all <ArrowRight className="ml-1 size-3.5" /></Link>
+            </Button>
+          </div>
+          <div className="divide-y">
+            {recentInvoices.map((inv) => (
+              <Link
+                key={inv.id}
+                href={`/sales/invoices/${inv.id}`}
+                className="flex items-center gap-3 py-2.5 transition-colors hover:bg-accent/50"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium">{contactName(s, inv.customerId)}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {inv.number} · {new Date(inv.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
+                  </p>
+                </div>
+                <StatusBadge status={effectiveInvoiceStatus(inv)} />
+                <Money value={invoiceBalance(inv)} className="w-28 text-sm font-medium" />
+              </Link>
+            ))}
+          </div>
         </Card>
 
         {/* Attention needed */}
@@ -289,80 +597,49 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
-        {/* Recent invoices */}
         <Card className="p-4 lg:col-span-2">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-semibold">Recent invoices</h2>
-            <Button variant="ghost" size="sm" asChild>
-              <Link href="/sales/invoices">View all <ArrowRight className="ml-1 size-3.5" /></Link>
-            </Button>
-          </div>
-          <div className="divide-y">
-            {recentInvoices.map((inv) => (
-              <Link
-                key={inv.id}
-                href={`/sales/invoices/${inv.id}`}
-                className="flex items-center gap-3 py-2.5 transition-colors hover:bg-accent/50"
-              >
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">{contactName(s, inv.customerId)}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {inv.number} · {new Date(inv.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
-                  </p>
-                </div>
-                <StatusBadge status={effectiveInvoiceStatus(inv)} />
-                <Money value={invoiceBalance(inv)} className="w-28 text-sm font-medium" />
-              </Link>
+          <h2 className="mb-3 text-sm font-semibold">Bank & cash</h2>
+          <div className="space-y-2">
+            {cash.map((c) => (
+              <div key={c.accountId} className="flex items-center justify-between gap-2 text-sm">
+                <span className="flex items-center gap-2 truncate text-muted-foreground">
+                  <Wallet className="size-3.5 shrink-0" />
+                  <span className="truncate">{c.name}</span>
+                </span>
+                <Money value={c.balance} className="font-medium" />
+              </div>
             ))}
           </div>
+          {unmatched > 0 && (
+            <Button variant="outline" size="sm" className="mt-3" asChild>
+              <Link href="/banking/reconcile">{unmatched} lines to reconcile</Link>
+            </Button>
+          )}
         </Card>
 
-        {/* Cash accounts + ledger health */}
-        <div className="space-y-4">
-          <Card className="p-4">
-            <h2 className="mb-3 text-sm font-semibold">Bank & cash</h2>
-            <div className="space-y-2">
-              {cash.map((c) => (
-                <div key={c.accountId} className="flex items-center justify-between gap-2 text-sm">
-                  <span className="flex items-center gap-2 truncate text-muted-foreground">
-                    <Wallet className="size-3.5 shrink-0" />
-                    <span className="truncate">{c.name}</span>
-                  </span>
-                  <Money value={c.balance} className="font-medium" />
-                </div>
-              ))}
-            </div>
-            {unmatched > 0 && (
-              <Button variant="outline" size="sm" className="mt-3 w-full" asChild>
-                <Link href="/banking/reconcile">{unmatched} lines to reconcile</Link>
-              </Button>
-            )}
-          </Card>
-
-          {/* The proof point for accountants */}
-          <Card className="border-emerald-500/30 bg-emerald-500/5 p-4">
-            <div className="flex items-start gap-2.5">
-              <FileCheck2 className="mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
-              <div className="min-w-0">
-                <p className="text-sm font-medium">Books are balanced</p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {s.entries.length} journal entries · debits and credits agree to the paisa.
-                </p>
-                <div className="mt-2 flex items-center gap-2 text-xs">
-                  <Badge variant="outline" className="gap-1 border-emerald-500/40">
-                    Dr <Money value={stats.tb.totalDebit} compact />
-                  </Badge>
-                  <Badge variant="outline" className="gap-1 border-emerald-500/40">
-                    Cr <Money value={stats.tb.totalCredit} compact />
-                  </Badge>
-                </div>
-                <Button variant="link" size="sm" className="mt-1 h-auto p-0 text-xs" asChild>
-                  <Link href="/reports/trial-balance">Open trial balance →</Link>
-                </Button>
+        {/* The proof point for accountants */}
+        <Card className="border-emerald-500/30 bg-emerald-500/5 p-4">
+          <div className="flex items-start gap-2.5">
+            <FileCheck2 className="mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+            <div className="min-w-0">
+              <p className="text-sm font-medium">Books are balanced</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {s.entries.length} journal entries · debits and credits agree to the paisa.
+              </p>
+              <div className="mt-2 flex items-center gap-2 text-xs">
+                <Badge variant="outline" className="gap-1 border-emerald-500/40">
+                  Dr <Money value={stats.tb.totalDebit} compact />
+                </Badge>
+                <Badge variant="outline" className="gap-1 border-emerald-500/40">
+                  Cr <Money value={stats.tb.totalCredit} compact />
+                </Badge>
               </div>
+              <Button variant="link" size="sm" className="mt-1 h-auto p-0 text-xs" asChild>
+                <Link href="/reports/trial-balance">Open trial balance →</Link>
+              </Button>
             </div>
-          </Card>
-        </div>
+          </div>
+        </Card>
       </div>
     </>
   );

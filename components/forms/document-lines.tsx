@@ -16,7 +16,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { useAppStore } from '@/lib/store';
-import { itemOptions } from '@/lib/options';
+import { hsnOptions, itemOptionsFor } from '@/lib/options';
 import { computeLineTax, GST_RATES } from '@/lib/tax/gst';
 import { formatINR, toRupees } from '@/lib/money';
 import { cn } from '@/lib/utils';
@@ -66,6 +66,7 @@ export function LineItemsEditor({
   lines,
   onChange,
   supplyType,
+  supplyKind = 'both',
   priceMode = 'sale',
   showItcColumn = false,
   itcValues,
@@ -74,13 +75,17 @@ export function LineItemsEditor({
   lines: EditorLine[];
   onChange: (lines: EditorLine[]) => void;
   supplyType: SupplyType;
+  /** Restricts both the item list and the HSN/SAC codes offered on each line. */
+  supplyKind?: 'goods' | 'service' | 'both';
   priceMode?: 'sale' | 'purchase';
   showItcColumn?: boolean;
   itcValues?: Record<string, 'eligible' | 'ineligible' | 'capital_goods'>;
   onItcChange?: (key: string, v: 'eligible' | 'ineligible' | 'capital_goods') => void;
 }) {
   const s = useAppStore();
-  const options = useMemo(() => itemOptions(s, priceMode), [s, priceMode]);
+  const options = useMemo(() => itemOptionsFor(s, supplyKind, priceMode), [s, supplyKind, priceMode]);
+  // Only the organisation's approved codes, narrowed to goods or services.
+  const codes = useMemo(() => hsnOptions(s, supplyKind), [s, supplyKind]);
   const isZeroRated =
     supplyType === 'export_lut' || supplyType === 'sez' || supplyType === 'nil_or_exempt';
 
@@ -159,11 +164,26 @@ export function LineItemsEditor({
                   </td>
 
                   <td className="px-2 py-2">
-                    <Input
+                    <Combobox
+                      options={codes}
                       value={line.hsnSac}
-                      onChange={(e) => update(line.key, { hsnSac: e.target.value })}
+                      onChange={(v) => {
+                        // Picking a code with no item behind it also sets the
+                        // rate, because the code is what determines the rate.
+                        const c = s.hsnCodes.find((h) => h.code === v);
+                        update(line.key, {
+                          hsnSac: v,
+                          ...(c && !line.itemId ? { gstRatePct: c.gstRatePct } : {}),
+                        });
+                      }}
+                      placeholder="Code"
+                      searchPlaceholder="Type the first digits"
+                      emptyMessage="Not on the approved list. Ask an admin to add it."
+                      matchMode="prefix"
+                      showAvatar={false}
+                      clearable
                       className="h-8 text-xs"
-                      placeholder="HSN"
+                      contentClassName="w-80"
                     />
                   </td>
 

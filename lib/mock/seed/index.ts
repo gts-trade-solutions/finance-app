@@ -9,12 +9,14 @@ import { SEED_ACCOUNTS, ACC } from './accounts';
 import { SEED_BRANCHES, SEED_ORG, SEED_USERS } from './org';
 import { SEED_CUSTOMERS, SEED_VENDORS } from './contacts';
 import { SEED_ITEMS } from './items';
+import { SEED_HSN_CODES } from './hsn';
 import { createManualJournal } from '../../services/journal';
 import {
   createCreditNote, createEstimate, createInvoice, createRetainer,
   receivePayment, receiveRetainerPayment, markInvoiceSent, createChallan,
+  convertEstimateToSO,
 } from '../../services/sales';
-import { createBill, createExpense, createPurchaseOrder, makePayment } from '../../services/purchases';
+import { createBill, createExpense, createPurchaseOrder, createVendorCredit, makePayment } from '../../services/purchases';
 import { importBankTxns } from '../../services/banking';
 import { genId } from '../../ledger/posting';
 import type {
@@ -140,6 +142,7 @@ export function seedDatabase(opts: { rich?: boolean; keepSession?: boolean } = {
     accounts: SEED_ACCOUNTS,
     contacts: [...SEED_CUSTOMERS, ...SEED_VENDORS],
     items: SEED_ITEMS,
+    hsnCodes: SEED_HSN_CODES,
     bankAccounts: BANK_ACCOUNTS,
     bankRules: BANK_RULES,
     warehouses: WAREHOUSES,
@@ -178,6 +181,25 @@ export function seedDatabase(opts: { rich?: boolean; keepSession?: boolean } = {
     lines: { itemId: string; qty: number; rate?: number }[];
     pay?: 'full' | 'part' | 'none'; tds?: boolean;
   }[] = [
+    // ── Prior quarter (April–June 2026). Without a few months of history the
+    // trend charts have nothing to trend and every "vs previous period"
+    // comparison reads "no comparable prior period", which makes a working
+    // dashboard look broken. Two of these are left unpaid on purpose so the
+    // 60+ ageing bucket has something real in it.
+    { customerId: 'c_sharma', daysAgo: 128, terms: 30, lines: [{ itemId: 'i_tyre', qty: 12 }, { itemId: 'i_fitment', qty: 12 }], pay: 'full' },
+    { customerId: 'c_national', daysAgo: 121, terms: 30, lines: [{ itemId: 'i_battery', qty: 14 }], pay: 'full' },
+    { customerId: 'c_marina', daysAgo: 114, terms: 15, lines: [{ itemId: 'i_engineoil', qty: 30 }, { itemId: 'i_oilfilter', qty: 40 }], pay: 'full' },
+    { customerId: 'c_deccan', daysAgo: 110, terms: 30, lines: [{ itemId: 'i_radiator', qty: 3 }, { itemId: 'i_coolant', qty: 20 }], pay: 'none' },
+    { customerId: 'c_apex', daysAgo: 103, terms: 30, lines: [{ itemId: 'i_clutch', qty: 15 }], pay: 'full', tds: true },
+    { customerId: 'c_velocity', daysAgo: 96, terms: 30, lines: [{ itemId: 'i_shocker', qty: 22 }, { itemId: 'i_beltkit', qty: 8 }], pay: 'full' },
+    { customerId: 'c_hosur', daysAgo: 88, terms: 30, lines: [{ itemId: 'i_alternator', qty: 5 }], pay: 'none' },
+    { customerId: 'c_speedwell', daysAgo: 81, terms: 30, lines: [{ itemId: 'i_headlamp', qty: 10 }, { itemId: 'i_fitment', qty: 10 }], pay: 'full' },
+    { customerId: 'c_kochi', daysAgo: 74, terms: 30, lines: [{ itemId: 'i_sparkplug', qty: 24 }, { itemId: 'i_cabinfilter', qty: 30 }], pay: 'full' },
+    { customerId: 'c_orbit', daysAgo: 66, terms: 30, lines: [{ itemId: 'i_mirrror', qty: 8 }, { itemId: 'i_hornset', qty: 16 }], pay: 'full', tds: true },
+    { customerId: 'c_bluehill', daysAgo: 59, terms: 30, lines: [{ itemId: 'i_tyre', qty: 18 }], pay: 'full' },
+    { customerId: 'c_trichy', daysAgo: 52, terms: 30, lines: [{ itemId: 'i_brakepad', qty: 30 }, { itemId: 'i_greasekit', qty: 25 }], pay: 'part' },
+    { customerId: 'c_national', daysAgo: 45, terms: 30, lines: [{ itemId: 'i_wiper', qty: 35 }, { itemId: 'i_airfilter', qty: 28 }], pay: 'full' },
+    { customerId: 'c_ridez', daysAgo: 40, terms: 0, lines: [{ itemId: 'i_engineoil', qty: 6 }, { itemId: 'i_fitment', qty: 3 }], pay: 'full' },
     { customerId: 'c_sharma', daysAgo: 34, terms: 30, lines: [{ itemId: 'i_brakepad', qty: 20 }, { itemId: 'i_oilfilter', qty: 30 }], pay: 'full' },
     { customerId: 'c_apex', daysAgo: 30, terms: 30, lines: [{ itemId: 'i_battery', qty: 25 }, { itemId: 'i_fitment', qty: 25 }], pay: 'full', tds: true },
     { customerId: 'c_velocity', daysAgo: 27, terms: 30, lines: [{ itemId: 'i_tyre', qty: 16 }], pay: 'part' },
@@ -267,6 +289,44 @@ export function seedDatabase(opts: { rich?: boolean; keepSession?: boolean } = {
   });
   receiveRetainerPayment(ret.id, 'ba_hdfc', daysAgo(7));
 
+  // A second retainer, still fully unearned — so the retainer report shows both
+  // an advance that has been drawn down and one that has not.
+  createRetainer({
+    branchId: 'br_chennai', customerId: 'c_speedwell', date: daysAgo(4),
+    description: 'Workshop AMC advance — H2', amountPaise: R(60_000),
+  });
+
+  // Accept the first quote and turn it into a sales order, then part-invoice it.
+  // That gives the Sales Order Details report a live backlog to show rather
+  // than an empty table.
+  {
+    const quote = getState().estimates[0];
+    if (quote) {
+      setState((st) => ({
+        estimates: st.estimates.map((e) => (e.id === quote.id ? { ...e, status: 'accepted' as const } : e)),
+      }));
+      const so = convertEstimateToSO(quote.id);
+      setState((st) => ({
+        salesOrders: st.salesOrders.map((o) =>
+          o.id === so.id
+            ? { ...o, status: 'partially_invoiced' as const, invoicedPaise: Math.round(o.totalPaise * 0.4), expectedShipDate: daysAhead(6) }
+            : o,
+        ),
+      }));
+    }
+  }
+
+  // One customer credit refunded in cash rather than applied, and one supplier
+  // credit refunded back to us — the two directions the refund report covers.
+  {
+    const cn = getState().creditNotes[0];
+    if (cn) {
+      setState((st) => ({
+        creditNotes: st.creditNotes.map((c) => (c.id === cn.id ? { ...c, status: 'refunded' as const } : c)),
+      }));
+    }
+  }
+
   // 4. Purchases — includes MSME vendors, a composition vendor, RCM, TDS
   const purchases: {
     vendorId: string; daysAgo: number; terms: number; vendorNo: string;
@@ -317,6 +377,25 @@ export function seedDatabase(opts: { rich?: boolean; keepSession?: boolean } = {
     branchId: 'br_chennai', vendorId: 'v_bosch', date: daysAgo(2), expectedDate: daysAhead(12),
     lines: [{ itemId: 'i_battery', qty: 40, ratePaise: R(3950) }, { itemId: 'i_oilfilter', qty: 200, ratePaise: R(155) }],
   });
+
+  // A supplier short-shipped and refunded the difference rather than issuing a
+  // credit against the next order — the inward half of the refund report.
+  {
+    const lumaxBill = getState().bills.find((b) => b.vendorId === 'v_lumax');
+    if (lumaxBill) {
+      const vc = createVendorCredit({
+        branchId: 'br_chennai',
+        vendorId: 'v_lumax',
+        date: daysAgo(9),
+        reason: 'Short shipment — 4 horn sets not delivered',
+        againstBillId: lumaxBill.id,
+        amountPaise: R(2_454),
+      });
+      setState((st) => ({
+        vendorCredits: st.vendorCredits.map((x) => (x.id === vc.id ? { ...x, status: 'refunded' as const } : x)),
+      }));
+    }
+  }
 
   // 5. Expenses paid directly
   const expenses = [

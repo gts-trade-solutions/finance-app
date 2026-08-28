@@ -13,7 +13,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import type {
   Account, ApiToken, ApprovalRule, AuditEvent, BankAccount, BankRule, BankTxn,
   Bill, Branch, Cheque, Contact, CreditNote, CustomFieldDef, DeliveryChallan,
-  Estimate, EwayBill, Expense, Gstr2bEntry, Invoice, Item, JournalEntry,
+  Estimate, EwayBill, Expense, Gstr2bEntry, HsnCode, Invoice, Item, JournalEntry,
   NumberSeriesState, Org, Payment, PurchaseOrder, RetainerInvoice, RoleName,
   SalesOrder, StockMove, User, VendorCredit, Warehouse, WorkflowRule,
 } from '../types';
@@ -35,6 +35,7 @@ export interface AppState {
   accounts: Account[];
   contacts: Contact[];
   items: Item[];
+  hsnCodes: HsnCode[];
 
   invoices: Invoice[];
   estimates: Estimate[];
@@ -88,6 +89,7 @@ export const EMPTY_COLLECTIONS = {
   accounts: [] as Account[],
   contacts: [] as Contact[],
   items: [] as Item[],
+  hsnCodes: [] as HsnCode[],
   invoices: [] as Invoice[],
   estimates: [] as Estimate[],
   salesOrders: [] as SalesOrder[],
