@@ -1,0 +1,267 @@
+import 'server-only';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bootstrap: create the organisation, its branches, users and master data.
+//
+// The master data is imported from lib/mock/seed/* rather than copied here.
+// Those files are plain arrays with no browser dependency, and reusing them
+// means the database holds exactly the book the client has already reviewed —
+// same customers, same items, same HSN codes — with no second copy to drift.
+//
+// This function does not create transactions. Invoices, bills and payments are
+// seeded separately, through the real services, so every one of them posts a
+// genuine balanced journal entry rather than being written straight to a table.
+// ─────────────────────────────────────────────────────────────────────────────
+
+import type { Trx } from '../db';
+import { installChartOfAccounts, accountIds, CODE } from '../ledger/chart-of-accounts';
+import { hashPassword } from '../auth/password';
+import { SEED_ORG, SEED_BRANCHES, SEED_USERS } from '../../mock/seed/org';
+import { SEED_CUSTOMERS, SEED_VENDORS } from '../../mock/seed/contacts';
+import { SEED_ITEMS } from '../../mock/seed/items';
+import { SEED_HSN_CODES } from '../../mock/seed/hsn';
+import { toSqlFromPaise } from '../money-sql';
+
+/** Maps the demo's string keys to the row ids the database assigned. */
+export interface IdMap {
+  orgId: number;
+  branches: Record<string, number>;
+  users: Record<string, number>;
+  contacts: Record<string, number>;
+  items: Record<string, number>;
+  accounts: Record<string, number>;
+  bankAccounts: Record<string, number>;
+}
+
+export interface BootstrapOptions {
+  /** Password given to every seeded user. Demo only. */
+  demoPassword?: string;
+  /** Skip the demo masters and create only the org, branches and admin. */
+  minimal?: boolean;
+  org?: { name: string; pan?: string | null; email?: string | null; phone?: string | null };
+  admin?: { name: string; email: string; password: string };
+}
+
+export async function bootstrap(trx: Trx, options: BootstrapOptions = {}): Promise<IdMap> {
+  const org = await trx
+    .insertInto('organizations')
+    .values({
+      name: options.org?.name ?? SEED_ORG.name,
+      legal_name: options.org?.name ?? SEED_ORG.name,
+      pan: options.org?.pan ?? SEED_ORG.pan,
+      gst_registration_type: SEED_ORG.gstRegistrationType,
+      aato_above_5cr: SEED_ORG.aatoAbove5Cr ? 1 : 0,
+      fiscal_year_start_month: 4,
+      base_currency: 'INR',
+      address: SEED_ORG.address,
+      email: options.org?.email ?? SEED_ORG.email,
+      phone: options.org?.phone ?? SEED_ORG.phone,
+      onboarded_at: new Date(),
+    })
+    .executeTakeFirstOrThrow();
+  const orgId = Number(org.insertId);
+
+  // ── Branches ───────────────────────────────────────────────────────────────
+  const branches: Record<string, number> = {};
+  for (const b of SEED_BRANCHES) {
+    const row = await trx
+      .insertInto('branches')
+      .values({
+        org_id: orgId,
+        name: b.name,
+        gstin: b.gstin,
+        state_code: b.stateCode,
+        address: b.address,
+        is_primary: b.isPrimary ? 1 : 0,
+        is_active: 1,
+      })
+      .executeTakeFirstOrThrow();
+    branches[b.id] = Number(row.insertId);
+  }
+
+  await installChartOfAccounts(trx, orgId);
+  const accounts = await accountIds(trx, orgId);
+
+  // ── Users ──────────────────────────────────────────────────────────────────
+  // One hash, reused across the demo users. Hashing argon2id eleven times costs
+  // about half a second each; doing it once is the difference between a seed
+  // that runs in two seconds and one that runs in eight.
+  const demoPassword = options.demoPassword ?? 'Finora@2026';
+  const sharedHash = await hashPassword(demoPassword);
+
+  const users: Record<string, number> = {};
+  const userList = options.admin
+    ? [{
+        id: 'u_admin',
+        name: options.admin.name,
+        email: options.admin.email.toLowerCase(),
+        role: 'admin' as const,
+        branchId: SEED_BRANCHES[0].id,
+        branchAccess: SEED_BRANCHES.map((b) => b.id),
+      }]
+    : SEED_USERS;
+
+  const adminHash = options.admin ? await hashPassword(options.admin.password) : sharedHash;
+
+  for (const u of userList) {
+    const row = await trx
+      .insertInto('users')
+      .values({
+        org_id: orgId,
+        name: u.name,
+        email: u.email.toLowerCase(),
+        password_hash: options.admin ? adminHash : sharedHash,
+        role: u.role,
+        home_branch_id: branches[u.branchId] ?? null,
+        is_active: 1,
+      })
+      .executeTakeFirstOrThrow();
+    const userId = Number(row.insertId);
+    users[u.id] = userId;
+
+    // Only users with more than one registration get explicit grants; the rest
+    // fall back to their home branch, which is what the API assumes.
+    const access = u.branchAccess ?? [];
+    if (access.length > 1) {
+      await trx
+        .insertInto('user_branches')
+        .values(access.filter((b) => branches[b]).map((b) => ({ user_id: userId, branch_id: branches[b] })))
+        .execute();
+    }
+  }
+
+  if (options.minimal) {
+    return { orgId, branches, users, contacts: {}, items: {}, accounts, bankAccounts: {} };
+  }
+
+  // ── HSN / SAC master ───────────────────────────────────────────────────────
+  await trx
+    .insertInto('hsn_codes')
+    .values(
+      SEED_HSN_CODES.map((h) => ({
+        org_id: orgId,
+        code: h.code,
+        kind: h.kind,
+        description: h.description,
+        gst_rate_pct: h.gstRatePct,
+        uqc: h.uqc ?? null,
+        is_active: h.isActive ? 1 : 0,
+      })),
+    )
+    .execute();
+
+  // ── Contacts ───────────────────────────────────────────────────────────────
+  const contacts: Record<string, number> = {};
+  for (const c of [...SEED_CUSTOMERS, ...SEED_VENDORS]) {
+    const row = await trx
+      .insertInto('contacts')
+      .values({
+        org_id: orgId,
+        kind: c.kind,
+        display_name: c.displayName,
+        legal_name: c.companyName,
+        gst_treatment: c.gstTreatment,
+        gstin: c.gstin,
+        pan: c.pan,
+        state_code: c.stateCode,
+        is_msme: c.isMsme ? 1 : 0,
+        msme_udyam_no: c.udyamNo ?? null,
+        email: c.email || null,
+        phone: c.phone || null,
+        billing_address: formatAddress(c.billingAddress),
+        shipping_address: c.shippingAddress ? formatAddress(c.shippingAddress) : null,
+        payment_terms: c.paymentTermsDays ? `net_${c.paymentTermsDays}` : null,
+        credit_limit: c.creditLimit != null ? toSqlFromPaise(c.creditLimit) : null,
+        opening_balance: toSqlFromPaise(c.openingBalance ?? 0),
+        tds_applicable: c.tdsSection || c.customerDeductsTds ? 1 : 0,
+        tds_section: c.tdsSection ?? null,
+        is_archived: c.isArchived ? 1 : 0,
+      })
+      .executeTakeFirstOrThrow();
+    contacts[c.id] = Number(row.insertId);
+  }
+
+  // ── Items ──────────────────────────────────────────────────────────────────
+  const items: Record<string, number> = {};
+  for (const i of SEED_ITEMS) {
+    const row = await trx
+      .insertInto('items')
+      .values({
+        org_id: orgId,
+        kind: i.kind,
+        name: i.name,
+        sku: i.sku,
+        hsn_sac: i.hsnSac,
+        uqc: i.uqc,
+        sale_price: toSqlFromPaise(i.salePricePaise),
+        purchase_price: toSqlFromPaise(i.purchasePricePaise),
+        gst_rate_pct: i.gstRatePct,
+        tax_pref: i.taxPref,
+        // The demo's account keys map onto codes in the standard chart.
+        sale_account_id: accounts[i.kind === 'service' ? CODE.SERVICE_INCOME : CODE.SALES],
+        purchase_account_id: accounts[CODE.PURCHASES],
+        description: i.description ?? null,
+        track_inventory: 0,
+        is_archived: i.isArchived ? 1 : 0,
+      })
+      .executeTakeFirstOrThrow();
+    items[i.id] = Number(row.insertId);
+  }
+
+  // ── Bank accounts ──────────────────────────────────────────────────────────
+  // Each needs its own ledger account, so the reconciliation screen can compare
+  // a statement against the books without guessing which account is which.
+  const bankSpecs = [
+    { key: 'ba_hdfc', kind: 'bank' as const, name: 'HDFC Bank – Current', bank: 'HDFC Bank', last4: '4412', ifsc: 'HDFC0000123', opening: 12_50_000_00, primary: true, code: '1211' },
+    { key: 'ba_icici', kind: 'bank' as const, name: 'ICICI Bank – Current', bank: 'ICICI Bank', last4: '8890', ifsc: 'ICIC0000456', opening: 4_20_000_00, primary: false, code: '1212' },
+    { key: 'ba_cash', kind: 'cash' as const, name: 'Cash in Hand', bank: null, last4: null, ifsc: null, opening: 35_000_00, primary: false, code: CODE.CASH },
+    { key: 'ba_card', kind: 'card' as const, name: 'HDFC Business Credit Card', bank: 'HDFC Bank', last4: '7731', ifsc: null, opening: 0, primary: false, code: CODE.CREDIT_CARD },
+    { key: 'ba_clearing', kind: 'clearing' as const, name: 'Payment Clearing Account', bank: null, last4: null, ifsc: null, opening: 0, primary: false, code: CODE.PAYMENT_CLEARING },
+  ];
+
+  const bankAccounts: Record<string, number> = {};
+  for (const b of bankSpecs) {
+    let ledgerId = accounts[b.code];
+    if (!ledgerId) {
+      const acct = await trx
+        .insertInto('accounts')
+        .values({
+          org_id: orgId,
+          code: b.code,
+          name: b.name,
+          type: b.kind === 'card' ? 'liability' : 'asset',
+          subtype: b.kind === 'card' ? 'credit_card' : 'bank',
+          is_system: 1,
+          is_active: 1,
+        })
+        .executeTakeFirstOrThrow();
+      ledgerId = Number(acct.insertId);
+      accounts[b.code] = ledgerId;
+    }
+
+    const row = await trx
+      .insertInto('bank_accounts')
+      .values({
+        org_id: orgId,
+        kind: b.kind,
+        name: b.name,
+        bank_name: b.bank,
+        account_last4: b.last4,
+        ifsc: b.ifsc,
+        ledger_account_id: ledgerId,
+        opening_balance: toSqlFromPaise(b.opening),
+        opening_date: SEED_ORG.fiscalYearStart,
+        is_primary: b.primary ? 1 : 0,
+        feed_connected: 0,
+        is_active: 1,
+      })
+      .executeTakeFirstOrThrow();
+    bankAccounts[b.key] = Number(row.insertId);
+  }
+
+  return { orgId, branches, users, contacts, items, accounts, bankAccounts };
+}
+
+function formatAddress(a: { line1: string; city?: string; stateCode?: string; pincode?: string }): string {
+  return [a.line1, a.city, a.pincode].filter(Boolean).join(', ');
+}

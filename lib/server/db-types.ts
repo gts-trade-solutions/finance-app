@@ -53,7 +53,7 @@ export interface ApiTokens {
 }
 
 export interface ApprovalRules {
-  approver_role: Generated<"accountant" | "admin" | "purchase" | "sales" | "viewer">;
+  approver_role: Generated<"accountant" | "admin" | "sales" | "staff" | "viewer">;
   created_at: Generated<Date>;
   document_type: string;
   id: Generated<number>;
@@ -265,7 +265,7 @@ export interface Contacts {
   credit_limit: Decimal | null;
   display_name: string;
   email: string | null;
-  gst_treatment: Generated<"composition" | "deemed_export" | "overseas" | "registered" | "sez" | "sez_developer" | "uin" | "unregistered">;
+  gst_treatment: Generated<"consumer" | "deemed_export" | "overseas" | "registered" | "registered_composition" | "sez" | "sez_developer" | "uin" | "unregistered">;
   gstin: string | null;
   id: Generated<number>;
   is_archived: Generated<number>;
@@ -929,7 +929,7 @@ export interface Users {
   org_id: number;
   password_hash: string | null;
   phone: string | null;
-  role: Generated<"accountant" | "admin" | "purchase" | "sales" | "viewer">;
+  role: Generated<"accountant" | "admin" | "sales" | "staff" | "viewer">;
   updated_at: Generated<Date>;
 }
 

@@ -19,9 +19,7 @@ import mysql from 'mysql2';
 import type { DB } from './db-types';
 
 declare global {
-  // eslint-disable-next-line no-var
   var __finoraPool: mysql.Pool | undefined;
-  // eslint-disable-next-line no-var
   var __finoraDb: Kysely<DB> | undefined;
 }
 
@@ -45,11 +43,16 @@ function createPool(): mysql.Pool {
     // enables it, and only against files on disk.
     multipleStatements: false,
     timezone: 'local',
-    // DECIMAL and BIGINT arrive as strings. That is the point: a BIGINT id past
-    // 2^53 and a DECIMAL amount both lose precision as JavaScript numbers.
+    // DECIMAL always arrives as a string — that is the whole point of storing
+    // money as DECIMAL, and money-sql.ts converts it to integer paise without
+    // ever going through a float.
     decimalNumbers: false,
+    // BIGINT arrives as a number, falling back to a string only when the value
+    // would actually lose precision past 2^53. Forcing every BIGINT to a string
+    // makes row ids strings too, which silently breaks any Map keyed on an id
+    // and contradicts the generated types, where they are numbers.
     supportBigNumbers: true,
-    bigNumberStrings: true,
+    bigNumberStrings: false,
     dateStrings: ['DATE'],
   });
 }

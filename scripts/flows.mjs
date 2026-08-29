@@ -23,7 +23,12 @@ const money = (t) => Number(String(t).replace(/[^0-9.]/g, '')) || 0;
 
 // ── sign in
 await page.goto(`${BASE}/login`, { waitUntil: 'networkidle' });
-await page.getByText('Arun Kumar').first().click();
+// Real credentials now — the role picker was a demo affordance and is gone.
+await page.locator('#email').fill('arun@raceautospares.in');
+await page.locator('#password').fill(process.env.DEMO_PASSWORD || 'Finora@2026');
+await page.getByRole('button', { name: /^Sign in$/ }).click();
+await page.waitForURL('**/dashboard', { timeout: 30000 });
+await page.waitForTimeout(1200);
 await page.waitForURL('**/dashboard');
 check('Sign in as Admin reaches the dashboard', page.url().includes('/dashboard'));
 
@@ -118,10 +123,21 @@ if (await matchBtn.count()) {
 }
 
 // ── 8. RBAC actually hides things
-await page.goto(`${BASE}/dashboard`, { waitUntil: 'networkidle' });
-await page.getByRole('button', { name: /Demo/ }).click();
-await page.getByRole('menuitem', { name: /Vikram Shetty/ }).click();
-await page.waitForTimeout(800);
+//
+// Roles come from the server on every page load, so switching one in the
+// browser no longer means anything — this signs in as the sales user instead,
+// which is the only way the role actually changes now.
+const signInAs = async (email) => {
+  await page.evaluate(() => fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }));
+  await page.goto(`${BASE}/login`, { waitUntil: 'networkidle' });
+  await page.locator('#email').fill(email);
+  await page.locator('#password').fill(process.env.DEMO_PASSWORD || 'Finora@2026');
+  await page.getByRole('button', { name: /^Sign in$/ }).click();
+  await page.waitForURL('**/dashboard', { timeout: 30000 });
+  await page.waitForTimeout(1000);
+};
+
+await signInAs('vikram@raceautospares.in');
 const bankingVisible = await page.locator('nav').getByText('Banking').count();
 check('Sales role loses the Banking module', bankingVisible === 0);
 
@@ -136,10 +152,7 @@ const branchFieldForSales = await page.getByText('Branch (GSTIN)').count();
 check('Single-branch user sees no branch picker', branchFieldForSales === 0);
 
 // ── 9. AI assistant answers from the live ledger
-await page.goto(`${BASE}/dashboard`, { waitUntil: 'networkidle' });
-await page.getByRole('button', { name: /Demo/ }).click();
-await page.getByRole('menuitem', { name: /Arun Kumar/ }).click();
-await page.waitForTimeout(600);
+await signInAs('arun@raceautospares.in');
 await page.goto(`${BASE}/sales/invoices/new`, { waitUntil: 'networkidle' });
 await page.waitForTimeout(700);
 check('Multi-branch user still gets the branch picker',

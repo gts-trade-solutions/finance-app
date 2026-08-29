@@ -18,6 +18,7 @@ import {
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { Badge } from '@/components/ui/badge';
 import { useAppStore } from '@/lib/store';
+import { auth } from '@/lib/api/client';
 import { hasPermission } from '@/lib/store/hooks';
 import { seedDatabase } from '@/lib/mock/seed';
 import { cn } from '@/lib/utils';
@@ -72,7 +73,6 @@ export function Topbar() {
   const router = useRouter();
   const { org, branches, activeBranchId, users, session } = useAppStore();
   const logout = useAppStore((s) => s.logout);
-  const login = useAppStore((s) => s.login);
   const [quickOpen, setQuickOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
@@ -197,27 +197,13 @@ export function Topbar() {
               <span className="hidden md:inline">Demo</span>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-60">
-              <DropdownMenuLabel>Sign in as</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              {users.map((u) => (
-                <DropdownMenuItem
-                  key={u.id}
-                  onClick={() => {
-                    login(u.id, u.role);
-                    toast.success(`Now viewing as ${u.name}`, { description: `Role: ${u.role}` });
-                  }}
-                >
-                  <span
-                    className="mr-2 grid size-5 place-items-center rounded-full text-[9px] font-semibold text-white"
-                    style={{ backgroundColor: u.avatarColor }}
-                  >
-                    {u.name.split(' ').map((n) => n[0]).join('')}
-                  </span>
-                  <span className="flex-1 truncate">{u.name}</span>
-                  <span className="text-[10px] capitalize text-muted-foreground">{u.role}</span>
-                </DropdownMenuItem>
-              ))}
-              <DropdownMenuSeparator />
+              {/*
+                The role switcher that used to live here has been removed. Roles
+                now come from the server on every page load, so switching one
+                locally changed which buttons rendered while the API went on
+                refusing the clicks — a control that lies is worse than no
+                control. Sign out and sign in as the other user instead.
+              */}
               <DropdownMenuLabel>Demo data</DropdownMenuLabel>
               <DropdownMenuItem
                 onClick={() => {
@@ -254,9 +240,17 @@ export function Topbar() {
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
-                onClick={() => {
+                onClick={async () => {
+                  // Revoke on the server first. Clearing the local store alone
+                  // would leave a working session cookie behind.
+                  try {
+                    await auth.logout();
+                  } catch {
+                    // Already expired, or the network is down — either way the
+                    // right move is still to drop the local session and leave.
+                  }
                   logout();
-                  router.replace('/login');
+                  window.location.href = '/login';
                 }}
               >
                 <LogOut className="mr-2 size-4" /> Sign out
