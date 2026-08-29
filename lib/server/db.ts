@@ -24,7 +24,7 @@ declare global {
 }
 
 function createPool(): mysql.Pool {
-  return mysql.createPool({
+  const pool = mysql.createPool({
     host: process.env.DB_HOST || 'localhost',
     port: Number(process.env.DB_PORT) || 3306,
     user: process.env.DB_USER || 'finora_user',
@@ -55,6 +55,20 @@ function createPool(): mysql.Pool {
     bigNumberStrings: false,
     dateStrings: ['DATE'],
   });
+
+  // READ COMMITTED rather than MySQL's default REPEATABLE READ.
+  //
+  // REPEATABLE READ holds gap locks on every range a statement scans, so two
+  // transactions touching neighbouring rows — not the same row, merely nearby
+  // in an index — can deadlock on each other. For short write transactions
+  // that take their own explicit row locks, which is what every posting here
+  // does, the extra isolation buys nothing and the gap locks cost real
+  // availability. It is also what PostgreSQL, Oracle and SQL Server default to.
+  pool.on('connection', (conn) => {
+    conn.query('SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED');
+  });
+
+  return pool;
 }
 
 export const pool: mysql.Pool = globalThis.__finoraPool ?? createPool();

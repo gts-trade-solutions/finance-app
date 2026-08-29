@@ -413,3 +413,105 @@ test('the same vendor invoice number cannot be entered twice', async () => {
   const second = await call('/api/bills', { cookie: admin, method: 'POST', body: JSON.stringify(payload) });
   assert.equal(second.status, 409, JSON.stringify(second.body));
 });
+
+test('imports a bank statement and skips a re-import', async () => {
+  const stamp = Date.now();
+  const rows = [
+    { date: '2026-08-01', narration: `API IMPORT ${stamp} A`, depositPaise: 25000 },
+    { date: '2026-08-02', narration: `API IMPORT ${stamp} B`, withdrawalPaise: 7500 },
+  ];
+
+  const first = await call('/api/banking/import', {
+    cookie: admin,
+    method: 'POST',
+    body: JSON.stringify({ bankAccountId: '1', filename: 'api.csv', rows }),
+  });
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  assert.equal(first.body.imported, 2);
+  assert.equal(first.body.duplicates, 0);
+
+  // The same file again: nothing new, nothing doubled.
+  const second = await call('/api/banking/import', {
+    cookie: admin,
+    method: 'POST',
+    body: JSON.stringify({ bankAccountId: '1', filename: 'api.csv', rows }),
+  });
+  assert.equal(second.body.imported, 0);
+  assert.equal(second.body.duplicates, 2);
+});
+
+test('categorising a bank line through the API posts an entry', async () => {
+  const stamp = Date.now();
+  await call('/api/banking/import', {
+    cookie: admin,
+    method: 'POST',
+    body: JSON.stringify({
+      bankAccountId: '1',
+      filename: 'cat.csv',
+      rows: [{ date: '2026-08-04', narration: `CATEGORISE ME ${stamp}`, withdrawalPaise: 4500 }],
+    }),
+  });
+
+  const list = await call('/api/banking/transactions?status=unmatched&limit=500', { cookie: admin });
+  const line = list.body.transactions.find((t: any) => t.narration.includes(`CATEGORISE ME ${stamp}`));
+  assert.ok(line, 'the imported line is listed');
+
+  // Account 39 is an expense account in the seeded chart.
+  const res = await call('/api/banking/transactions', {
+    cookie: admin,
+    method: 'POST',
+    body: JSON.stringify({ action: 'categorise', transactionId: line.id, accountId: '39' }),
+  });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.ok(res.body.journalEntryId);
+
+  const after = await call('/api/banking/transactions?status=matched&limit=500', { cookie: admin });
+  assert.ok(after.body.transactions.some((t: any) => t.id === line.id), 'now matched');
+});
+
+test('bank accounts report a balance and an unmatched count', async () => {
+  const res = await call('/api/banking/accounts', { cookie: admin });
+  assert.equal(res.status, 200);
+  assert.ok(res.body.accounts.length > 0);
+  const main = res.body.accounts[0];
+  assert.equal(typeof main.balancePaise, 'number');
+  assert.equal(typeof main.unmatchedCount, 'number');
+  // Automatic feeds need a licensed aggregator, so this must stay off.
+  assert.equal(main.feedConnected, false);
+});
+
+test('the statements agree with each other over the API', async () => {
+  const tb = await call('/api/reports?report=trial-balance&to=2027-03-31', { cookie: admin });
+  assert.equal(tb.status, 200, JSON.stringify(tb.body));
+  assert.equal(tb.body.balanced, true, `off by ${tb.body.totalDebit - tb.body.totalCredit}`);
+  assert.equal(tb.body.totalDebit, tb.body.totalCredit);
+
+  const bs = await call('/api/reports?report=balance-sheet&to=2027-03-31', { cookie: admin });
+  assert.equal(bs.body.balanced, true);
+  assert.equal(bs.body.totalAssets, bs.body.totalLiabilities + bs.body.totalEquity);
+
+  const pl = await call('/api/reports?report=profit-and-loss&from=2026-04-01&to=2027-03-31', { cookie: admin });
+  assert.equal(pl.status, 200);
+  // Two reports over one journal must reach the same profit.
+  assert.equal(pl.body.netProfit, bs.body.currentPeriodEarnings);
+});
+
+test('a profit and loss without a start date is refused', async () => {
+  const res = await call('/api/reports?report=profit-and-loss&to=2027-03-31', { cookie: admin });
+  assert.equal(res.status, 400);
+  assert.match(res.body.error, /needs a start date/);
+});
+
+test('ageing agrees with the control account', async () => {
+  const ar = await call('/api/reports?report=ar-ageing&to=2027-03-31', { cookie: admin });
+  assert.equal(ar.status, 200);
+  const tb = await call('/api/reports?report=trial-balance&to=2027-03-31', { cookie: admin });
+  const control = tb.body.rows.find((r: any) => r.code === '1100');
+  assert.equal(ar.body.grandTotalPaise, control?.balancePaise ?? 0);
+});
+
+test('a sales user cannot see the banking module', async () => {
+  const res = await call('/api/banking/accounts', { cookie: sales });
+  assert.equal(res.status, 403);
+  assert.match(res.body.error, /cannot view in banking/);
+});

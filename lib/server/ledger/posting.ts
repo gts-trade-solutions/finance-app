@@ -123,18 +123,32 @@ export async function allocateNumber(
   fyLabel: string,
   defaults: { prefix: string; padding?: number } = { prefix: docType },
 ): Promise<string> {
-  const existing = await trx
-    .selectFrom('number_series')
-    .select(['id', 'prefix', 'next_number', 'padding'])
+  // Same order as nextSequence, and for the same reason: locking a row that
+  // does not exist yet locks the gap around it, and two people starting
+  // different series in a new financial year would deadlock on each other.
+  const updated = await trx
+    .updateTable('number_series')
+    .set((eb) => ({ next_number: eb('next_number', '+', 1) }))
     .where('org_id', '=', orgId)
     .where('branch_id', '=', branchId)
     .where('doc_type', '=', docType)
     .where('fy_label', '=', fyLabel)
-    .forUpdate()
     .executeTakeFirst();
 
-  if (!existing) {
-    const padding = defaults.padding ?? 4;
+  if (Number(updated.numUpdatedRows ?? 0) > 0) {
+    const row = await trx
+      .selectFrom('number_series')
+      .select(['prefix', 'next_number', 'padding'])
+      .where('org_id', '=', orgId)
+      .where('branch_id', '=', branchId)
+      .where('doc_type', '=', docType)
+      .where('fy_label', '=', fyLabel)
+      .executeTakeFirstOrThrow();
+    return format(row.prefix, fyLabel, row.next_number - 1, row.padding);
+  }
+
+  const padding = defaults.padding ?? 4;
+  try {
     await trx
       .insertInto('number_series')
       .values({
@@ -148,15 +162,10 @@ export async function allocateNumber(
       })
       .execute();
     return format(defaults.prefix, fyLabel, 1, padding);
+  } catch (err) {
+    if ((err as { code?: string }).code !== 'ER_DUP_ENTRY') throw err;
+    return allocateNumber(trx, orgId, branchId, docType, fyLabel, defaults);
   }
-
-  await trx
-    .updateTable('number_series')
-    .set({ next_number: existing.next_number + 1 })
-    .where('id', '=', existing.id)
-    .execute();
-
-  return format(existing.prefix, fyLabel, existing.next_number, existing.padding);
 }
 
 /** INV/26-27/0042 — prefix, financial year, zero-padded sequence. */
@@ -174,30 +183,44 @@ function format(prefix: string, fyLabel: string, n: number, padding: number): st
  * other needs.
  */
 export async function nextSequence(trx: Trx, orgId: number, name: string): Promise<number> {
-  // Create the row if it is missing, then read it back under a lock. The
-  // insert is a no-op when the row already exists.
-  await sql`
-    INSERT INTO sequences (org_id, name, next_value) VALUES (${orgId}, ${name}, 1)
-    ON DUPLICATE KEY UPDATE next_value = next_value
-  `.execute(trx);
-
-  const row = await trx
-    .selectFrom('sequences')
-    .select('next_value')
-    .where('org_id', '=', orgId)
-    .where('name', '=', name)
-    .forUpdate()
-    .executeTakeFirstOrThrow();
-
-  const value = Number(row.next_value);
-  await trx
+  // Update first, insert only if there was nothing to update.
+  //
+  // The obvious order — SELECT ... FOR UPDATE, then INSERT if missing — takes a
+  // *gap* lock when the row does not exist yet, covering the whole index range
+  // rather than one row. Two transactions creating different counters in the
+  // same range then deadlock on each other's gaps. Updating first locks exactly
+  // one existing row and nothing else.
+  const updated = await trx
     .updateTable('sequences')
-    .set({ next_value: value + 1 })
+    .set((eb) => ({ next_value: eb('next_value', '+', 1) }))
     .where('org_id', '=', orgId)
     .where('name', '=', name)
-    .execute();
+    .executeTakeFirst();
 
-  return value;
+  if (Number(updated.numUpdatedRows ?? 0) > 0) {
+    const row = await trx
+      .selectFrom('sequences')
+      .select('next_value')
+      .where('org_id', '=', orgId)
+      .where('name', '=', name)
+      .executeTakeFirstOrThrow();
+    // We already incremented, so the value we took is one below what is stored.
+    return Number(row.next_value) - 1;
+  }
+
+  // First use of this counter. A concurrent transaction may be inserting the
+  // same row right now; if it wins, the duplicate-key error sends us back to
+  // the update path rather than failing the caller's work.
+  try {
+    await trx
+      .insertInto('sequences')
+      .values({ org_id: orgId, name, next_value: 2 })
+      .execute();
+    return 1;
+  } catch (err) {
+    if ((err as { code?: string }).code !== 'ER_DUP_ENTRY') throw err;
+    return nextSequence(trx, orgId, name);
+  }
 }
 
 /** Peek at the next number without consuming it, for a form's default value. */
