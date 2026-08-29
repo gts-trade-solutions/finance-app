@@ -91,7 +91,7 @@ export interface BankAccounts {
   ledger_account_id: number;
   name: string;
   opening_balance: Generated<Decimal>;
-  opening_date: ColumnType<string, string, string>;
+  opening_date: ColumnType<string | null, string | null, string | null>;
   org_id: number;
   updated_at: Generated<Date>;
 }
@@ -119,8 +119,8 @@ export interface BankStatementImports {
   id: Generated<number>;
   imported_by_user_id: number | null;
   org_id: number;
-  period_from: ColumnType<string, string, string>;
-  period_to: ColumnType<string, string, string>;
+  period_from: ColumnType<string | null, string | null, string | null>;
+  period_to: ColumnType<string | null, string | null, string | null>;
   rows_duplicate: Generated<number>;
   rows_imported: Generated<number>;
   rows_total: Generated<number>;
@@ -756,7 +756,7 @@ export interface PurchaseOrders {
   cgst: Generated<Decimal>;
   created_at: Generated<Date>;
   created_by_user_id: number | null;
-  expected_date: ColumnType<string, string, string>;
+  expected_date: ColumnType<string | null, string | null, string | null>;
   id: Generated<number>;
   igst: Generated<Decimal>;
   notes: string | null;
@@ -778,11 +778,11 @@ export interface RecurringInvoices {
   branch_id: number;
   created_at: Generated<Date>;
   customer_id: number;
-  end_date: ColumnType<string, string, string>;
+  end_date: ColumnType<string | null, string | null, string | null>;
   frequency: Generated<"monthly" | "quarterly" | "weekly" | "yearly">;
   id: Generated<number>;
   is_active: Generated<number>;
-  last_generated_at: ColumnType<string, string, string>;
+  last_generated_at: ColumnType<string | null, string | null, string | null>;
   next_run: ColumnType<string, string, string>;
   org_id: number;
   payment_terms: string | null;
@@ -798,11 +798,11 @@ export interface RecurringJournals {
   created_at: Generated<Date>;
   credit_account_id: number;
   debit_account_id: number;
-  end_date: ColumnType<string, string, string>;
+  end_date: ColumnType<string | null, string | null, string | null>;
   frequency: Generated<"monthly" | "quarterly" | "yearly">;
   id: Generated<number>;
   is_active: Generated<number>;
-  last_posted_at: ColumnType<string, string, string>;
+  last_posted_at: ColumnType<string | null, string | null, string | null>;
   memo: string | null;
   name: string;
   next_run: ColumnType<string, string, string>;
@@ -855,7 +855,7 @@ export interface SalesOrders {
   created_at: Generated<Date>;
   created_by_user_id: number | null;
   customer_id: number;
-  expected_ship_date: ColumnType<string, string, string>;
+  expected_ship_date: ColumnType<string | null, string | null, string | null>;
   id: Generated<number>;
   igst: Generated<Decimal>;
   invoiced_amount: Generated<Decimal>;
@@ -877,6 +877,13 @@ export interface SchemaMigrations {
   checksum: string;
   duration_ms: Generated<number>;
   filename: string;
+}
+
+export interface Sequences {
+  name: string;
+  next_value: Generated<number>;
+  org_id: number;
+  updated_at: Generated<Date>;
 }
 
 export interface Sessions {
@@ -904,7 +911,7 @@ export interface Settings {
 export interface TransactionLocks {
   id: Generated<number>;
   locked_by_user_id: number | null;
-  locked_upto: ColumnType<string, string, string>;
+  locked_upto: ColumnType<string | null, string | null, string | null>;
   module: "accountant" | "banking" | "purchases" | "sales";
   org_id: number;
   reason: string | null;
@@ -1010,6 +1017,7 @@ export interface DB {
   sales_order_lines: SalesOrderLines;
   sales_orders: SalesOrders;
   schema_migrations: SchemaMigrations;
+  sequences: Sequences;
   sessions: Sessions;
   settings: Settings;
   transaction_locks: TransactionLocks;

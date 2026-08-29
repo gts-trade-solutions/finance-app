@@ -30,7 +30,7 @@ const conn = await mysql.createConnection({
 });
 
 const [rows] = await conn.query(
-  `SELECT table_name AS t, column_name AS c
+  `SELECT table_name AS t, column_name AS c, is_nullable AS nullable
      FROM information_schema.columns
     WHERE table_schema = ? AND data_type = 'date'
     ORDER BY table_name, column_name`,
@@ -39,8 +39,16 @@ const [rows] = await conn.query(
 await conn.end();
 
 // ColumnType<select, insert, update> — a string in all three directions.
-const DATE_TYPE = 'ColumnType<string, string, string>';
-const columns = Object.fromEntries(rows.map(({ t, c }) => [`${t}.${c}`, DATE_TYPE]));
+//
+// Nullability has to be carried through. Overriding a NULL-able column with a
+// bare `string` makes Kysely treat it as required on insert, so every insert
+// that legitimately omits an optional date stops compiling.
+const columns = Object.fromEntries(
+  rows.map(({ t, c, nullable }) => {
+    const type = nullable === 'YES' ? 'string | null' : 'string';
+    return [`${t}.${c}`, `ColumnType<${type}, ${type}, ${type}>`];
+  }),
+);
 
 console.log(`  ${rows.length} DATE column(s) overridden to string`);
 

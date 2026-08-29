@@ -11,7 +11,7 @@
     "db:status": "node scripts/migrate.mjs --status",
     "db:reset": "node scripts/migrate.mjs --reset",
     "db:types": "node scripts/gen-db-types.mjs",
-    "test:unit": "tsx --conditions=react-server --env-file=.env.local --test scripts/tests/money-sql.test.ts scripts/tests/posting.test.ts",
+    "test:unit": "tsx --conditions=react-server --env-file=.env.local --test scripts/tests/money-sql.test.ts scripts/tests/posting.test.ts scripts/tests/purchases.test.ts",
     "smoke": "node scripts/smoke.mjs",
     "flows": "node scripts/flows.mjs",
     "db:seed": "tsx --conditions=react-server --env-file=.env.local scripts/seed.ts",

@@ -164,6 +164,42 @@ function format(prefix: string, fyLabel: string, n: number, padding: number): st
   return `${prefix}/${fyLabel}/${String(n).padStart(padding, '0')}`;
 }
 
+/**
+ * Take the next value from a named per-organisation counter.
+ *
+ * One row, one lock. The obvious alternative — SELECT MAX(entry_no) + 1 ...
+ * FOR UPDATE — is correct in isolation and deadlocks under load, because
+ * FOR UPDATE on an aggregate takes next-key locks across everything InnoDB
+ * scans and two concurrent posts can each end up holding part of what the
+ * other needs.
+ */
+export async function nextSequence(trx: Trx, orgId: number, name: string): Promise<number> {
+  // Create the row if it is missing, then read it back under a lock. The
+  // insert is a no-op when the row already exists.
+  await sql`
+    INSERT INTO sequences (org_id, name, next_value) VALUES (${orgId}, ${name}, 1)
+    ON DUPLICATE KEY UPDATE next_value = next_value
+  `.execute(trx);
+
+  const row = await trx
+    .selectFrom('sequences')
+    .select('next_value')
+    .where('org_id', '=', orgId)
+    .where('name', '=', name)
+    .forUpdate()
+    .executeTakeFirstOrThrow();
+
+  const value = Number(row.next_value);
+  await trx
+    .updateTable('sequences')
+    .set({ next_value: value + 1 })
+    .where('org_id', '=', orgId)
+    .where('name', '=', name)
+    .execute();
+
+  return value;
+}
+
 /** Peek at the next number without consuming it, for a form's default value. */
 export async function peekNumber(
   trx: Trx,
@@ -230,19 +266,7 @@ export async function postEntry(trx: Trx, input: PostEntryInput): Promise<Posted
     );
   }
 
-  // entry_no is sequential per organisation, allocated under a lock for the
-  // same reason document numbers are: two concurrent posts must not collide.
-  //
-  // MySQL widens MAX(int) + 1 to BIGINT, and the pool returns BIGINT as a
-  // string to protect ids past 2^53 — so this arrives as '1', not 1, and has
-  // to be coerced. Skipping that hands every caller a string in a number field.
-  const { rows: seq } = await sql<{ next: string | number }>`
-    SELECT COALESCE(MAX(entry_no), 0) + 1 AS next
-    FROM journal_entries
-    WHERE org_id = ${input.orgId}
-    FOR UPDATE
-  `.execute(trx);
-  const next = Number(seq[0]?.next ?? 1);
+  const next = await nextSequence(trx, input.orgId, 'journal_entry');
 
   const entry = await trx
     .insertInto('journal_entries')

@@ -319,3 +319,97 @@ test('signing out invalidates the session immediately', async () => {
   // browser — which is the thing a stateless JWT cannot promise.
   assert.equal((await call('/api/auth/me', { cookie })).status, 401);
 });
+
+test('records a bill and a payment against it through the API', async () => {
+  const bill = await call('/api/bills', {
+    cookie: admin,
+    method: 'POST',
+    body: JSON.stringify({
+      branchId: '1', vendorId: '16', vendorInvoiceNo: `API-${Date.now()}`,
+      date: '2026-08-07', dueDate: '2026-09-06',
+      lines: [{ description: 'Parts', qty: 10, ratePaise: 60000, gstRatePct: 18 }],
+    }),
+  });
+  assert.equal(bill.status, 200, JSON.stringify(bill.body));
+  assert.ok(bill.body.internalNo.startsWith('BILL/'));
+  assert.ok(bill.body.journalEntryId, 'the bill posted an entry');
+
+  const pay = await call('/api/payments', {
+    cookie: admin,
+    method: 'POST',
+    body: JSON.stringify({
+      kind: 'made', branchId: '1', contactId: '16', date: '2026-08-10',
+      mode: 'neft', amountPaise: bill.body.totalPaise, bankAccountId: '1',
+      allocations: [{ targetType: 'bill', targetId: bill.body.id, amountPaise: bill.body.totalPaise }],
+    }),
+  });
+  assert.equal(pay.status, 200, JSON.stringify(pay.body));
+  assert.equal(pay.body.unappliedPaise, 0);
+
+  const bills = await call(`/api/bills?search=${encodeURIComponent(bill.body.internalNo)}`, { cookie: admin });
+  const found = bills.body.bills.find((b: any) => b.id === bill.body.id);
+  assert.equal(found.status, 'paid', 'the bill is settled');
+  assert.equal(found.balancePaise, 0);
+});
+
+test('a receipt cannot be allocated against a bill', async () => {
+  // Crossing the two would credit a customer for paying a supplier.
+  const res = await call('/api/payments', {
+    cookie: admin,
+    method: 'POST',
+    body: JSON.stringify({
+      kind: 'received', branchId: '1', contactId: '1', date: '2026-08-10',
+      mode: 'neft', amountPaise: 1000, bankAccountId: '1',
+      allocations: [{ targetType: 'bill', targetId: '1', amountPaise: 1000 }],
+    }),
+  });
+  assert.equal(res.status, 400);
+  assert.match(res.body.error, /receipt cannot be allocated against a bill/);
+});
+
+test('records an expense and posts it', async () => {
+  const res = await call('/api/expenses', {
+    cookie: admin,
+    method: 'POST',
+    body: JSON.stringify({
+      branchId: '1', date: '2026-08-07', accountId: '39',
+      paidThroughBankAccountId: '1', amountPaise: 118000, gstRatePct: 18,
+      notes: 'API test expense',
+    }),
+  });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.totalPaise, 118000);
+  assert.ok(res.body.journalEntryId);
+
+  const list = await call('/api/expenses?limit=5', { cookie: admin });
+  assert.equal(list.status, 200);
+  assert.ok(list.body.expenses.length > 0);
+});
+
+test('a sales user cannot record a purchase', async () => {
+  const res = await call('/api/bills', {
+    cookie: sales,
+    method: 'POST',
+    body: JSON.stringify({
+      branchId: '1', vendorId: '16', vendorInvoiceNo: 'NOPE-1',
+      date: '2026-08-07', dueDate: '2026-09-06',
+      lines: [{ description: 'x', qty: 1, ratePaise: 1000 }],
+    }),
+  });
+  assert.equal(res.status, 403);
+  assert.match(res.body.error, /cannot create in purchases/);
+});
+
+test('the same vendor invoice number cannot be entered twice', async () => {
+  // The check that stops a duplicate payment going out.
+  const dup = `DUP-${Date.now()}`;
+  const payload = {
+    branchId: '1', vendorId: '16', vendorInvoiceNo: dup,
+    date: '2026-08-07', dueDate: '2026-09-06',
+    lines: [{ description: 'Parts', qty: 1, ratePaise: 50000, gstRatePct: 18 }],
+  };
+  const first = await call('/api/bills', { cookie: admin, method: 'POST', body: JSON.stringify(payload) });
+  assert.equal(first.status, 200);
+  const second = await call('/api/bills', { cookie: admin, method: 'POST', body: JSON.stringify(payload) });
+  assert.equal(second.status, 409, JSON.stringify(second.body));
+});
