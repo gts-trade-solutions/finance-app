@@ -229,6 +229,109 @@ export const invoices = {
     api.post<{ id: string; status: string }>(`/api/invoices/${id}`, { action: 'void', reason }),
 };
 
+export interface BillListItem {
+  id: string;
+  internalNo: string;
+  vendorInvoiceNo: string;
+  date: string;
+  dueDate: string;
+  status: string;
+  isRcm: boolean;
+  vendorId: string;
+  vendorName: string;
+  isMsme: boolean;
+  subtotalPaise: number;
+  totalPaise: number;
+  amountPaidPaise: number;
+  balancePaise: number;
+  tdsPaise: number;
+  tdsSection: string | null;
+}
+
+export interface BillListResponse {
+  bills: BillListItem[];
+  summary: { count: number; totalPaise: number; duePaise: number };
+}
+
+export interface BillDetail {
+  id: string;
+  internalNo: string;
+  vendorInvoiceNo: string;
+  date: string;
+  dueDate: string;
+  status: string;
+  isRcm: boolean;
+  placeOfSupply: string;
+  supplyType: string;
+  vendor: { id: string; name: string; gstin: string | null; address: string | null; isMsme: boolean };
+  branch: { id: string; name: string; gstin: string | null };
+  notes: string | null;
+  subtotalPaise: number;
+  tax: { cgstPaise: number; sgstPaise: number; igstPaise: number; cessPaise: number };
+  tdsPaise: number;
+  tdsSection: string | null;
+  roundOffPaise: number;
+  totalPaise: number;
+  amountPaidPaise: number;
+  balancePaise: number;
+  lines: {
+    id: string; accountName: string | null; description: string | null; hsnSac: string | null;
+    qty: number; uqc: string | null; ratePaise: number; discountPct: number; gstRatePct: number;
+    taxablePaise: number; cgstPaise: number; sgstPaise: number; igstPaise: number;
+    totalPaise: number; itcEligibility: string;
+  }[];
+  payments: { id: string; number: string; date: string; mode: string; amountPaise: number }[];
+  journalEntryId: string | null;
+  journalLines: InvoiceJournalLine[];
+}
+
+export interface ExpenseListItem {
+  id: string;
+  number: string;
+  date: string;
+  accountId: string;
+  accountName: string;
+  accountCode: string;
+  paidThrough: string;
+  vendorName: string | null;
+  reference: string | null;
+  notes: string | null;
+  status: string;
+  itcEligibility: string;
+  isBillable: boolean;
+  amountPaise: number;
+  taxPaise: number;
+  totalPaise: number;
+}
+
+export const bills = {
+  list: (params?: {
+    from?: string; to?: string; status?: string; vendorId?: string;
+    search?: string; limit?: number; offset?: number;
+  }) => api.get<BillListResponse>('/api/bills', params),
+  get: (id: string) => api.get<BillDetail>(`/api/bills/${id}`),
+  create: (input: unknown) =>
+    api.post<{ id: string; internalNo: string; totalPaise: number; journalEntryId: string | null }>(
+      '/api/bills',
+      input,
+    ),
+  void: (id: string, reason?: string) =>
+    api.post<{ id: string; status: string }>(`/api/bills/${id}`, { action: 'void', reason }),
+};
+
+export const expenses = {
+  list: (params?: { from?: string; to?: string; accountId?: string; limit?: number }) =>
+    api.get<{ expenses: ExpenseListItem[]; summary: { count: number; totalPaise: number } }>(
+      '/api/expenses',
+      params,
+    ),
+  create: (input: unknown) =>
+    api.post<{ id: string; number: string; totalPaise: number; journalEntryId: string }>(
+      '/api/expenses',
+      input,
+    ),
+};
+
 export const masters = {
   load: (params?: { date?: string; branchId?: string }) =>
     api.get<Record<string, never[]> & { nextInvoiceNumber: string | null }>('/api/masters', params),

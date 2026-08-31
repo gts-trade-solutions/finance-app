@@ -22,7 +22,8 @@ import {
   branchOptionsForUser, dueDateFor, termsForDays, termsOptions, userBranches,
   vendorOptions,
 } from '@/lib/options';
-import { createBill, vendorFyTaxable } from '@/lib/services/purchases';
+import { vendorFyTaxable } from '@/lib/services/purchases';
+import { api, ApiError } from '@/lib/api/client';
 import { peekNumber } from '@/lib/series';
 import { FY_SHORT } from '@/lib/mock/seed/org';
 import { computeLineTax, stateName, sumTax, totalTaxPaise } from '@/lib/tax/gst';
@@ -113,7 +114,7 @@ export default function NewBillPage() {
 
   const valid = !!vendorId && !!vendorInvoiceNo.trim() && lines.some((l) => l.qty > 0 && l.ratePaise > 0);
 
-  const save = () => {
+  const save = async () => {
     if (!valid) {
       toast.error('Missing required details', {
         description: "Pick a vendor, enter their invoice number, and add at least one line.",
@@ -121,34 +122,54 @@ export default function NewBillPage() {
       return;
     }
     setSaving(true);
-    const bill = createBill({
-      branchId,
-      vendorId,
-      vendorInvoiceNo,
-      date,
-      dueDate,
-      isRcm,
-      tdsSectionOverride: tdsOverride || undefined,
-      lines: lines
-        .filter((l) => l.qty > 0)
-        .map((l) => ({
-          itemId: l.itemId,
-          description: l.description,
-          hsnSac: l.hsnSac,
-          qty: l.qty,
-          uqc: l.uqc,
-          ratePaise: l.ratePaise,
-          discountPct: effectiveDiscountPct(l),
-          gstRatePct: l.gstRatePct,
-          itcEligibility: itc[l.key] ?? 'eligible',
-        })),
+
+    // The server recomputes the tax, the TDS against the year's running total
+    // and the input credit, then posts the entry. The panel above is a preview
+    // of that — the browser cannot know what this vendor has already been
+    // billed this year, and TDS thresholds are annual.
+    const created = await api
+      .post<{ id: string; internalNo: string; totalPaise: number; journalEntryId: string | null }>(
+        '/api/bills',
+        {
+          branchId,
+          vendorId,
+          vendorInvoiceNo,
+          date,
+          dueDate,
+          isRcm,
+          tdsSectionOverride: tdsOverride || undefined,
+          lines: lines
+            .filter((l) => l.qty > 0)
+            .map((l) => ({
+              itemId: l.itemId,
+              description: l.description,
+              hsnSac: l.hsnSac || undefined,
+              qty: l.qty,
+              uqc: l.uqc,
+              ratePaise: l.ratePaise,
+              discountPct: effectiveDiscountPct(l),
+              gstRatePct: l.gstRatePct,
+              itcEligibility: itc[l.key] ?? 'eligible',
+            })),
+        },
+      )
+      .catch((err: unknown) => {
+        setSaving(false);
+        toast.error(err instanceof ApiError ? err.message : 'Could not record the bill.', {
+          description:
+            err instanceof ApiError && err.details
+              ? Object.values(err.details).join(' ')
+              : 'Nothing was saved.',
+        });
+        return null;
+      });
+
+    if (!created) return;
+
+    toast.success(`Bill ${created.internalNo} recorded`, {
+      description: 'Posted to the ledger — open the Journal tab to see the entry.',
     });
-    toast.success(`Bill ${bill.internalNo} recorded`, {
-      description: totals.tds.applies
-        ? `TDS of ${formatINR(bill.tdsPaise)} withheld — ${totals.tds.reason}`
-        : 'Posted to the ledger with input credit claimed.',
-    });
-    router.push(`/purchases/bills/${bill.id}`);
+    router.push(`/purchases/bills/${created.id}`);
   };
 
   return (

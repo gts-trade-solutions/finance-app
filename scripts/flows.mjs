@@ -562,7 +562,44 @@ for (const href of ['/purchases/bills', '/sales/estimates', '/accountant/journal
     await page.locator('[data-slot="date-range-trigger"]').count() >= 1);
 }
 
-// ── 17. Demo reset restores the seed
+// ── 17. Purchases, served by the API
+await page.goto(`${BASE}/purchases/bills`, { waitUntil: 'networkidle' });
+await page.waitForSelector('tbody tr', { timeout: 25000 });
+const billRows = await page.locator('tbody tr').count();
+check('Bills list loads from the database', billRows > 0, `${billRows} bills`);
+
+const billsBody = await page.locator('main').innerText();
+check('MSME suppliers are flagged on the list', /MSME/.test(billsBody));
+check('Reverse-charge bills are flagged', /RCM/.test(billsBody));
+
+await page.locator('tbody tr').first().click();
+await page.waitForURL((u) => /\/purchases\/bills\/\d+$/.test(u.toString()), { timeout: 25000 });
+await page.waitForTimeout(1200);
+
+// Tabs must sit in a row; Base UI reports orientation on data-orientation, and
+// the variants were matching an attribute that never existed.
+const tabsRow = await page.evaluate(() => {
+  const r = document.querySelector('[data-slot="tabs"]');
+  return r ? getComputedStyle(r).flexDirection : null;
+});
+check('Document tabs lay out horizontally', tabsRow === 'column', `root flex-direction ${tabsRow}`);
+
+await page.getByRole('tab', { name: 'Journal' }).click();
+await page.waitForTimeout(700);
+const billJournal = await page.locator('main').innerText();
+check('Bill shows the entry it posted', /Accounts Payable/.test(billJournal));
+check('That entry balances', /Balanced/.test(billJournal));
+check('Input credit is shown as an asset where claimable',
+  /Input (CGST|SGST|IGST)|Purchases/.test(billJournal));
+
+await page.goto(`${BASE}/purchases/expenses`, { waitUntil: 'networkidle' });
+await page.waitForSelector('tbody tr', { timeout: 25000 });
+const expRows = await page.locator('tbody tr').count();
+check('Expenses list loads from the database', expRows > 0, `${expRows} expenses`);
+check('Expenses show whether the credit was claimed',
+  /Claimed|In cost|No GST/.test(await page.locator('main').innerText()));
+
+// ── 18. Demo reset restores the seed
 await page.getByRole('button', { name: /Demo/ }).click();
 await page.getByRole('menuitem', { name: /Reset to seed data/ }).click();
 await page.waitForTimeout(1200);

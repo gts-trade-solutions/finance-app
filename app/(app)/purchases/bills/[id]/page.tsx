@@ -1,222 +1,373 @@
 'use client';
 
+// One bill, from the database.
+//
+// The Journal tab matters more here than on an invoice, because the buy side's
+// entry is where input credit either becomes an asset or disappears into cost,
+// and where reverse charge shows both halves. Seeing it is the only way to
+// check that a blocked credit was actually blocked.
+
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useState } from 'react';
-import { Ban, Banknote, BookOpen } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Ban, FileText, Loader2, MoreHorizontal, Receipt } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import { PageHeader } from '@/components/shared/page-header';
 import { Money } from '@/components/shared/money';
 import { StatusBadge } from '@/components/shared/status-badge';
-import { TotalRow } from '@/components/shared/form-bits';
-import { JournalTable } from '@/components/shared/journal-table';
-import { useAppStore } from '@/lib/store';
+import { ReportTable } from '@/components/shared/report-shell';
+import { AsyncPage } from '@/components/shared/async-state';
+import { Field } from '@/components/shared/form-bits';
 import { usePermission } from '@/lib/store/hooks';
-import { billBalance, contactName } from '@/lib/selectors';
-import { voidBill } from '@/lib/services/purchases';
+import { bills as billApi, type BillDetail } from '@/lib/api/client';
+import { useApi, useApiAction } from '@/lib/api/use-api';
+import { today } from '@/lib/selectors';
+import { formatINR } from '@/lib/money';
+
+const d = (s: string) =>
+  new Date(s).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+
+const ITC_LABEL: Record<string, string> = {
+  eligible: 'Credit claimed',
+  ineligible: 'Blocked — in cost',
+  capital_goods: 'Capital goods',
+};
 
 export default function BillDetailPage() {
-  const { id } = useParams<{ id: string }>();
-  const s = useAppStore();
-  const canVoid = usePermission('purchases', 'void');
-  const [voidOpen, setVoidOpen] = useState(false);
+  const params = useParams<{ id: string }>();
+  const canEdit = usePermission('purchases', 'edit');
+
+  const state = useApi<BillDetail>(() => billApi.get(params.id), [params.id]);
+  const voidIt = useApiAction(billApi.void);
+  const [voiding, setVoiding] = useState(false);
   const [reason, setReason] = useState('');
 
-  const bill = s.bills.find((b) => b.id === id);
-  if (!bill) return <Card className="p-8 text-center text-sm text-muted-foreground">Bill not found.</Card>;
-
-  const vendor = s.contacts.find((c) => c.id === bill.vendorId);
-  const entry = s.entries.find((e) => e.id === bill.journalEntryId);
-  const reversal = s.entries.find((e) => e.isReversalOf === bill.journalEntryId);
-  const payments = s.payments.filter((p) =>
-    p.allocations.some((a) => a.targetType === 'bill' && a.targetId === bill.id),
-  );
-
   return (
-    <>
-      <PageHeader
-        title={bill.internalNo}
-        description={`${contactName(s, bill.vendorId)} · vendor invoice ${bill.number}`}
-        actions={
+    <AsyncPage state={state}>
+      {(bill) => {
+        const dr = bill.journalLines.reduce((t, l) => t + l.debitPaise, 0);
+        const cr = bill.journalLines.reduce((t, l) => t + l.creditPaise, 0);
+
+        // Section 43B(h): an unpaid MSME supplier past 45 days makes the whole
+        // expense disallowable, so this is a tax exposure, not a late payment.
+        const age = Math.floor(
+          (new Date(today()).getTime() - new Date(bill.date).getTime()) / 86_400_000,
+        );
+        const msmeRisk = bill.vendor.isMsme && bill.balancePaise > 0 && age >= 38;
+
+        return (
           <>
-            <StatusBadge status={bill.status} className="mr-1" />
-            {billBalance(bill) > 0 && bill.status !== 'void' && (
-              <Button size="sm" asChild className="gap-1.5">
-                <Link href={`/purchases/payments/new?bill=${bill.id}`}><Banknote className="size-3.5" /> Pay</Link>
-              </Button>
-            )}
-            {canVoid && bill.status !== 'void' && (
-              <Button variant="destructive" size="sm" onClick={() => setVoidOpen(true)} className="gap-1.5">
-                <Ban className="size-3.5" /> Void
-              </Button>
-            )}
-          </>
-        }
-      />
+            <PageHeader
+              title={bill.internalNo}
+              description={`${bill.vendor.name} · their invoice ${bill.vendorInvoiceNo} · dated ${d(bill.date)}`}
+              actions={
+                <>
+                  <Button variant="outline" size="sm" asChild>
+                    <Link href="/purchases/bills"><ArrowLeft className="mr-1.5 size-3.5" /> Bills</Link>
+                  </Button>
+                  {canEdit && bill.status !== 'void' && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger aria-label="More actions" className="grid size-9 place-items-center rounded-[3px] border transition-colors hover:bg-accent">
+                        <MoreHorizontal className="size-4" />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => setVoiding(true)}>
+                          <Ban className="mr-2 size-4" /> Void bill
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )}
+                </>
+              }
+            />
 
-      <div className="grid gap-4 lg:grid-cols-3">
-        <Card className="p-5 lg:col-span-2">
-          <h3 className="mb-3 text-sm font-semibold">Line items</h3>
-          <div className="overflow-x-auto rounded-lg border thin-scroll">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
-                  <th className="px-3 py-2 text-left font-semibold">Description</th>
-                  <th className="px-3 py-2 text-left font-semibold">HSN</th>
-                  <th className="px-3 py-2 text-right font-semibold">Qty</th>
-                  <th className="px-3 py-2 text-right font-semibold">Rate</th>
-                  <th className="px-3 py-2 text-left font-semibold">ITC</th>
-                  <th className="px-3 py-2 text-right font-semibold">Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {bill.lines.map((l) => (
-                  <tr key={l.id} className="border-b last:border-0">
-                    <td className="px-3 py-2">{l.description}</td>
-                    <td className="px-3 py-2 font-mono text-xs">{l.hsnSac || '—'}</td>
-                    <td className="px-3 py-2 text-right tabular">{l.qty} {l.uqc}</td>
-                    <td className="px-3 py-2 text-right"><Money value={l.ratePaise} /></td>
-                    <td className="px-3 py-2">
-                      <Badge
-                        variant="outline"
-                        className={
-                          l.itcEligibility === 'eligible'
-                            ? 'border-emerald-500/40 text-[10px]'
-                            : 'border-red-500/40 text-[10px]'
-                        }
-                      >
-                        {l.itcEligibility === 'capital_goods' ? 'Capital' : l.itcEligibility === 'eligible' ? 'Eligible' : 'Blocked'}
-                      </Badge>
-                    </td>
-                    <td className="px-3 py-2 text-right font-medium"><Money value={l.totalPaise} /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-
-        <Card className="p-5">
-          <h3 className="mb-3 text-sm font-semibold">Summary</h3>
-          <TotalRow label="Taxable value"><Money value={bill.subtotalPaise} /></TotalRow>
-          {bill.tax.cgstPaise > 0 && (
-            <>
-              <TotalRow label="CGST" muted><Money value={bill.tax.cgstPaise} /></TotalRow>
-              <TotalRow label="SGST" muted><Money value={bill.tax.sgstPaise} /></TotalRow>
-            </>
-          )}
-          {bill.tax.igstPaise > 0 && <TotalRow label="IGST" muted><Money value={bill.tax.igstPaise} /></TotalRow>}
-          {bill.tdsPaise > 0 && (
-            <TotalRow label={`Less: TDS ${bill.tdsSection ?? ''}`} muted>
-              −<Money value={bill.tdsPaise} />
-            </TotalRow>
-          )}
-          <TotalRow label="Payable" emphasis><Money value={bill.totalPaise} /></TotalRow>
-          {bill.amountPaidPaise > 0 && (
-            <>
-              <TotalRow label="Paid" muted><Money value={bill.amountPaidPaise} /></TotalRow>
-              <TotalRow label="Balance"><Money value={billBalance(bill)} /></TotalRow>
-            </>
-          )}
-          <div className="mt-4 flex flex-wrap gap-1.5">
-            {bill.isRcm && <Badge variant="outline" className="border-blue-500/40 text-[10px]">Reverse charge</Badge>}
-            {vendor?.isMsme && <Badge variant="outline" className="border-amber-500/40 text-[10px]">MSME vendor</Badge>}
-            {vendor?.gstTreatment === 'registered_composition' && (
-              <Badge variant="outline" className="border-red-500/40 text-[10px]">Composition — no ITC</Badge>
-            )}
-          </div>
-        </Card>
-      </div>
-
-      <Tabs defaultValue="journal">
-        <TabsList>
-          <TabsTrigger value="journal">Journal entry</TabsTrigger>
-          <TabsTrigger value="payments">Payments ({payments.length})</TabsTrigger>
-        </TabsList>
-        <TabsContent value="journal" className="mt-4 space-y-4">
-          <Card className="p-5">
-            <div className="mb-3 flex items-start gap-2">
-              <BookOpen className="mt-0.5 size-4 text-primary" />
-              <div>
-                <h3 className="text-sm font-semibold">What this bill did to your books</h3>
-                <p className="text-xs text-muted-foreground">
-                  {bill.isRcm
-                    ? 'Reverse charge posts both sides: the tax you owe the government and the credit you reclaim.'
-                    : 'Cost and input credit are split, so the GST never inflates your expenses.'}
-                </p>
-              </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <StatusBadge status={bill.status as never} />
+              {bill.vendor.isMsme && <Badge variant="outline" className="text-[10px]">MSME supplier</Badge>}
+              {bill.isRcm && <Badge variant="secondary" className="text-[10px]">Reverse charge</Badge>}
+              {bill.tdsPaise > 0 && (
+                <Badge variant="outline" className="text-[10px]">
+                  TDS {bill.tdsSection} · {formatINR(bill.tdsPaise)}
+                </Badge>
+              )}
+              {bill.balancePaise > 0 && (
+                <span className="text-sm text-muted-foreground">
+                  <Money value={bill.balancePaise} className="font-medium text-foreground" /> outstanding
+                </span>
+              )}
             </div>
-            {entry ? <JournalTable entryId={entry.id} /> : <p className="text-sm text-muted-foreground">Not posted.</p>}
-          </Card>
-          {reversal && (
-            <Card className="border-destructive/30 p-5">
-              <h3 className="mb-3 text-sm font-semibold text-destructive">Reversal entry (void)</h3>
-              <JournalTable entryId={reversal.id} />
-            </Card>
-          )}
-        </TabsContent>
-        <TabsContent value="payments" className="mt-4">
-          <Card className="p-5">
-            {payments.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No payments made against this bill yet.</p>
-            ) : (
-              <div className="divide-y">
-                {payments.map((p) => {
-                  const alloc = p.allocations.find((a) => a.targetId === bill.id)!;
-                  return (
-                    <div key={p.id} className="flex items-center gap-3 py-2.5">
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium">{p.number}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {new Date(p.date).toLocaleDateString('en-IN')} · {p.mode.toUpperCase()} · {p.reference}
-                        </p>
-                      </div>
-                      <Money value={alloc.amountPaise} className="text-sm font-medium" />
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </Card>
-        </TabsContent>
-      </Tabs>
 
-      <Dialog open={voidOpen} onOpenChange={setVoidOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Void this bill</DialogTitle>
-            <DialogDescription>
-              A reversal entry will cancel the original. Nothing is deleted — both stay in the audit trail.
-            </DialogDescription>
-          </DialogHeader>
-          <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason for voiding" />
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setVoidOpen(false)}>Cancel</Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                try {
-                  voidBill(bill.id, reason || 'No reason given');
-                  toast.success('Bill voided');
-                  setVoidOpen(false);
-                } catch (e) {
-                  toast.error((e as Error).message);
-                }
-              }}
-            >
-              Void bill
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
+            {msmeRisk && (
+              <Card className="flex items-start gap-3 border-red-500/40 bg-red-500/5 p-4">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0 text-red-600 dark:text-red-400" />
+                <div className="text-sm">
+                  <p className="font-medium">
+                    {age >= 45 ? 'Past the 45-day MSME limit' : `${45 - age} days left to pay this MSME supplier`}
+                  </p>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    Section 43B(h) disallows the expense entirely if a registered micro or small supplier is
+                    not paid within 45 days. That is not interest on a late payment — the deduction is lost
+                    for the year.
+                  </p>
+                </div>
+              </Card>
+            )}
+
+            <Tabs defaultValue="document">
+              <TabsList>
+                <TabsTrigger value="document">Document</TabsTrigger>
+                <TabsTrigger value="journal">Journal</TabsTrigger>
+                <TabsTrigger value="payments">Payments ({bill.payments.length})</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="document" className="mt-4 space-y-4">
+                <Card className="p-5">
+                  <div className="grid gap-6 sm:grid-cols-2">
+                    <div>
+                      <p className="micro-label">Billed by</p>
+                      <p className="mt-1 font-medium">{bill.vendor.name}</p>
+                      {bill.vendor.address && (
+                        <p className="mt-0.5 text-sm text-muted-foreground">{bill.vendor.address}</p>
+                      )}
+                      {bill.vendor.gstin && (
+                        <p className="mt-1 font-mono text-xs text-muted-foreground">GSTIN {bill.vendor.gstin}</p>
+                      )}
+                    </div>
+                    <div className="sm:text-right">
+                      <p className="micro-label">Received at</p>
+                      <p className="mt-1 font-medium">{bill.branch.name}</p>
+                      {bill.branch.gstin && (
+                        <p className="mt-1 font-mono text-xs text-muted-foreground">GSTIN {bill.branch.gstin}</p>
+                      )}
+                      <p className="mt-1 text-xs text-muted-foreground">Due {d(bill.dueDate)}</p>
+                    </div>
+                  </div>
+                </Card>
+
+                <Card className="overflow-hidden p-0">
+                  <ReportTable>
+                    <thead>
+                      <tr className="border-b bg-muted/50 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                        <th className="px-4 py-2.5 text-left">Item</th>
+                        <th className="px-4 py-2.5 text-left">HSN/SAC</th>
+                        <th className="px-4 py-2.5 text-right">Qty</th>
+                        <th className="px-4 py-2.5 text-right">Rate</th>
+                        <th className="px-4 py-2.5 text-right">Taxable</th>
+                        <th className="px-4 py-2.5 text-left">Input credit</th>
+                        <th className="px-4 py-2.5 text-right">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {bill.lines.map((l) => (
+                        <tr key={l.id} className="border-b last:border-0">
+                          <td className="px-4 py-2.5">
+                            {l.description ?? '—'}
+                            {l.accountName && (
+                              <span className="ml-2 text-xs text-muted-foreground">{l.accountName}</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">{l.hsnSac ?? '—'}</td>
+                          <td className="px-4 py-2.5 text-right tabular">{l.qty} {l.uqc}</td>
+                          <td className="px-4 py-2.5 text-right"><Money value={l.ratePaise} /></td>
+                          <td className="px-4 py-2.5 text-right"><Money value={l.taxablePaise} /></td>
+                          <td className="px-4 py-2.5">
+                            <Badge
+                              variant="outline"
+                              className={`text-[10px] ${l.itcEligibility === 'ineligible' ? 'border-amber-500/40 text-amber-600 dark:text-amber-400' : ''}`}
+                            >
+                              {ITC_LABEL[l.itcEligibility] ?? l.itcEligibility}
+                            </Badge>
+                          </td>
+                          <td className="px-4 py-2.5 text-right font-medium"><Money value={l.totalPaise} /></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </ReportTable>
+                </Card>
+
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <Card className="p-5">
+                    {bill.notes ? (
+                      <>
+                        <p className="micro-label">Notes</p>
+                        <p className="mt-1 text-sm text-muted-foreground">{bill.notes}</p>
+                      </>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">No notes on this bill.</p>
+                    )}
+                    {bill.isRcm && (
+                      <p className="mt-4 border-t pt-4 text-xs leading-relaxed text-muted-foreground">
+                        Under reverse charge the supplier does not charge GST — we owe it directly. The entry
+                        posts both the liability and the credit we may claim against it, so the net cash
+                        effect is nil while both appear in the return.
+                      </p>
+                    )}
+                  </Card>
+
+                  <Card className="p-5">
+                    <dl className="space-y-2 text-sm">
+                      {[
+                        ['Taxable value', bill.subtotalPaise],
+                        ...(bill.tax.cgstPaise ? [['CGST', bill.tax.cgstPaise] as const] : []),
+                        ...(bill.tax.sgstPaise ? [['SGST', bill.tax.sgstPaise] as const] : []),
+                        ...(bill.tax.igstPaise ? [['IGST', bill.tax.igstPaise] as const] : []),
+                      ].map(([label, value]) => (
+                        <div key={String(label)} className="flex justify-between gap-4">
+                          <dt className="text-muted-foreground">{label}</dt>
+                          <dd><Money value={value as number} /></dd>
+                        </div>
+                      ))}
+                      {bill.tdsPaise > 0 && (
+                        <div className="flex justify-between gap-4">
+                          <dt className="text-muted-foreground">
+                            Less TDS {bill.tdsSection && `(${bill.tdsSection})`}
+                          </dt>
+                          <dd className="text-muted-foreground">− <Money value={bill.tdsPaise} /></dd>
+                        </div>
+                      )}
+                      <div className="flex justify-between gap-4 border-t pt-2 text-base font-semibold">
+                        <dt>Payable to vendor</dt>
+                        <dd><Money value={bill.totalPaise} /></dd>
+                      </div>
+                      {bill.amountPaidPaise > 0 && (
+                        <>
+                          <div className="flex justify-between gap-4">
+                            <dt className="text-muted-foreground">Paid</dt>
+                            <dd className="text-emerald-600 dark:text-emerald-400">
+                              <Money value={bill.amountPaidPaise} />
+                            </dd>
+                          </div>
+                          <div className="flex justify-between gap-4 font-medium">
+                            <dt>Balance due</dt>
+                            <dd><Money value={bill.balancePaise} /></dd>
+                          </div>
+                        </>
+                      )}
+                    </dl>
+                  </Card>
+                </div>
+              </TabsContent>
+
+              <TabsContent value="journal" className="mt-4 space-y-3">
+                {bill.journalEntryId ? (
+                  <>
+                    <p className="text-xs text-muted-foreground">
+                      Entry {bill.journalEntryId}. Input credit appears as an asset only where it is
+                      claimable — a blocked credit is folded into the cost instead, and you can see which
+                      happened here.
+                    </p>
+                    <Card className="overflow-hidden p-0">
+                      <ReportTable>
+                        <thead>
+                          <tr className="border-b bg-muted/50 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                            <th className="px-4 py-2.5 text-left">Account</th>
+                            <th className="px-4 py-2.5 text-left">Description</th>
+                            <th className="px-4 py-2.5 text-right">Debit</th>
+                            <th className="px-4 py-2.5 text-right">Credit</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {bill.journalLines.map((l) => (
+                            <tr key={l.lineNo} className="border-b last:border-0">
+                              <td className="px-4 py-2.5">
+                                <span className="font-mono text-xs text-muted-foreground">{l.accountCode}</span>{' '}
+                                {l.accountName}
+                              </td>
+                              <td className="px-4 py-2.5 text-xs text-muted-foreground">{l.description ?? '—'}</td>
+                              <td className="px-4 py-2.5 text-right"><Money value={l.debitPaise} showZero={false} /></td>
+                              <td className="px-4 py-2.5 text-right"><Money value={l.creditPaise} showZero={false} /></td>
+                            </tr>
+                          ))}
+                          <tr className="border-t-2 bg-muted/40 font-semibold">
+                            <td className="px-4 py-3" colSpan={2}>{dr === cr ? 'Balanced' : 'OUT OF BALANCE'}</td>
+                            <td className="px-4 py-3 text-right">{formatINR(dr)}</td>
+                            <td className="px-4 py-3 text-right">{formatINR(cr)}</td>
+                          </tr>
+                        </tbody>
+                      </ReportTable>
+                    </Card>
+                  </>
+                ) : (
+                  <Card className="flex items-start gap-3 p-5">
+                    <FileText className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                    <p className="text-sm text-muted-foreground">Nothing posted — this bill is still a draft.</p>
+                  </Card>
+                )}
+              </TabsContent>
+
+              <TabsContent value="payments" className="mt-4">
+                {bill.payments.length === 0 ? (
+                  <Card className="flex items-center gap-3 p-6 text-sm text-muted-foreground">
+                    <Receipt className="size-4" /> Nothing paid against this bill yet.
+                  </Card>
+                ) : (
+                  <Card className="overflow-hidden p-0">
+                    <div className="divide-y">
+                      {bill.payments.map((p) => (
+                        <div key={p.id} className="flex items-center gap-4 p-4">
+                          <div className="min-w-0 flex-1">
+                            <p className="font-medium">{p.number}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {d(p.date)} · <span className="uppercase">{p.mode}</span>
+                            </p>
+                          </div>
+                          <Money value={p.amountPaise} className="font-medium" />
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+                )}
+              </TabsContent>
+            </Tabs>
+
+            <Dialog open={voiding} onOpenChange={setVoiding}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Void {bill.internalNo}?</DialogTitle>
+                  <DialogDescription>
+                    The bill stays in the books and its journal entry is reversed rather than removed, so any
+                    input credit already claimed is reversed with it.
+                  </DialogDescription>
+                </DialogHeader>
+                <Field label="Reason" hint="Recorded in the audit trail">
+                  <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Duplicate entry" />
+                </Field>
+                {voidIt.error && <p className="text-sm text-destructive">{voidIt.error}</p>}
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setVoiding(false)}>Cancel</Button>
+                  <Button
+                    variant="destructive"
+                    disabled={voidIt.busy}
+                    onClick={async () => {
+                      if (await voidIt.run(bill.id, reason || undefined)) {
+                        toast.success(`${bill.internalNo} voided`, {
+                          description: 'A reversing entry has been posted.',
+                        });
+                        setVoiding(false);
+                        await state.refetch();
+                      }
+                    }}
+                    className="gap-1.5"
+                  >
+                    {voidIt.busy && <Loader2 className="size-3.5 animate-spin" />} Void bill
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          </>
+        );
+      }}
+    </AsyncPage>
   );
 }

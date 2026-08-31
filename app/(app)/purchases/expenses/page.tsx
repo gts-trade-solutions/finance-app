@@ -1,13 +1,21 @@
 'use client';
 
-import { useState } from 'react';
-import { CreditCard, Paperclip, Plus, Sparkles } from 'lucide-react';
+// Expenses, from the database.
+//
+// This page fetches its own accounts and bank accounts rather than reading the
+// store's. Those two collections are still the seeded local ones, because the
+// ledger and banking screens have not migrated and their rows reference the old
+// ids — so a page that needs the server's ids asks for them directly.
+
+import { useMemo, useState } from 'react';
+import { Plus, Receipt, Wallet } from 'lucide-react';
 import { toast } from 'sonner';
-import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
+import { Combobox } from '@/components/ui/combobox';
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog';
@@ -15,86 +23,160 @@ import { PageHeader } from '@/components/shared/page-header';
 import { DataTable, type Column } from '@/components/shared/data-table';
 import { Money } from '@/components/shared/money';
 import { EmptyState } from '@/components/shared/empty-state';
+import { AsyncPage, LoadingRows, Refreshing } from '@/components/shared/async-state';
 import { Field, MoneyInput } from '@/components/shared/form-bits';
-import { useAppStore } from '@/lib/store';
-import { Combobox } from '@/components/ui/combobox';
-import { accountOptions, bankAccountOptions, customerOptions, vendorOptions } from '@/lib/options';
 import { usePermission } from '@/lib/store/hooks';
+import { useSession } from '@/components/layout/session-provider';
+import { ALL_TIME, type RangeValue } from '@/lib/date-range';
 import { today } from '@/lib/selectors';
-import { createExpense } from '@/lib/services/purchases';
+import { formatINRCompact } from '@/lib/money';
 import { GST_RATES } from '@/lib/tax/gst';
-import type { Expense } from '@/lib/types';
+import { api, expenses as expenseApi, type ExpenseListItem } from '@/lib/api/client';
+import { useApi, useApiAction } from '@/lib/api/use-api';
+
+interface ExpenseMasters {
+  accounts: { id: string; code: string; name: string; type: string }[];
+  bankAccounts: { id: string; name: string; kind: string }[];
+  contacts: { id: string; kind: string; displayName: string }[];
+}
+
+const BLANK = {
+  accountId: '',
+  vendorId: '',
+  paidThroughId: '',
+  amount: 0,
+  gst: 18,
+  notes: '',
+  reference: '',
+  billable: false,
+  itcEligibility: 'eligible' as 'eligible' | 'ineligible' | 'capital_goods',
+};
 
 export default function ExpensesPage() {
-  const s = useAppStore();
   const canCreate = usePermission('purchases', 'create');
-  const [open, setOpen] = useState(false);
-  const [f, setF] = useState({
-    accountId: '', vendorId: '', paidThroughId: s.bankAccounts[0]?.id ?? '',
-    amount: 0, gst: 18, notes: '', billable: false, customerId: '',
-  });
+  const session = useSession();
 
-  const save = () => {
-    if (!f.accountId || f.amount <= 0) { toast.error('Pick a category and enter an amount.'); return; }
-    const e = createExpense({
-      branchId: s.activeBranchId,
+  const [range, setRange] = useState<RangeValue>(() => ({ ...ALL_TIME, mode: 'all' }));
+  const [open, setOpen] = useState(false);
+  const [f, setF] = useState(BLANK);
+
+  const state = useApi(
+    () =>
+      expenseApi.list({
+        from: range.mode === 'all' ? undefined : range.from,
+        to: range.mode === 'all' ? undefined : range.to,
+        limit: 500,
+      }),
+    [range.from, range.to, range.mode],
+  );
+
+  const masters = useApi<ExpenseMasters>(() => api.get<ExpenseMasters>('/api/masters'), []);
+  const create = useApiAction(expenseApi.create);
+
+  const options = useMemo(() => {
+    const m = masters.data;
+    return {
+      expenseAccounts: (m?.accounts ?? [])
+        .filter((a) => a.type === 'expense')
+        .map((a) => ({ value: a.id, label: a.name, sublabel: a.code })),
+      banks: (m?.bankAccounts ?? []).map((b) => ({ value: b.id, label: b.name, sublabel: b.kind })),
+      vendors: (m?.contacts ?? [])
+        .filter((c) => c.kind === 'vendor' || c.kind === 'both')
+        .map((c) => ({ value: c.id, label: c.displayName })),
+    };
+  }, [masters.data]);
+
+  const save = async () => {
+    if (!f.accountId || f.amount <= 0 || !f.paidThroughId) {
+      toast.error('Pick a category, an account it was paid from, and an amount.');
+      return;
+    }
+
+    const created = await create.run({
+      branchId: session.user.branchId ?? session.branches[0]?.id,
       date: today(),
       accountId: f.accountId,
-      vendorId: f.vendorId || null,
-      paidThroughId: f.paidThroughId,
+      paidThroughBankAccountId: f.paidThroughId,
+      // What was entered is what was actually paid; the server extracts the GST
+      // inside it rather than adding tax on top.
       amountPaise: f.amount,
       gstRatePct: f.gst,
+      vendorId: f.vendorId || undefined,
+      itcEligibility: f.itcEligibility,
       isBillable: f.billable,
-      customerId: f.customerId || undefined,
-      notes: f.notes,
-      receiptAttached: true,
+      reference: f.reference || undefined,
+      notes: f.notes || undefined,
     });
-    toast.success(`Expense ${e.number} recorded`);
+
+    if (!created) {
+      toast.error(create.error ?? 'Could not record the expense.');
+      return;
+    }
+
+    toast.success(`Expense ${created.number} recorded`, {
+      description:
+        f.itcEligibility === 'eligible' && f.gst > 0
+          ? 'Posted with the input credit claimed.'
+          : 'Posted with the tax folded into the cost.',
+    });
     setOpen(false);
-    setF({ ...f, amount: 0, notes: '', billable: false, customerId: '' });
+    setF({ ...BLANK, paidThroughId: f.paidThroughId });
+    await state.refetch();
   };
 
-  const columns: Column<Expense>[] = [
+  const columns: Column<ExpenseListItem>[] = [
     { key: 'number', header: 'Expense #', sortValue: (r) => r.number, cell: (r) => <span className="font-medium">{r.number}</span> },
-    { key: 'date', header: 'Date', sortValue: (r) => r.date, cell: (r) => new Date(r.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) },
+    {
+      key: 'date',
+      header: 'Date',
+      sortValue: (r) => r.date,
+      cell: (r) => new Date(r.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }),
+    },
     {
       key: 'category',
       header: 'Category',
-      sortValue: (r) => s.accounts.find((a) => a.id === r.accountId)?.name ?? '',
-      cell: (r) => s.accounts.find((a) => a.id === r.accountId)?.name ?? '—',
-    },
-    { key: 'notes', header: 'Description', sortValue: (r) => r.notes, cell: (r) => <span className="text-sm text-muted-foreground">{r.notes}</span> },
-    {
-      key: 'paid',
-      header: 'Paid through',
-      sortValue: (r) => s.bankAccounts.find((b) => b.id === r.paidThroughId)?.name ?? '',
-      cell: (r) => <span className="text-xs">{s.bankAccounts.find((b) => b.id === r.paidThroughId)?.name}</span>,
-    },
-    {
-      key: 'flags',
-      header: '',
+      sortValue: (r) => r.accountName,
       cell: (r) => (
-        <div className="flex gap-1">
-          {r.receiptAttached && <Paperclip className="size-3.5 text-muted-foreground" />}
-          {r.isBillable && <Badge variant="outline" className="text-[10px]">Billable</Badge>}
-        </div>
+        <span>
+          <span className="font-mono text-xs text-muted-foreground">{r.accountCode}</span> {r.accountName}
+        </span>
       ),
     },
-    { key: 'itc', header: 'ITC', align: 'right', sortValue: (r) => r.tax.cgstPaise + r.tax.igstPaise, cell: (r) => <Money value={r.tax.cgstPaise + r.tax.sgstPaise + r.tax.igstPaise} showZero={false} className="text-muted-foreground" /> },
-    { key: 'amount', header: 'Amount', align: 'right', sortValue: (r) => r.amountPaise, cell: (r) => <Money value={r.amountPaise} className="font-medium" /> },
+    {
+      key: 'notes',
+      header: 'Description',
+      sortValue: (r) => r.notes ?? '',
+      cell: (r) => <span className="text-sm text-muted-foreground">{r.notes ?? '—'}</span>,
+    },
+    { key: 'paid', header: 'Paid through', sortValue: (r) => r.paidThrough, cell: (r) => r.paidThrough },
+    {
+      key: 'itc',
+      header: 'Input credit',
+      sortValue: (r) => r.itcEligibility,
+      cell: (r) =>
+        r.taxPaise > 0 ? (
+          <Badge
+            variant="outline"
+            className={`text-[10px] ${r.itcEligibility === 'ineligible' ? 'border-amber-500/40 text-amber-600 dark:text-amber-400' : ''}`}
+          >
+            {r.itcEligibility === 'eligible' ? 'Claimed' : r.itcEligibility === 'ineligible' ? 'In cost' : 'Capital'}
+          </Badge>
+        ) : (
+          <span className="text-xs text-muted-foreground">No GST</span>
+        ),
+    },
+    { key: 'total', header: 'Total paid', align: 'right', sortValue: (r) => r.totalPaise, cell: (r) => <Money value={r.totalPaise} /> },
   ];
 
   return (
     <>
       <PageHeader
         title="Expenses"
-        description="Direct spending that doesn't need a vendor bill — fuel, utilities, subscriptions."
+        description="Money already spent, with no supplier bill to settle later — it posts and closes in one step."
         actions={
-          canCreate && (
-            <>
-              <Button variant="outline" size="sm" asChild className="gap-1.5">
-                <Link href="/ai"><Sparkles className="size-3.5" /> Scan a receipt</Link>
-              </Button>
+          <>
+            <Refreshing active={state.refreshing} />
+            {canCreate && (
               <Dialog open={open} onOpenChange={setOpen}>
                 <DialogTrigger asChild>
                   <Button size="sm" className="gap-1.5"><Plus className="size-4" /> New expense</Button>
@@ -104,7 +186,7 @@ export default function ExpensesPage() {
                   <div className="grid gap-4 sm:grid-cols-2">
                     <Field label="Category" required className="sm:col-span-2">
                       <Combobox
-                        options={accountOptions(s, ['expense'])}
+                        options={options.expenseAccounts}
                         value={f.accountId}
                         onChange={(v) => setF({ ...f, accountId: v })}
                         placeholder="Select expense account"
@@ -112,10 +194,10 @@ export default function ExpensesPage() {
                         showAvatar={false}
                       />
                     </Field>
-                    <Field label="Amount (before GST)" required>
+                    <Field label="Amount paid" required hint="Including GST — the tax is extracted from it">
                       <MoneyInput valuePaise={f.amount} onChangePaise={(p) => setF({ ...f, amount: p })} />
                     </Field>
-                    <Field label="GST rate" hint="Claimable as input credit">
+                    <Field label="GST rate">
                       <Combobox
                         options={GST_RATES.map((r) => ({ value: String(r), label: `${r}%` }))}
                         value={String(f.gst)}
@@ -126,16 +208,17 @@ export default function ExpensesPage() {
                     </Field>
                     <Field label="Paid through" required>
                       <Combobox
-                        options={bankAccountOptions(s)}
+                        options={options.banks}
                         value={f.paidThroughId}
                         onChange={(v) => setF({ ...f, paidThroughId: v })}
                         placeholder="Select account"
                         searchPlaceholder="Search accounts"
+                        showAvatar={false}
                       />
                     </Field>
                     <Field label="Vendor" hint="Optional">
                       <Combobox
-                        options={vendorOptions(s)}
+                        options={options.vendors}
                         value={f.vendorId}
                         onChange={(v) => setF({ ...f, vendorId: v })}
                         placeholder="None"
@@ -143,44 +226,91 @@ export default function ExpensesPage() {
                         clearable
                       />
                     </Field>
+                    <Field
+                      label="Input credit"
+                      className="sm:col-span-2"
+                      hint="Credit on some things is blocked outright, and then the tax is part of the cost"
+                    >
+                      <Combobox
+                        options={[
+                          { value: 'eligible', label: 'Claimable' },
+                          { value: 'ineligible', label: 'Blocked — Section 17(5)' },
+                          { value: 'capital_goods', label: 'Capital goods' },
+                        ]}
+                        value={f.itcEligibility}
+                        onChange={(v) => setF({ ...f, itcEligibility: v as typeof f.itcEligibility })}
+                        showAvatar={false}
+                      />
+                    </Field>
                     <Field label="Description" className="sm:col-span-2">
-                      <Input value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} placeholder="EB bill — Guindy godown" />
+                      <Input
+                        value={f.notes}
+                        onChange={(e) => setF({ ...f, notes: e.target.value })}
+                        placeholder="EB bill — Guindy godown"
+                      />
                     </Field>
                     <div className="flex items-center justify-between gap-3 rounded-md border p-3 sm:col-span-2">
                       <div>
-                        <p className="text-sm font-medium">Rebill to a customer</p>
-                        <p className="mt-0.5 text-xs text-muted-foreground">Pulls onto their next invoice automatically</p>
+                        <p className="text-sm font-medium">Billable to a customer</p>
+                        <p className="mt-0.5 text-xs text-muted-foreground">
+                          Re-charged on their next invoice.
+                        </p>
                       </div>
                       <Switch checked={f.billable} onCheckedChange={(v) => setF({ ...f, billable: v })} />
                     </div>
-                    {f.billable && (
-                      <Field label="Customer" className="sm:col-span-2">
-                        <Combobox
-                          options={customerOptions(s)}
-                          value={f.customerId}
-                          onChange={(v) => setF({ ...f, customerId: v })}
-                          placeholder="Select a customer"
-                          searchPlaceholder="Search customers"
-                          clearable
-                        />
-                      </Field>
-                    )}
                   </div>
+                  {create.error && <p className="text-sm text-destructive">{create.error}</p>}
                   <DialogFooter>
                     <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-                    <Button onClick={save}>Record expense</Button>
+                    <Button onClick={save} disabled={create.busy}>
+                      {create.busy ? 'Recording…' : 'Record expense'}
+                    </Button>
                   </DialogFooter>
                 </DialogContent>
               </Dialog>
+            )}
+          </>
+        }
+      />
+
+      <AsyncPage state={state} loading={<LoadingRows rows={6} />}>
+        {(data) =>
+          data.summary.count === 0 && range.mode === 'all' ? (
+            <EmptyState
+              icon={Receipt}
+              title="No expenses yet"
+              description="Record what you have already paid for — fuel, rent, utilities."
+            />
+          ) : (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Card className="p-4">
+                  <p className="text-xs text-muted-foreground">Expenses</p>
+                  <p className="mt-1.5 tabular text-2xl font-semibold">{data.summary.count}</p>
+                </Card>
+                <Card className="flex items-start justify-between gap-3 p-4">
+                  <div>
+                    <p className="text-xs text-muted-foreground">Total paid</p>
+                    <p className="mt-1.5 tabular text-2xl font-semibold">
+                      {formatINRCompact(data.summary.totalPaise)}
+                    </p>
+                  </div>
+                  <Wallet className="size-5 text-muted-foreground" />
+                </Card>
+              </div>
+
+              <DataTable
+                rows={data.expenses}
+                columns={columns}
+                getRowId={(r) => r.id}
+                initialSort={{ key: 'date', dir: 'desc' }}
+                searchPlaceholder="Search description or category…"
+                dateFilter={{ getDate: (r) => r.date, value: range, onChange: setRange }}
+              />
             </>
           )
         }
-      />
-      {s.expenses.length === 0 ? (
-        <EmptyState icon={CreditCard} title="No expenses" description="Record day-to-day spending here." />
-      ) : (
-        <DataTable rows={s.expenses} columns={columns} getRowId={(r) => r.id} initialSort={{ key: 'date', dir: 'desc' }} searchPlaceholder="Search description or category…" dateFilter={{ getDate: (r) => r.date }} />
-      )}
+      </AsyncPage>
     </>
   );
 }
