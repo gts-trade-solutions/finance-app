@@ -6,6 +6,7 @@ import { Topbar } from '@/components/layout/topbar';
 import { Skeleton } from '@/components/ui/skeleton';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { SessionGate } from '@/components/layout/session-provider';
+import { MastersGate } from '@/components/layout/masters-gate';
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   // The server decides whether there is a session. A client-side check would
@@ -39,6 +40,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       )}
     >
       {() => (
+        <MastersGate>
         <TooltipProvider>
           <div className="flex h-screen overflow-hidden bg-background">
             <aside className="hidden w-64 shrink-0 lg:block">
@@ -52,6 +54,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             </div>
           </div>
         </TooltipProvider>
+        </MastersGate>
       )}
     </SessionGate>
   );

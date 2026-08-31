@@ -25,7 +25,7 @@ import {
   branchOptionsForUser, customerOptions, dueDateFor, stateOptions, termsForDays,
   termsOptions, userBranches, userOptions,
 } from '@/lib/options';
-import { createInvoice, markInvoiceSent } from '@/lib/services/sales';
+import { api, ApiError } from '@/lib/api/client';
 import { peekNumber } from '@/lib/series';
 import { FY_SHORT } from '@/lib/mock/seed/org';
 import {
@@ -139,7 +139,7 @@ export default function NewInvoicePage() {
 
   const valid = !!customerId && lines.some((l) => l.qty > 0 && l.ratePaise > 0);
 
-  const save = (mode: 'draft' | 'send') => {
+  const save = async (mode: 'draft' | 'send') => {
     if (!valid) {
       toast.error('Add a customer and at least one item', {
         description: 'An invoice needs a customer and one line with a quantity and rate.',
@@ -147,47 +147,75 @@ export default function NewInvoicePage() {
       return;
     }
     setSaving(mode);
-    const inv = createInvoice({
-      branchId,
-      customerId,
-      date,
-      dueDate,
-      placeOfSupply: pos,
-      supplyKind,
-      status: mode === 'draft' ? 'draft' : 'approved',
-      number: number && number !== nextNumber ? number : undefined,
-      orderNumber: orderNumber || undefined,
-      subject: subject || undefined,
-      paymentTerms,
-      salespersonId: salespersonId || undefined,
-      notes,
-      terms,
-      shippingChargePaise: shipping,
-      adjustmentPaise: adjustment,
-      adjustmentLabel,
-      tcsPaise: totals.tcs,
-      attachmentCount: attachments || undefined,
-      lines: lines
-        .filter((l) => l.qty > 0)
-        .map((l) => ({
-          itemId: l.itemId,
-          description: l.description,
-          hsnSac: l.hsnSac,
-          qty: l.qty,
-          uqc: l.uqc,
-          ratePaise: l.ratePaise,
-          discountPct: effectiveDiscountPct(l),
-          gstRatePct: l.gstRatePct,
-        })),
-    });
-    if (mode === 'send') markInvoiceSent(inv.id);
-    toast.success(`Invoice ${inv.number} ${mode === 'draft' ? 'saved as draft' : 'saved and sent'}`, {
+
+    // The server recomputes GST, allocates the number and posts the entry in
+    // one transaction. The totals shown above are a preview of that, not the
+    // source of it — a browser must never be the thing that decides what tax
+    // an invoice carries.
+    const created = await api
+      .post<{ id: string; number: string; totalPaise: number; journalEntryId: string | null }>(
+        '/api/invoices',
+        {
+          branchId,
+          customerId,
+          date,
+          dueDate,
+          placeOfSupply: pos,
+          supplyKind,
+          status: mode === 'draft' ? 'draft' : 'approved',
+          number: number && number !== nextNumber ? number : undefined,
+          orderNumber: orderNumber || undefined,
+          subject: subject || undefined,
+          paymentTerms,
+          salespersonId: salespersonId || undefined,
+          notes,
+          terms,
+          shippingChargePaise: shipping,
+          adjustmentPaise: adjustment,
+          adjustmentLabel,
+          tcsPaise: totals.tcs,
+          lines: lines
+            .filter((l) => l.qty > 0)
+            .map((l) => ({
+              itemId: l.itemId,
+              description: l.description,
+              hsnSac: l.hsnSac || undefined,
+              qty: l.qty,
+              uqc: l.uqc,
+              ratePaise: l.ratePaise,
+              discountPct: effectiveDiscountPct(l),
+              gstRatePct: l.gstRatePct,
+            })),
+        },
+      )
+      .catch((err: unknown) => {
+        setSaving(false);
+        const message = err instanceof ApiError ? err.message : 'Could not save the invoice.';
+        toast.error(message, {
+          description:
+            err instanceof ApiError && err.details
+              ? Object.values(err.details).join(' ')
+              : 'Nothing was saved.',
+        });
+        return null;
+      });
+
+    if (!created) return;
+
+    if (mode === 'send') {
+      await api.post(`/api/invoices/${created.id}`, { action: 'send' }).catch(() => {
+        // Posted either way; only the "sent" flag failed to stick.
+        toast.warning('Saved, but could not mark it as sent.');
+      });
+    }
+
+    toast.success(`Invoice ${created.number} ${mode === 'draft' ? 'saved as draft' : 'saved and sent'}`, {
       description:
         mode === 'draft'
           ? 'Drafts stay out of the ledger until you approve them.'
-          : 'Emailed to the customer and posted to the ledger.',
+          : 'Posted to the ledger — open the Journal tab to see the entry.',
     });
-    router.push(`/sales/invoices/${inv.id}`);
+    router.push(`/sales/invoices/${created.id}`);
   };
 
   return (

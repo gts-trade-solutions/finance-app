@@ -18,7 +18,7 @@ export const GET = route(
     const forDate = url.searchParams.get('date') ?? new Date().toISOString().slice(0, 10);
     const branchId = Number(url.searchParams.get('branchId') || user.activeBranchId || 0);
 
-    const [contacts, items, hsnCodes, branches, users, accounts, bankAccounts] = await Promise.all([
+    const [contacts, items, hsnCodes, branches, users, accounts, bankAccounts, grants] = await Promise.all([
       db
         .selectFrom('contacts')
         .select([
@@ -73,7 +73,23 @@ export const GET = route(
         .where('is_active', '=', 1)
         .orderBy('is_primary', 'desc')
         .execute(),
+      // Which branches each user may raise documents for. Without this the
+      // branch picker disappears for a multi-registration user, and every
+      // document they raise silently defaults to their home GSTIN.
+      db
+        .selectFrom('user_branches')
+        .innerJoin('users', 'users.id', 'user_branches.user_id')
+        .select(['user_branches.user_id', 'user_branches.branch_id'])
+        .where('users.org_id', '=', orgId)
+        .execute(),
     ]);
+
+    const branchesByUser = new Map<number, number[]>();
+    for (const g of grants) {
+      const list = branchesByUser.get(g.user_id) ?? [];
+      list.push(g.branch_id);
+      branchesByUser.set(g.user_id, list);
+    }
 
     // Peeked, not allocated — showing a number in a form must not consume one,
     // or every abandoned draft leaves a gap in the series.
@@ -133,6 +149,9 @@ export const GET = route(
         email: u.email,
         role: u.role,
         branchId: u.home_branch_id ? asId(u.home_branch_id) : null,
+        // No explicit grants means the home branch only.
+        branchAccess: (branchesByUser.get(u.id) ?? (u.home_branch_id ? [u.home_branch_id] : []))
+          .map(asId),
       })),
       accounts: accounts.map((a) => ({
         id: asId(a.id),

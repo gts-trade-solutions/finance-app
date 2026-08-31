@@ -8,6 +8,7 @@
 
 import { db, transaction } from '../lib/server/db';
 import { bootstrap } from '../lib/server/seed/bootstrap';
+import { seedDemoBook } from '../lib/server/seed/demo-book';
 import { verifyLedgerBalances } from '../lib/server/ledger/posting';
 
 const fresh = process.argv.includes('--fresh');
@@ -56,7 +57,15 @@ async function main() {
   }
 
   const started = Date.now();
-  const ids = await transaction(async (trx) => bootstrap(trx));
+  const masters = process.argv.includes('--masters-only');
+
+  // One transaction for the whole book: a half-seeded database is worse than an
+  // empty one, because it looks usable until the first missing account.
+  const { ids, book } = await transaction(async (trx) => {
+    const created = await bootstrap(trx);
+    const history = masters ? null : await seedDemoBook(trx, created);
+    return { ids: created, book: history };
+  });
 
   const check = await transaction(async (trx) => verifyLedgerBalances(trx, ids.orgId));
 
@@ -70,6 +79,13 @@ async function main() {
     contacts       ${Object.keys(ids.contacts).length}
     items          ${Object.keys(ids.items).length}
     bank accounts  ${Object.keys(ids.bankAccounts).length}
+${book ? `
+    invoices       ${book.invoices}
+    bills          ${book.bills}
+    expenses       ${book.expenses}
+    payments       ${book.payments}
+    bank lines     ${book.statementLines}` : `
+    (masters only)`}
 
     ledger         ${check.balanced ? 'balanced' : 'OUT OF BALANCE'}
 

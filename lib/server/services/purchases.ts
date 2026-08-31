@@ -27,7 +27,7 @@ import type { Paise, SupplyType } from '../../types';
 import { computeLineTax, sumTax, totalTaxPaise } from '../../tax/gst';
 import { computeTds } from '../../tax/tds';
 import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
-import { allocateNumber, postEntry, reverseEntry, type DraftLine } from '../ledger/posting';
+import { allocateOrgNumber, postEntry, reverseEntry, type DraftLine } from '../ledger/posting';
 import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
 import { ApiError, badRequest, notFound } from '../http';
 import { fyLabelFor } from './sales';
@@ -39,7 +39,8 @@ export interface BillLineInput {
   hsnSac?: string | null;
   qty: number;
   uqc?: string | null;
-  ratePaise: Paise;
+  /** Omit to use the item's purchase price. Required when there is no item. */
+  ratePaise?: Paise;
   discountPct?: number;
   gstRatePct?: number;
   itcEligibility?: 'eligible' | 'ineligible' | 'capital_goods';
@@ -119,7 +120,7 @@ export async function createBill(
   const items = itemIds.length
     ? await trx
         .selectFrom('items')
-        .select(['id', 'name', 'hsn_sac', 'uqc', 'gst_rate_pct', 'purchase_account_id'])
+        .select(['id', 'name', 'hsn_sac', 'uqc', 'gst_rate_pct', 'purchase_price', 'purchase_account_id'])
         .where('org_id', '=', orgId).where('id', 'in', itemIds).execute()
     : [];
   const itemById = new Map(items.map((i) => [i.id, i]));
@@ -129,9 +130,14 @@ export async function createBill(
     if (l.itemId && !item) throw badRequest(`Line ${idx + 1} refers to an item that does not exist.`);
     if (l.qty <= 0) throw badRequest(`Line ${idx + 1} needs a quantity above zero.`);
 
+    const ratePaise = l.ratePaise ?? (item ? toPaiseFromSql(item.purchase_price) : undefined);
+    if (ratePaise === undefined) {
+      throw badRequest(`Line ${idx + 1} needs a rate — there is no item to take one from.`);
+    }
+
     const gstRatePct = isComposition ? 0 : (l.gstRatePct ?? Number(item?.gst_rate_pct ?? 18));
     const { taxable, tax, total } = computeLineTax({
-      ratePaise: l.ratePaise,
+      ratePaise,
       qty: l.qty,
       discountPct: l.discountPct ?? 0,
       gstRatePct,
@@ -145,7 +151,7 @@ export async function createBill(
       hsnSac: l.hsnSac ?? item?.hsn_sac ?? null,
       qty: l.qty,
       uqc: l.uqc ?? item?.uqc ?? 'NOS',
-      ratePaise: l.ratePaise,
+      ratePaise,
       discountPct: l.discountPct ?? 0,
       gstRatePct,
       taxable,
@@ -172,9 +178,9 @@ export async function createBill(
   const grossPayable = subtotal + (input.isRcm ? 0 : totalTaxPaise(tax));
   const totalPayable = grossPayable - tds.tdsPaise;
 
-  const internalNo = await allocateNumber(trx, orgId, input.branchId, 'BILL', fyLabelFor(input.date), {
-    prefix: 'BILL',
-  });
+  // Our own reference for the vendor's bill, unique across the organisation
+  // (uq_bill_internal). The vendor's own number is theirs and may repeat.
+  const internalNo = await allocateOrgNumber(trx, orgId, 'BILL', fyLabelFor(input.date), 'BILL');
 
   const inserted = await trx
     .insertInto('bills')
@@ -430,9 +436,7 @@ export async function createExpense(
   const cgst = half;
   const sgst = taxTotal - half;
 
-  const number = await allocateNumber(trx, orgId, input.branchId, 'EXP', fyLabelFor(input.date), {
-    prefix: 'EXP',
-  });
+  const number = await allocateOrgNumber(trx, orgId, 'EXP', fyLabelFor(input.date), 'EXP');
 
   const eligible = (input.itcEligibility ?? 'eligible') === 'eligible';
 

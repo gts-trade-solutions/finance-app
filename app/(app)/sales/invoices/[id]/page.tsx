@@ -1,407 +1,359 @@
 'use client';
 
+// One invoice, from the database.
+//
+// The Journal tab is the point of this screen. Any package can show a document;
+// showing the exact double-entry it produced is what lets an accountant trust
+// the rest of the app — and it is the same rows the trial balance is built
+// from, not a rendering of what they ought to be.
+
 import Link from 'next/link';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams } from 'next/navigation';
 import { useState } from 'react';
 import {
-  Ban, BookOpen, Copy, FileCheck2, FileMinus, Link as LinkIcon, Loader2,
-  MoreHorizontal, Printer, Repeat, Send, Truck, Wallet,
+  ArrowLeft, Ban, FileText, Loader2, MoreHorizontal, Printer, Receipt, Send,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
-import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
-  DropdownMenuSeparator, DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { PageHeader } from '@/components/shared/page-header';
 import { Money } from '@/components/shared/money';
 import { StatusBadge } from '@/components/shared/status-badge';
-import { useAppStore } from '@/lib/store';
-import { usePermission } from '@/lib/store/hooks';
-import { contactName, effectiveInvoiceStatus, invoiceBalance } from '@/lib/selectors';
-import { cloneInvoice, markInvoiceSent, voidInvoice, writeOffInvoice } from '@/lib/services/sales';
-import { submitToIrp, generateEwayBill } from '@/lib/mock/simulators';
-import { supplyTypeLabel } from '@/lib/tax/gst';
-import { InvoicePrintSheet } from '@/components/print/invoice-sheet';
-import { JournalTable } from '@/components/shared/journal-table';
 import { EInvoiceMark } from '@/components/shared/einvoice-mark';
+import { ReportTable } from '@/components/shared/report-shell';
+import { AsyncPage } from '@/components/shared/async-state';
+import { Field } from '@/components/shared/form-bits';
+import { usePermission } from '@/lib/store/hooks';
+import { invoices as invoiceApi, type InvoiceDetail } from '@/lib/api/client';
+import { useApi, useApiAction } from '@/lib/api/use-api';
+import { formatINR } from '@/lib/money';
+
+const d = (s: string) =>
+  new Date(s).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 
 export default function InvoiceDetailPage() {
-  const { id } = useParams<{ id: string }>();
-  const router = useRouter();
-  const s = useAppStore();
+  const params = useParams<{ id: string }>();
   const canEdit = usePermission('sales', 'edit');
-  const canVoid = usePermission('sales', 'void');
 
-  const [irpBusy, setIrpBusy] = useState(false);
-  const [ewbOpen, setEwbOpen] = useState(false);
-  const [ewbBusy, setEwbBusy] = useState(false);
-  const [vehicle, setVehicle] = useState('TN09 AB 1234');
-  const [distance, setDistance] = useState('120');
-  const [voidOpen, setVoidOpen] = useState(false);
-  const [voidReason, setVoidReason] = useState('');
-  const [writeOffOpen, setWriteOffOpen] = useState(false);
-  const [writeOffReason, setWriteOffReason] = useState('');
+  const state = useApi<InvoiceDetail>(() => invoiceApi.get(params.id), [params.id]);
 
-  const inv = s.invoices.find((i) => i.id === id);
-  if (!inv) {
-    return (
-      <Card className="p-8 text-center text-sm text-muted-foreground">
-        Invoice not found. <Link href="/sales/invoices" className="text-primary underline">Back to invoices</Link>
-      </Card>
-    );
-  }
-
-  const entry = s.entries.find((e) => e.id === inv.journalEntryId);
-  const reversal = s.entries.find((e) => e.isReversalOf === inv.journalEntryId);
-  const payments = s.payments.filter((p) =>
-    p.allocations.some((a) => a.targetType === 'invoice' && a.targetId === inv.id),
-  );
-  const ewb = s.ewayBills.find((e) => e.invoiceId === inv.id);
-
-  const runIrp = async () => {
-    setIrpBusy(true);
-    const res = await submitToIrp(inv.id);
-    setIrpBusy(false);
-    if (res.ok) {
-      toast.success('IRN generated', { description: 'Signed QR code stamped on the invoice.' });
-    } else {
-      toast.error('IRP rejected the invoice', { description: res.error });
-    }
-  };
-
-  const runEwb = async () => {
-    setEwbBusy(true);
-    await generateEwayBill({
-      invoiceId: inv.id,
-      vehicleNo: vehicle,
-      distanceKm: Number(distance) || 100,
-    });
-    setEwbBusy(false);
-    setEwbOpen(false);
-    toast.success('E-way bill generated');
-  };
+  const send = useApiAction(invoiceApi.send);
+  const voidIt = useApiAction(invoiceApi.void);
+  const [voiding, setVoiding] = useState(false);
+  const [reason, setReason] = useState('');
 
   return (
-    <>
-      <div className="no-print">
-        <PageHeader
-          title={inv.number}
-          description={`${contactName(s, inv.customerId)} · ${supplyTypeLabel(inv.supplyType)}`}
-          actions={
-            <>
-              <EInvoiceMark einvoice={inv.einvoice} withLabel className="mr-1" />
-              <StatusBadge status={effectiveInvoiceStatus(inv)} className="mr-1" />
-              <Button variant="outline" size="sm" onClick={() => window.print()} className="gap-1.5">
-                <Printer className="size-3.5" /> Print / PDF
-              </Button>
-              {canEdit && inv.status === 'approved' && (
-                <Button variant="outline" size="sm" onClick={() => { markInvoiceSent(inv.id); toast.success('Invoice emailed to customer'); }} className="gap-1.5">
-                  <Send className="size-3.5" /> Send
-                </Button>
-              )}
-              {canEdit && invoiceBalance(inv) > 0 && inv.status !== 'void' && (
-                <Button size="sm" asChild className="gap-1.5">
-                  <Link href={`/sales/payments/new?invoice=${inv.id}`}>
-                    <Wallet className="size-3.5" /> Record payment
-                  </Link>
-                </Button>
-              )}
-              {/* Everything else lives behind one menu, as Zoho does. */}
-              <DropdownMenu>
-                <DropdownMenuTrigger
-                  aria-label="More actions"
-                  className="grid size-9 place-items-center rounded-md border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                >
-                  <MoreHorizontal className="size-4" />
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-56">
-                  <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  {canEdit && (
-                    <DropdownMenuItem
-                      onClick={() => {
-                        const copy = cloneInvoice(inv.id);
-                        toast.success(`Cloned to ${copy.number}`, {
-                          description: 'Saved as a draft so you can edit before it posts.',
-                        });
-                        router.push(`/sales/invoices/${copy.id}`);
-                      }}
-                    >
-                      <Copy className="mr-2 size-4" /> Clone
-                    </DropdownMenuItem>
+    <AsyncPage state={state}>
+      {(inv) => {
+        const balanced =
+          inv.journalLines.reduce((t, l) => t + l.debitPaise, 0) ===
+          inv.journalLines.reduce((t, l) => t + l.creditPaise, 0);
+
+        return (
+          <>
+            <PageHeader
+              title={inv.number}
+              description={`${inv.customer.name} · raised ${d(inv.date)}, due ${d(inv.dueDate)}`}
+              actions={
+                <>
+                  <Button variant="outline" size="sm" asChild>
+                    <Link href="/sales/invoices"><ArrowLeft className="mr-1.5 size-3.5" /> Invoices</Link>
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => window.print()} className="gap-1.5">
+                    <Printer className="size-3.5" /> Print
+                  </Button>
+                  {canEdit && inv.status !== 'void' && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger aria-label="More actions" className="grid size-9 place-items-center rounded-[3px] border transition-colors hover:bg-accent">
+                        <MoreHorizontal className="size-4" />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem
+                          onClick={async () => {
+                            if (await send.run(inv.id)) {
+                              toast.success(`${inv.number} marked sent`);
+                              await state.refetch();
+                            } else if (send.error) toast.error(send.error);
+                          }}
+                        >
+                          <Send className="mr-2 size-4" /> Mark as sent
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setVoiding(true)}>
+                          <Ban className="mr-2 size-4" /> Void invoice
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   )}
-                  <DropdownMenuItem
-                    onClick={() => {
-                      navigator.clipboard
-                        ?.writeText(`${window.location.origin}/portal?invoice=${inv.number}`)
-                        .then(() => toast.success('Payment link copied', {
-                          description: 'Send it to the customer to pay from the portal.',
-                        }))
-                        .catch(() => toast.error('Could not copy the link'));
-                    }}
-                  >
-                    <LinkIcon className="mr-2 size-4" /> Copy payment link
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => window.print()}>
-                    <Printer className="mr-2 size-4" /> Download PDF
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => router.push('/sales/recurring')}>
-                    <Repeat className="mr-2 size-4" /> Make recurring
-                  </DropdownMenuItem>
-                  {canVoid && invoiceBalance(inv) > 0 && inv.status !== 'void' && (
-                    <>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem onClick={() => setWriteOffOpen(true)}>
-                        <FileMinus className="mr-2 size-4" /> Write off balance
-                      </DropdownMenuItem>
-                    </>
-                  )}
-                  {canVoid && inv.status !== 'void' && (
-                    <DropdownMenuItem variant="destructive" onClick={() => setVoidOpen(true)}>
-                      <Ban className="mr-2 size-4" /> Void invoice
-                    </DropdownMenuItem>
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </>
-          }
-        />
-      </div>
-
-      {/* Compliance strip */}
-      {inv.einvoice.status !== 'not_applicable' && (
-        <Card className="no-print flex flex-wrap items-center gap-3 p-4">
-          <FileCheck2 className="size-5 shrink-0 text-primary" />
-          <div className="min-w-0 flex-1">
-            {inv.einvoice.status === 'submitted' ? (
-              <>
-                <p className="text-sm font-medium">E-invoice registered</p>
-                <p className="break-all font-mono text-[11px] text-muted-foreground">IRN {inv.einvoice.irn}</p>
-              </>
-            ) : inv.einvoice.status === 'failed' ? (
-              <>
-                <p className="text-sm font-medium text-destructive">IRP rejected this invoice</p>
-                <p className="text-xs text-muted-foreground">{inv.einvoice.error}</p>
-              </>
-            ) : (
-              <>
-                <p className="text-sm font-medium">Awaiting IRN</p>
-                <p className="text-xs text-muted-foreground">
-                  B2B invoices are not legally valid until the IRP issues an IRN. Report within 30 days.
-                </p>
-              </>
-            )}
-          </div>
-          {inv.einvoice.status !== 'submitted' && (
-            <Button size="sm" onClick={runIrp} disabled={irpBusy} className="gap-1.5">
-              {irpBusy ? <Loader2 className="size-3.5 animate-spin" /> : <FileCheck2 className="size-3.5" />}
-              {irpBusy ? 'Submitting to IRP…' : inv.einvoice.status === 'failed' ? 'Retry' : 'Submit to IRP'}
-            </Button>
-          )}
-          {inv.einvoice.status === 'submitted' && !ewb && (
-            <Button variant="outline" size="sm" onClick={() => setEwbOpen(true)} className="gap-1.5">
-              <Truck className="size-3.5" /> Generate e-way bill
-            </Button>
-          )}
-          {ewb && (
-            <Badge variant="outline" className="gap-1.5">
-              <Truck className="size-3" /> EWB {ewb.ewbNo} · valid to {ewb.validUntil}
-            </Badge>
-          )}
-        </Card>
-      )}
-
-      <Tabs defaultValue="document" className="no-print">
-        <TabsList>
-          <TabsTrigger value="document">Document</TabsTrigger>
-          <TabsTrigger value="journal">Journal entry</TabsTrigger>
-          <TabsTrigger value="payments">Payments ({payments.length})</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="document" className="mt-4">
-          <Card className="p-0">
-            <InvoicePrintSheet invoiceId={inv.id} />
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="journal" className="mt-4 space-y-4">
-          <Card className="p-5">
-            <div className="mb-3 flex items-center gap-2">
-              <BookOpen className="size-4 text-primary" />
-              <div>
-                <h3 className="text-sm font-semibold">What this invoice did to your books</h3>
-                <p className="text-xs text-muted-foreground">
-                  Every rupee is accounted for twice — what we gained, and where it came from. The two columns must match.
-                </p>
-              </div>
-            </div>
-            {entry ? (
-              <JournalTable entryId={entry.id} />
-            ) : (
-              <p className="text-sm text-muted-foreground">This invoice is still a draft — nothing posted yet.</p>
-            )}
-          </Card>
-          {reversal && (
-            <Card className="border-destructive/30 p-5">
-              <h3 className="mb-3 text-sm font-semibold text-destructive">Reversal entry (void)</h3>
-              <p className="mb-3 text-xs text-muted-foreground">
-                The original entry above is never deleted. This opposite entry cancels it, so the audit trail shows both what happened and that it was reversed.
-              </p>
-              <JournalTable entryId={reversal.id} />
-            </Card>
-          )}
-        </TabsContent>
-
-        <TabsContent value="payments" className="mt-4">
-          <Card className="p-5">
-            {payments.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No payments received against this invoice yet.</p>
-            ) : (
-              <div className="divide-y">
-                {payments.map((p) => {
-                  const alloc = p.allocations.find((a) => a.targetId === inv.id)!;
-                  return (
-                    <div key={p.id} className="flex items-center gap-3 py-2.5">
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium">{p.number}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {new Date(p.date).toLocaleDateString('en-IN')} · {p.mode.toUpperCase()}
-                          {p.tdsPaise > 0 && ` · TDS ₹${(p.tdsPaise / 100).toLocaleString('en-IN')} deducted`}
-                        </p>
-                      </div>
-                      <Money value={alloc.amountPaise} className="text-sm font-medium" />
-                    </div>
-                  );
-                })}
-                <div className="flex items-center justify-between pt-3 text-sm font-semibold">
-                  <span>Balance due</span>
-                  <Money value={invoiceBalance(inv)} />
-                </div>
-              </div>
-            )}
-          </Card>
-        </TabsContent>
-      </Tabs>
-
-      {/* Print-only clean sheet */}
-      <div className="print-only">
-        <InvoicePrintSheet invoiceId={inv.id} />
-      </div>
-
-      {/* E-way bill dialog */}
-      <Dialog open={ewbOpen} onOpenChange={setEwbOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Generate e-way bill</DialogTitle>
-            <DialogDescription>
-              Required for moving goods above ₹50,000. Validity is one day per 200 km.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">Vehicle number</label>
-              <Input value={vehicle} onChange={(e) => setVehicle(e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">Approx. distance (km)</label>
-              <Input type="number" value={distance} onChange={(e) => setDistance(e.target.value)} />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEwbOpen(false)}>Cancel</Button>
-            <Button onClick={runEwb} disabled={ewbBusy} className="gap-1.5">
-              {ewbBusy && <Loader2 className="size-3.5 animate-spin" />}
-              Generate
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Write-off dialog */}
-      <Dialog open={writeOffOpen} onOpenChange={setWriteOffOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Write off the unpaid balance</DialogTitle>
-            <DialogDescription>
-              The sale still happened and its GST was still declared, so the invoice is not
-              removed. The amount you no longer expect to collect moves to Bad Debts as an
-              expense — which is what makes your profit honest.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="rounded-md border bg-muted/40 p-3 text-sm">
-            <span className="text-muted-foreground">Amount to write off: </span>
-            <Money value={invoiceBalance(inv)} className="font-semibold" />
-          </div>
-          <Input
-            value={writeOffReason}
-            onChange={(e) => setWriteOffReason(e.target.value)}
-            placeholder="e.g. Customer has ceased trading"
-          />
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setWriteOffOpen(false)}>Cancel</Button>
-            <Button
-              onClick={() => {
-                try {
-                  writeOffInvoice(inv.id, writeOffReason || 'No reason given');
-                  toast.success('Balance written off', {
-                    description: 'Posted to Bad Debts Written Off. The invoice stays on record.',
-                  });
-                  setWriteOffOpen(false);
-                } catch (e) {
-                  toast.error((e as Error).message);
-                }
-              }}
-            >
-              Write off
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Void dialog */}
-      <Dialog open={voidOpen} onOpenChange={setVoidOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Void this invoice</DialogTitle>
-            <DialogDescription>
-              Nothing is deleted. A reversal entry cancels the original, and both stay visible in the audit trail — this is what the law requires.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">Reason</label>
-            <Input
-              value={voidReason}
-              onChange={(e) => setVoidReason(e.target.value)}
-              placeholder="e.g. Raised in error — duplicate of INV/26-27/0031"
+                </>
+              }
             />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setVoidOpen(false)}>Cancel</Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                try {
-                  voidInvoice(inv.id, voidReason || 'No reason given');
-                  toast.success('Invoice voided', { description: 'Reversal entry posted. Original retained.' });
-                  setVoidOpen(false);
-                } catch (e) {
-                  toast.error((e as Error).message);
-                }
-              }}
-            >
-              Void invoice
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <StatusBadge status={inv.status as never} />
+              <EInvoiceMark einvoice={{ status: inv.einvoice.status as never, irn: inv.einvoice.irn ?? undefined }} />
+              <Badge variant="outline" className="text-[10px] uppercase">
+                {inv.supplyType === 'intra' ? 'CGST + SGST' : inv.supplyType === 'inter' ? 'IGST' : inv.supplyType.replace(/_/g, ' ')}
+              </Badge>
+              <Badge variant="secondary" className="text-[10px] capitalize">{inv.supplyKind}</Badge>
+              {inv.balancePaise > 0 && (
+                <span className="text-sm text-muted-foreground">
+                  <Money value={inv.balancePaise} className="font-medium text-foreground" /> outstanding
+                </span>
+              )}
+            </div>
+
+            <Tabs defaultValue="document">
+              <TabsList>
+                <TabsTrigger value="document">Document</TabsTrigger>
+                <TabsTrigger value="journal">Journal</TabsTrigger>
+                <TabsTrigger value="payments">Payments ({inv.payments.length})</TabsTrigger>
+              </TabsList>
+
+              {/* ── The invoice itself ─────────────────────────────────── */}
+              <TabsContent value="document" className="mt-4 space-y-4">
+                <Card className="p-5">
+                  <div className="grid gap-6 sm:grid-cols-2">
+                    <div>
+                      <p className="micro-label">Billed to</p>
+                      <p className="mt-1 font-medium">{inv.customer.name}</p>
+                      {inv.customer.address && (
+                        <p className="mt-0.5 text-sm text-muted-foreground">{inv.customer.address}</p>
+                      )}
+                      {inv.customer.gstin && (
+                        <p className="mt-1 font-mono text-xs text-muted-foreground">GSTIN {inv.customer.gstin}</p>
+                      )}
+                    </div>
+                    <div className="sm:text-right">
+                      <p className="micro-label">Supplied from</p>
+                      <p className="mt-1 font-medium">{inv.branch.name}</p>
+                      {inv.branch.gstin && (
+                        <p className="mt-1 font-mono text-xs text-muted-foreground">GSTIN {inv.branch.gstin}</p>
+                      )}
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Place of supply: {inv.placeOfSupply}
+                      </p>
+                    </div>
+                  </div>
+                  {inv.subject && <p className="mt-4 border-t pt-4 text-sm">{inv.subject}</p>}
+                </Card>
+
+                <Card className="overflow-hidden p-0">
+                  <ReportTable>
+                    <thead>
+                      <tr className="border-b bg-muted/50 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                        <th className="px-4 py-2.5 text-left">Item</th>
+                        <th className="px-4 py-2.5 text-left">HSN/SAC</th>
+                        <th className="px-4 py-2.5 text-right">Qty</th>
+                        <th className="px-4 py-2.5 text-right">Rate</th>
+                        <th className="px-4 py-2.5 text-right">Taxable</th>
+                        <th className="px-4 py-2.5 text-right">GST</th>
+                        <th className="px-4 py-2.5 text-right">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {inv.lines.map((l) => (
+                        <tr key={l.id} className="border-b last:border-0">
+                          <td className="px-4 py-2.5">{l.description ?? '—'}</td>
+                          <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">{l.hsnSac ?? '—'}</td>
+                          <td className="px-4 py-2.5 text-right tabular">{l.qty} {l.uqc}</td>
+                          <td className="px-4 py-2.5 text-right"><Money value={l.ratePaise} /></td>
+                          <td className="px-4 py-2.5 text-right"><Money value={l.taxablePaise} /></td>
+                          <td className="px-4 py-2.5 text-right">
+                            <span className="text-xs text-muted-foreground">{l.gstRatePct}%</span>{' '}
+                            <Money value={l.cgstPaise + l.sgstPaise + l.igstPaise} />
+                          </td>
+                          <td className="px-4 py-2.5 text-right font-medium"><Money value={l.totalPaise} /></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </ReportTable>
+                </Card>
+
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <Card className="p-5">
+                    {inv.notes && (
+                      <>
+                        <p className="micro-label">Notes</p>
+                        <p className="mt-1 text-sm text-muted-foreground">{inv.notes}</p>
+                      </>
+                    )}
+                    {inv.terms && (
+                      <>
+                        <p className="micro-label mt-4">Terms</p>
+                        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{inv.terms}</p>
+                      </>
+                    )}
+                  </Card>
+
+                  <Card className="p-5">
+                    <dl className="space-y-2 text-sm">
+                      {[
+                        ['Taxable value', inv.subtotalPaise],
+                        ...(inv.tax.cgstPaise ? [['CGST', inv.tax.cgstPaise] as const] : []),
+                        ...(inv.tax.sgstPaise ? [['SGST', inv.tax.sgstPaise] as const] : []),
+                        ...(inv.tax.igstPaise ? [['IGST', inv.tax.igstPaise] as const] : []),
+                        ...(inv.shippingChargePaise ? [['Shipping', inv.shippingChargePaise] as const] : []),
+                        ...(inv.tcsPaise ? [['TCS', inv.tcsPaise] as const] : []),
+                        ...(inv.adjustmentPaise ? [[inv.adjustmentLabel ?? 'Adjustment', inv.adjustmentPaise] as const] : []),
+                        ...(inv.roundOffPaise ? [['Round off', inv.roundOffPaise] as const] : []),
+                      ].map(([label, value]) => (
+                        <div key={String(label)} className="flex justify-between gap-4">
+                          <dt className="text-muted-foreground">{label}</dt>
+                          <dd><Money value={value as number} /></dd>
+                        </div>
+                      ))}
+                      <div className="flex justify-between gap-4 border-t pt-2 text-base font-semibold">
+                        <dt>Total</dt>
+                        <dd><Money value={inv.totalPaise} /></dd>
+                      </div>
+                      {inv.amountPaidPaise > 0 && (
+                        <>
+                          <div className="flex justify-between gap-4">
+                            <dt className="text-muted-foreground">Paid</dt>
+                            <dd className="text-emerald-600 dark:text-emerald-400">
+                              <Money value={inv.amountPaidPaise} />
+                            </dd>
+                          </div>
+                          <div className="flex justify-between gap-4 font-medium">
+                            <dt>Balance due</dt>
+                            <dd><Money value={inv.balancePaise} /></dd>
+                          </div>
+                        </>
+                      )}
+                    </dl>
+                  </Card>
+                </div>
+              </TabsContent>
+
+              {/* ── The double entry behind it ─────────────────────────── */}
+              <TabsContent value="journal" className="mt-4 space-y-3">
+                {inv.journalEntryId ? (
+                  <>
+                    <p className="text-xs text-muted-foreground">
+                      Entry {inv.journalEntryId}. These are the rows the trial balance is built from —
+                      not a rendering of what they ought to be.
+                    </p>
+                    <Card className="overflow-hidden p-0">
+                      <ReportTable>
+                        <thead>
+                          <tr className="border-b bg-muted/50 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                            <th className="px-4 py-2.5 text-left">Account</th>
+                            <th className="px-4 py-2.5 text-left">Description</th>
+                            <th className="px-4 py-2.5 text-right">Debit</th>
+                            <th className="px-4 py-2.5 text-right">Credit</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {inv.journalLines.map((l) => (
+                            <tr key={l.lineNo} className="border-b last:border-0">
+                              <td className="px-4 py-2.5">
+                                <span className="font-mono text-xs text-muted-foreground">{l.accountCode}</span>{' '}
+                                {l.accountName}
+                              </td>
+                              <td className="px-4 py-2.5 text-xs text-muted-foreground">{l.description ?? '—'}</td>
+                              <td className="px-4 py-2.5 text-right"><Money value={l.debitPaise} showZero={false} /></td>
+                              <td className="px-4 py-2.5 text-right"><Money value={l.creditPaise} showZero={false} /></td>
+                            </tr>
+                          ))}
+                          <tr className="border-t-2 bg-muted/40 font-semibold">
+                            <td className="px-4 py-3" colSpan={2}>{balanced ? 'Balanced' : 'OUT OF BALANCE'}</td>
+                            <td className="px-4 py-3 text-right">
+                              {formatINR(inv.journalLines.reduce((t, l) => t + l.debitPaise, 0))}
+                            </td>
+                            <td className="px-4 py-3 text-right">
+                              {formatINR(inv.journalLines.reduce((t, l) => t + l.creditPaise, 0))}
+                            </td>
+                          </tr>
+                        </tbody>
+                      </ReportTable>
+                    </Card>
+                  </>
+                ) : (
+                  <Card className="flex items-start gap-3 p-5">
+                    <FileText className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                    <p className="text-sm text-muted-foreground">
+                      Nothing has been posted. A draft is a document somebody is still writing, not a sale
+                      that has happened — putting it in the ledger would overstate revenue and the GST that
+                      follows from it.
+                    </p>
+                  </Card>
+                )}
+              </TabsContent>
+
+              {/* ── Receipts against it ────────────────────────────────── */}
+              <TabsContent value="payments" className="mt-4">
+                {inv.payments.length === 0 ? (
+                  <Card className="flex items-center gap-3 p-6 text-sm text-muted-foreground">
+                    <Receipt className="size-4" /> Nothing received against this invoice yet.
+                  </Card>
+                ) : (
+                  <Card className="overflow-hidden p-0">
+                    <div className="divide-y">
+                      {inv.payments.map((p) => (
+                        <div key={p.id} className="flex items-center gap-4 p-4">
+                          <div className="min-w-0 flex-1">
+                            <p className="font-medium">{p.number}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {d(p.date)} · <span className="uppercase">{p.mode}</span>
+                            </p>
+                          </div>
+                          <Money value={p.amountPaise} className="font-medium" />
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+                )}
+              </TabsContent>
+            </Tabs>
+
+            <Dialog open={voiding} onOpenChange={setVoiding}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Void {inv.number}?</DialogTitle>
+                  <DialogDescription>
+                    The invoice stays in the books and its journal entry is reversed rather than removed.
+                    GST requires the number to remain accounted for — a gap in the series is a question at
+                    assessment.
+                  </DialogDescription>
+                </DialogHeader>
+                <Field label="Reason" hint="Recorded in the audit trail">
+                  <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Raised in error" />
+                </Field>
+                {voidIt.error && <p className="text-sm text-destructive">{voidIt.error}</p>}
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setVoiding(false)}>Cancel</Button>
+                  <Button
+                    variant="destructive"
+                    disabled={voidIt.busy}
+                    onClick={async () => {
+                      const ok = await voidIt.run(inv.id, reason || undefined);
+                      if (ok) {
+                        toast.success(`${inv.number} voided`, {
+                          description: 'A reversing entry has been posted.',
+                        });
+                        setVoiding(false);
+                        await state.refetch();
+                      }
+                    }}
+                    className="gap-1.5"
+                  >
+                    {voidIt.busy && <Loader2 className="size-3.5 animate-spin" />} Void invoice
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          </>
+        );
+      }}
+    </AsyncPage>
   );
 }

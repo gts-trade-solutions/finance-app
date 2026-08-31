@@ -36,7 +36,8 @@ export interface InvoiceLineInput {
   hsnSac?: string | null;
   qty: number;
   uqc?: string | null;
-  ratePaise: Paise;
+  /** Omit to use the item's catalogue price. Required when there is no item. */
+  ratePaise?: Paise;
   discountPct?: number;
   gstRatePct?: number;
 }
@@ -148,9 +149,16 @@ export async function createInvoice(
     }
     if (l.qty <= 0) throw badRequest(`Line ${idx + 1} needs a quantity above zero.`);
 
+    // An unpriced line takes the catalogue price. Without an item there is
+    // nothing to fall back to, so the caller has to say what it is worth.
+    const ratePaise = l.ratePaise ?? (item ? toPaiseFromSql(item.sale_price) : undefined);
+    if (ratePaise === undefined) {
+      throw badRequest(`Line ${idx + 1} needs a rate — there is no item to take one from.`);
+    }
+
     const gstRatePct = l.gstRatePct ?? Number(item?.gst_rate_pct ?? 0);
     const { taxable, tax, total } = computeLineTax({
-      ratePaise: l.ratePaise,
+      ratePaise,
       qty: l.qty,
       discountPct: l.discountPct ?? 0,
       gstRatePct,
@@ -163,7 +171,7 @@ export async function createInvoice(
       hsnSac: hsn,
       qty: l.qty,
       uqc: l.uqc ?? item?.uqc ?? 'NOS',
-      ratePaise: l.ratePaise,
+      ratePaise,
       discountPct: l.discountPct ?? 0,
       gstRatePct,
       taxable,
@@ -272,7 +280,12 @@ export async function createInvoice(
     .values({
       org_id: orgId,
       invoice_id: invoiceId,
-      status: branch.gstin && customer.gst_treatment === 'registered' ? 'pending' : 'not_applicable',
+      // A draft is not an issued document, so it is not awaiting anything yet.
+      // The status moves to pending when the invoice is actually posted.
+      status:
+        status !== 'draft' && branch.gstin && customer.gst_treatment === 'registered'
+          ? 'pending'
+          : 'not_applicable',
     })
     .execute();
 
@@ -355,6 +368,22 @@ export async function postInvoice(
     .where('id', '=', invoiceId)
     .execute();
 
+  // Now that it is issued, a B2B invoice needs an IRN to be legally valid.
+  const customerIsRegistered = await trx
+    .selectFrom('contacts').select('gst_treatment')
+    .where('id', '=', inv.customer_id).executeTakeFirst();
+  const branchGstin = await trx
+    .selectFrom('branches').select('gstin').where('id', '=', inv.branch_id).executeTakeFirst();
+
+  if (branchGstin?.gstin && customerIsRegistered?.gst_treatment === 'registered') {
+    await trx
+      .updateTable('einvoices')
+      .set({ status: 'pending' })
+      .where('invoice_id', '=', invoiceId)
+      .where('status', '=', 'not_applicable')
+      .execute();
+  }
+
   return entry.id;
 }
 
@@ -402,6 +431,15 @@ export async function voidInvoice(
     .updateTable('invoices')
     .set({ status: 'void', voided_at: new Date() })
     .where('id', '=', invoiceId)
+    .execute();
+
+  // A voided invoice is no longer reportable. Leaving it pending would keep it
+  // on the compliance queue for an IRN it must never be given.
+  await trx
+    .updateTable('einvoices')
+    .set({ status: 'cancelled', cancelled_at: new Date(), cancel_reason: reason ?? 'Invoice voided' })
+    .where('invoice_id', '=', invoiceId)
+    .where('status', 'in', ['pending', 'failed'])
     .execute();
 }
 

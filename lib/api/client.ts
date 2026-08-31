@@ -142,8 +142,67 @@ export interface InvoiceListItem {
   einvoice: { status: string; irn: string | null };
 }
 
+export interface InvoiceJournalLine {
+  lineNo: number;
+  accountCode: string;
+  accountName: string;
+  debitPaise: number;
+  creditPaise: number;
+  description: string | null;
+}
+
+export interface InvoiceDetail {
+  id: string;
+  number: string;
+  date: string;
+  dueDate: string;
+  status: string;
+  supplyType: string;
+  supplyKind: string;
+  placeOfSupply: string;
+  customer: { id: string; name: string; gstin: string | null; address: string | null };
+  branch: { id: string; name: string; gstin: string | null };
+  orderNumber: string | null;
+  subject: string | null;
+  paymentTerms: string | null;
+  notes: string | null;
+  terms: string | null;
+  subtotalPaise: number;
+  tax: { cgstPaise: number; sgstPaise: number; igstPaise: number; cessPaise: number };
+  tcsPaise: number;
+  shippingChargePaise: number;
+  adjustmentPaise: number;
+  adjustmentLabel: string | null;
+  roundOffPaise: number;
+  totalPaise: number;
+  amountPaidPaise: number;
+  balancePaise: number;
+  lines: {
+    id: string;
+    itemId: string | null;
+    description: string | null;
+    hsnSac: string | null;
+    qty: number;
+    uqc: string | null;
+    ratePaise: number;
+    discountPct: number;
+    gstRatePct: number;
+    taxablePaise: number;
+    cgstPaise: number;
+    sgstPaise: number;
+    igstPaise: number;
+    totalPaise: number;
+  }[];
+  einvoice: { status: string; irn: string | null; ackNo?: string | null; ackDate?: string | null };
+  payments: { id: string; number: string; date: string; mode: string; amountPaise: number }[];
+  journalEntryId: string | null;
+  journalLines: InvoiceJournalLine[];
+}
+
 export interface InvoiceListResponse {
   invoices: InvoiceListItem[];
+  /** Per-status counts over the same period, ignoring the status filter. */
+  statusCounts: Record<string, number>;
   summary: { count: number; totalPaise: number; duePaise: number };
 }
 
@@ -159,7 +218,7 @@ export const invoices = {
     from?: string; to?: string; status?: string; customerId?: string;
     search?: string; limit?: number; offset?: number;
   }) => api.get<InvoiceListResponse>('/api/invoices', params),
-  get: (id: string) => api.get<Record<string, unknown>>(`/api/invoices/${id}`),
+  get: (id: string) => api.get<InvoiceDetail>(`/api/invoices/${id}`),
   create: (input: unknown) =>
     api.post<{ id: string; number: string; totalPaise: number; journalEntryId: string | null }>(
       '/api/invoices',

@@ -44,7 +44,25 @@ export const GET = route(
       );
     }
 
-    const [rows, totals] = await Promise.all([
+    // Status counts ignore the status filter but honour everything else, so the
+    // tabs describe the same period the table is showing. Returned with the
+    // data rather than fetched separately: two requests can disagree, and the
+    // one that lands second wins regardless of which is right.
+    let countBase = db
+      .selectFrom('invoices')
+      .innerJoin('contacts', 'contacts.id', 'invoices.customer_id')
+      .where('invoices.org_id', '=', orgId);
+    if (q.from) countBase = countBase.where('invoices.invoice_date', '>=', q.from);
+    if (q.to) countBase = countBase.where('invoices.invoice_date', '<=', q.to);
+    if (q.customerId) countBase = countBase.where('invoices.customer_id', '=', Number(q.customerId));
+    if (q.search) {
+      const term = `%${q.search}%`;
+      countBase = countBase.where((eb) =>
+        eb.or([eb('invoices.number', 'like', term), eb('contacts.display_name', 'like', term)]),
+      );
+    }
+
+    const [rows, totals, statusRows] = await Promise.all([
       base
         .select([
           'invoices.id', 'invoices.number', 'invoices.invoice_date', 'invoices.due_date',
@@ -61,11 +79,27 @@ export const GET = route(
       base
         .select([
           sql<string>`COUNT(*)`.as('count'),
-          sql<string>`COALESCE(SUM(invoices.total), 0)`.as('total'),
-          sql<string>`COALESCE(SUM(invoices.total - invoices.amount_paid), 0)`.as('due'),
+          // A void invoice was cancelled, so it is not part of what was billed.
+          sql<string>`COALESCE(SUM(CASE WHEN invoices.status <> 'void'
+                                        THEN invoices.total ELSE 0 END), 0)`.as('total'),
+          // Only issued, unsettled invoices are owed. A draft has not been sent
+          // and a void one has been cancelled — counting either as outstanding
+          // overstates receivables, which is the figure people chase against.
+          sql<string>`COALESCE(SUM(CASE WHEN invoices.status NOT IN ('draft','void')
+                                        THEN invoices.total - invoices.amount_paid ELSE 0 END), 0)`.as('due'),
         ])
         .executeTakeFirst(),
+      countBase
+        .select(['invoices.status', sql<string>`COUNT(*)`.as('n')])
+        .groupBy('invoices.status')
+        .execute(),
     ]);
+
+    const statusCounts: Record<string, number> = { all: 0 };
+    for (const r of statusRows) {
+      statusCounts[r.status] = Number(r.n);
+      statusCounts.all += Number(r.n);
+    }
 
     // e-invoice status, in one query rather than one per row.
     const ids = rows.map((r) => r.id);
@@ -93,12 +127,16 @@ export const GET = route(
         subtotalPaise: toPaiseFromSql(r.subtotal),
         totalPaise: toPaiseFromSql(r.total),
         amountPaidPaise: toPaiseFromSql(r.amount_paid),
-        balancePaise: toPaiseFromSql(r.total) - toPaiseFromSql(r.amount_paid),
+        // A void invoice owes nothing, whatever its total says. The document
+        // stays for the audit trail; the debt does not.
+        balancePaise:
+          r.status === 'void' ? 0 : toPaiseFromSql(r.total) - toPaiseFromSql(r.amount_paid),
         einvoice: {
           status: markBy.get(r.id)?.status ?? 'not_applicable',
           irn: markBy.get(r.id)?.irn ?? null,
         },
       })),
+      statusCounts,
       summary: {
         count: Number(totals?.count ?? 0),
         totalPaise: toPaiseFromSql(totals?.total ?? '0'),

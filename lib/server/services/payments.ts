@@ -17,7 +17,7 @@ import 'server-only';
 import type { Trx } from '../db';
 import type { Paise } from '../../types';
 import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
-import { allocateNumber, postEntry, reverseEntry, type DraftLine } from '../ledger/posting';
+import { allocateOrgNumber, postEntry, reverseEntry, type DraftLine } from '../ledger/posting';
 import { CODE, accountIds, requireAccount } from '../ledger/chart-of-accounts';
 import { ApiError, badRequest, notFound } from '../http';
 import { fyLabelFor } from './sales';
@@ -119,12 +119,10 @@ async function recordPayment(
 
   const unapplied = settles - allocated;
 
-  const number = await allocateNumber(
-    trx, orgId, input.branchId,
-    kind === 'received' ? 'RCPT' : 'PAY',
-    fyLabelFor(input.date),
-    { prefix: kind === 'received' ? 'RCPT' : 'PAY' },
-  );
+  // Org-wide, matching uq_pay_org_number. A receipt is an internal document;
+  // unlike an invoice it carries no per-registration numbering obligation.
+  const prefix = kind === 'received' ? 'RCPT' : 'PAY';
+  const number = await allocateOrgNumber(trx, orgId, prefix, fyLabelFor(input.date), prefix);
 
   const inserted = await trx
     .insertInto('payments')

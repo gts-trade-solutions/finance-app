@@ -51,7 +51,11 @@ check('A failed sign-in does not enter the app', page.url().includes('/login'));
 await page.locator('#password').fill('Finora@2026');
 await page.getByRole('button', { name: /^Sign in$/ }).click();
 await page.waitForURL('**/dashboard', { timeout: 20000 });
-await page.waitForTimeout(1800);
+// The shell loads master data before it renders, so wait for content rather
+// than a fixed delay — otherwise this races the gate on a slow machine.
+await page.waitForSelector('main', { timeout: 30000 });
+await page.waitForFunction(() => (document.querySelector('main')?.textContent ?? '').length > 50,
+  null, { timeout: 30000 });
 check('Correct credentials reach the dashboard', page.url().includes('/dashboard'));
 
 const shell = await page.locator('body').innerText();

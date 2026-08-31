@@ -168,6 +168,27 @@ export async function allocateNumber(
   }
 }
 
+/**
+ * Allocate a document number that is unique across the whole organisation.
+ *
+ * Invoices, quotes and the rest are numbered per GST registration, because the
+ * law requires each registration to keep its own unbroken series. Bills,
+ * receipts and expenses are internal documents with no such rule, and their
+ * tables enforce uniqueness per organisation — so numbering them per branch
+ * hands two branches the same number and the second insert fails.
+ */
+export async function allocateOrgNumber(
+  trx: Trx,
+  orgId: number,
+  docType: string,
+  fyLabel: string,
+  prefix: string,
+  padding = 4,
+): Promise<string> {
+  const n = await nextSequence(trx, orgId, `${docType}:${fyLabel}`);
+  return format(prefix, fyLabel, n, padding);
+}
+
 /** INV/26-27/0042 — prefix, financial year, zero-padded sequence. */
 function format(prefix: string, fyLabel: string, n: number, padding: number): string {
   return `${prefix}/${fyLabel}/${String(n).padStart(padding, '0')}`;

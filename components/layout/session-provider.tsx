@@ -8,21 +8,16 @@
 // signed in. This component makes that call, gates the shell on it, and hands
 // the answer to migrated pages through a context.
 //
-// What it deliberately does NOT do is overwrite the demo store's collections
-// with server data. The two use different id spaces — the server says branch
-// "1", the seeded book says "br_chennai" — so merging them would leave every
-// not-yet-migrated page holding references that resolve to nothing. Pages move
-// to the API one at a time; until a page has moved, it keeps its own data and
-// nothing about it changes.
-//
-// The one value that is written into the store is the role, because the
-// permission hooks read it from there and the role must come from the server.
+// The seeded demo collections are still loaded underneath, because pages that
+// have not moved to the API yet read documents from them. Master data is then
+// replaced with the server's — see MastersGate — so every form offers real
+// customers and items under the ids the API expects.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createContext, useContext, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { auth, ApiError, type SessionResponse } from '@/lib/api/client';
-import { useAppStore, getState } from '@/lib/store';
+import { useAppStore } from '@/lib/store';
 import { ensureSeeded } from '@/lib/mock/seed';
 
 export type SessionState =
@@ -62,18 +57,18 @@ export function SessionGate({
       .then((session) => {
         if (cancelled) return;
 
-        // Pages that still read the demo store need it populated.
+        // Pages that still read the demo store need it populated. This fills
+        // in the collections the API does not serve yet — documents, mostly —
+        // and is overwritten for masters a moment later.
         ensureSeeded();
 
-        // Match the signed-in user to their seeded counterpart by email, so the
-        // store's session points at an id that exists in its own id space.
-        // The role always comes from the server — a locally-edited role would
-        // change which buttons render, and the API would refuse the click.
-        const local = getState().users.find(
-          (u) => u.email.toLowerCase() === session.user.email.toLowerCase(),
-        );
+        // The session points at the server's user id, because MastersGate is
+        // about to replace the store's user list with the server's. The role
+        // always comes from the server too — a locally-edited role would change
+        // which buttons render, and the API would refuse the click anyway.
         useAppStore.setState({
-          session: { userId: local?.id ?? session.user.id, role: session.user.role },
+          session: { userId: session.user.id, role: session.user.role },
+          activeBranchId: session.user.activeBranchId ?? session.user.branchId ?? '',
         });
 
         setState({ status: 'authenticated', session });
