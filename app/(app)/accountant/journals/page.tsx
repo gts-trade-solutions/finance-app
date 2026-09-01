@@ -179,7 +179,7 @@ export default function JournalsPage() {
                     <Input
                       value={memo}
                       onChange={(e) => setMemo(e.target.value)}
-                      placeholder="Depreciation for August 2026"
+                      placeholder="What this entry records"
                     />
                   </Field>
                 </div>

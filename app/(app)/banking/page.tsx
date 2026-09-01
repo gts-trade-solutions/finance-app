@@ -180,7 +180,7 @@ export default function BankingPage() {
                       <Input
                         value={f.name}
                         onChange={(e) => setF({ ...f, name: e.target.value })}
-                        placeholder="HDFC Bank – Current"
+                        placeholder="Account name"
                       />
                     </Field>
                     {f.kind !== 'cash' && (
@@ -189,7 +189,7 @@ export default function BankingPage() {
                           <Input
                             value={f.bankName}
                             onChange={(e) => setF({ ...f, bankName: e.target.value })}
-                            placeholder="HDFC Bank"
+                            placeholder="Bank name"
                           />
                         </Field>
                         <Field label="Last 4 digits">
@@ -198,7 +198,7 @@ export default function BankingPage() {
                             onChange={(e) =>
                               setF({ ...f, accountLast4: e.target.value.replace(/\D/g, '').slice(0, 4) })
                             }
-                            placeholder="4412"
+                            placeholder="0000"
                             inputMode="numeric"
                           />
                         </Field>
@@ -209,7 +209,7 @@ export default function BankingPage() {
                         <Input
                           value={f.ifsc}
                           onChange={(e) => setF({ ...f, ifsc: e.target.value.toUpperCase().slice(0, 11) })}
-                          placeholder="HDFC0000123"
+                          placeholder="AAAA0000000"
                           className="font-mono"
                         />
                       </Field>

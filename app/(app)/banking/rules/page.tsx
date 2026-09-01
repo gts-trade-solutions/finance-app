@@ -147,7 +147,7 @@ export default function BankRulesPage() {
                       <Input
                         value={f.name}
                         onChange={(e) => setF({ ...f, name: e.target.value })}
-                        placeholder="Fuel purchases → Fuel expense"
+                        placeholder="Rule name"
                       />
                     </Field>
                     <Field
@@ -159,7 +159,7 @@ export default function BankRulesPage() {
                       <Input
                         value={f.contains}
                         onChange={(e) => setF({ ...f, contains: e.target.value })}
-                        placeholder="BHARAT PETRO"
+                        placeholder="Text as it appears on the statement"
                       />
                     </Field>
                     <Field label="Categorise as" required>

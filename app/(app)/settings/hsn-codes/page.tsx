@@ -354,7 +354,7 @@ export default function HsnCodesPage() {
                 value={f.code}
                 disabled={!!editing}
                 onChange={(e) => setF({ ...f, code: e.target.value.replace(/[^0-9]/g, '').slice(0, 8) })}
-                placeholder={f.kind === 'sac' ? '998729' : '8708'}
+                placeholder={f.kind === 'sac' ? '990000' : '0000'}
                 className="font-mono"
                 inputMode="numeric"
               />
@@ -368,7 +368,7 @@ export default function HsnCodesPage() {
               <Input
                 value={f.description}
                 onChange={(e) => setF({ ...f, description: e.target.value })}
-                placeholder="Parts and accessories of motor vehicles"
+                placeholder="Description of the goods or service"
               />
             </Field>
             <div className="grid gap-4 sm:grid-cols-2">

@@ -230,7 +230,7 @@ export default function ChequesPage() {
                       <Input
                         value={f.chequeNo}
                         onChange={(e) => setF({ ...f, chequeNo: e.target.value })}
-                        placeholder="004512"
+                        placeholder="000001"
                         className="font-mono"
                       />
                     </Field>
@@ -238,7 +238,7 @@ export default function ChequesPage() {
                       <Input
                         value={f.bankName}
                         onChange={(e) => setF({ ...f, bankName: e.target.value })}
-                        placeholder="HDFC Bank"
+                        placeholder="Bank name"
                       />
                     </Field>
                   </div>

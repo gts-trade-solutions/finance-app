@@ -87,7 +87,7 @@ export default function WarehousesPage() {
                     <Input
                       value={f.name}
                       onChange={(e) => setF({ ...f, name: e.target.value })}
-                      placeholder="Chennai main store"
+                      placeholder="Main store"
                     />
                   </Field>
                   <div className="grid grid-cols-2 gap-4">
@@ -95,7 +95,7 @@ export default function WarehousesPage() {
                       <Input
                         value={f.code}
                         onChange={(e) => setF({ ...f, code: e.target.value.toUpperCase() })}
-                        placeholder="CHN-01"
+                        placeholder="WH-01"
                         className="font-mono"
                       />
                     </Field>
@@ -119,7 +119,7 @@ export default function WarehousesPage() {
                     <Input
                       value={f.address}
                       onChange={(e) => setF({ ...f, address: e.target.value })}
-                      placeholder="12 Mount Road, Chennai 600002"
+                      placeholder="Building, street, city and pincode"
                     />
                   </Field>
                   {create.error && <p className="text-sm text-destructive">{create.error}</p>}

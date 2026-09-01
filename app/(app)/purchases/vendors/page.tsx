@@ -27,6 +27,7 @@ import { Combobox } from '@/components/ui/combobox';
 import { contacts, type ContactRow } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
+import { useAppStore } from '@/lib/store';
 import { stateName } from '@/lib/tax/gst';
 import { TDS_SECTIONS } from '@/lib/tax/tds';
 import { stateOptions } from '@/lib/options';
@@ -97,8 +98,14 @@ const columns: Column<ContactRow>[] = [
   },
 ];
 
+/**
+ * A blank vendor. The state is filled in from the organisation's own
+ * registration when the dialog opens rather than being fixed here — it decides
+ * CGST+SGST versus IGST on the bill, and a hard-coded one would have every
+ * business outside that state reclaiming the wrong half of its input credit.
+ */
 const BLANK = {
-  name: '', gstin: '', pan: '', stateCode: '33', treatment: 'registered',
+  name: '', gstin: '', pan: '', stateCode: '', treatment: 'registered',
   tdsSection: '', isMsme: false, udyam: '', terms: 'net_30',
 };
 
@@ -107,6 +114,13 @@ export default function VendorsPage() {
   const state = useApi<{ contacts: ContactRow[] }>(() => contacts.list({ kind: 'vendor' }), []);
   const [open, setOpen] = useState(false);
   const [f, setF] = useState(BLANK);
+
+  // The organisation's own registration, used as the default state for a new
+  // vendor. Selected as a primitive: an object out of a Zustand selector builds
+  // a fresh snapshot each render and loops useSyncExternalStore.
+  const homeState = useAppStore(
+    (st) => st.branches.find((b) => b.id === st.activeBranchId)?.stateCode ?? '',
+  );
   const create = useApiAction(contacts.create);
 
   const save = async () => {
@@ -137,7 +151,16 @@ export default function VendorsPage() {
         description="MSME status drives the 45-day payment rule; composition vendors can't pass on input credit."
         actions={
           canCreate && (
-            <Dialog open={open} onOpenChange={setOpen}>
+            <Dialog
+              open={open}
+              onOpenChange={(v) => {
+                // Opening a fresh dialog starts from the home state; closing
+                // clears the form so a half-filled vendor is not still there
+                // the next time it opens.
+                setF(v ? { ...BLANK, stateCode: homeState } : BLANK);
+                setOpen(v);
+              }}
+            >
               <DialogTrigger asChild>
                 <Button size="sm" className="gap-1.5"><Plus className="size-4" /> New vendor</Button>
               </DialogTrigger>
@@ -148,7 +171,7 @@ export default function VendorsPage() {
                     <Input
                       value={f.name}
                       onChange={(e) => setF({ ...f, name: e.target.value })}
-                      placeholder="Bosch Automotive Distributors"
+                      placeholder="Vendor's business name"
                     />
                   </Field>
                   <Field label="GSTIN" error={create.fieldErrors.gstin}>
@@ -224,7 +247,7 @@ export default function VendorsPage() {
                       <Input
                         value={f.udyam}
                         onChange={(e) => setF({ ...f, udyam: e.target.value })}
-                        placeholder="UDYAM-TN-02-0012345"
+                        placeholder="UDYAM-XX-00-0000000"
                       />
                     </Field>
                   )}

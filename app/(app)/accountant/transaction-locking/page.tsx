@@ -202,7 +202,7 @@ export default function TransactionLockingPage() {
               <Input
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
-                placeholder="e.g. GSTR-3B filed for August 2026"
+                placeholder="Why this period is being locked"
               />
             </Field>
             {setLock.error && <p className="text-sm text-destructive">{setLock.error}</p>}

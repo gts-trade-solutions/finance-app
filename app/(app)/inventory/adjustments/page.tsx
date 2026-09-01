@@ -207,7 +207,7 @@ export default function StockAdjustmentsPage() {
                     <Input
                       value={f.notes}
                       onChange={(e) => setF({ ...f, notes: e.target.value })}
-                      placeholder="Two units damaged in the store room"
+                      placeholder="Why the quantity changed"
                     />
                   </Field>
 

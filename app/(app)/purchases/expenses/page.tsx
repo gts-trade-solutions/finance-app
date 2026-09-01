@@ -246,7 +246,7 @@ export default function ExpensesPage() {
                       <Input
                         value={f.notes}
                         onChange={(e) => setF({ ...f, notes: e.target.value })}
-                        placeholder="EB bill — Guindy godown"
+                        placeholder="What the expense was for"
                       />
                     </Field>
                     <div className="flex items-center justify-between gap-3 rounded-md border p-3 sm:col-span-2">

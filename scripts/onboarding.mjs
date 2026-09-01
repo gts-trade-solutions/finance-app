@@ -63,7 +63,7 @@ const email = `owner${stamp}@example.in`;
   await page.fill('#businessName', `Test Trading Co ${stamp}`);
   await page.locator('[data-slot="combobox-trigger"]').first().click();
   await page.waitForTimeout(300);
-  await page.getByRole('option', { name: /Tamil Nadu/ }).click();
+  await page.getByRole('option', { name: /Karnataka/ }).click();
   await page.fill('#name', 'Test Owner');
   await page.fill('#email', email);
   await page.fill('#password', 'Testing@2026');
@@ -95,6 +95,23 @@ const email = `owner${stamp}@example.in`;
     const text = await page.locator('body').innerText();
     ok(`${path} renders`, !/Application error|Cannot reach the server/i.test(text));
   }
+
+  // Form defaults must come from THIS organisation, not from the demo book.
+  // The state on a new customer decides CGST+SGST versus IGST, so a default
+  // left on the demo's Tamil Nadu would have a Karnataka business charging
+  // integrated tax on its own doorstep sales.
+  await page.goto(`${BASE}/sales/customers/new`, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(1500);
+  const stateShown = await page.locator('[data-slot="combobox-trigger"]').nth(1).innerText();
+  ok('a new customer defaults to the org’s own state', /Karnataka/.test(stateShown), stateShown.trim());
+
+  // No placeholder should name a real person, company, bank or place.
+  const placeholders = await page.locator('input[placeholder]').evaluateAll(
+    (els) => els.map((e) => e.getAttribute('placeholder') ?? ''),
+  );
+  const leaked = placeholders.filter((v) =>
+    /Race Auto|Sharma|Bosch|Arun|HDFC|ICICI|Mount Road|Guindy|98400|Chennai/i.test(v));
+  ok('no placeholder carries real or demo data', leaked.length === 0, leaked.join(' | ') || 'clean');
 
   // The number a form offers must be the one the database will hand out. It
   // lives in an input, so innerText will not see it.

@@ -137,7 +137,7 @@ export default function RegisterPage() {
                     id="businessName"
                     value={businessName}
                     onChange={(e) => setBusinessName(e.target.value)}
-                    placeholder="Race Auto Spares Pvt Ltd"
+                    placeholder="Your registered business name"
                     autoComplete="organization"
                     required
                     disabled={busy}
@@ -168,7 +168,7 @@ export default function RegisterPage() {
                       id="gstin"
                       value={gstin}
                       onChange={(e) => setGstin(e.target.value.toUpperCase().slice(0, 15))}
-                      placeholder="33AABCR1234K1Z5"
+                      placeholder="22AAAAA0000A1Z5"
                       className="font-mono uppercase"
                       disabled={busy}
                     />
@@ -206,7 +206,7 @@ export default function RegisterPage() {
                       id="name"
                       value={name}
                       onChange={(e) => setName(e.target.value)}
-                      placeholder="Arun Pandian"
+                      placeholder="Your full name"
                       autoComplete="name"
                       required
                       disabled={busy}
@@ -220,7 +220,7 @@ export default function RegisterPage() {
                       id="phone"
                       value={phone}
                       onChange={(e) => setPhone(e.target.value)}
-                      placeholder="+91 98400 00000"
+                      placeholder="+91 00000 00000"
                       autoComplete="tel"
                       disabled={busy}
                     />
@@ -234,7 +234,7 @@ export default function RegisterPage() {
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder="you@company.in"
+                    placeholder="you@example.com"
                     autoComplete="username"
                     required
                     disabled={busy}

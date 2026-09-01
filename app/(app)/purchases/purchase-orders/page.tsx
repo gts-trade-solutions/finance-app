@@ -248,7 +248,7 @@ export default function PurchaseOrdersPage() {
               <Input
                 value={vendorInvoiceNo}
                 onChange={(e) => setVendorInvoiceNo(e.target.value)}
-                placeholder="BOS/26-27/1204"
+                placeholder="Their order number"
                 className="font-mono"
               />
             </Field>

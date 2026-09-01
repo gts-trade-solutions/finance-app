@@ -144,7 +144,7 @@ export default function TransfersPage() {
                     <Input
                       value={reference}
                       onChange={(e) => setReference(e.target.value)}
-                      placeholder="Cash withdrawal for petty expenses"
+                      placeholder="What the transfer was for"
                     />
                   </Field>
                   {create.error && <p className="text-sm text-destructive">{create.error}</p>}

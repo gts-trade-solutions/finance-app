@@ -181,7 +181,7 @@ export default function RetainersPage() {
                     <Input
                       value={description}
                       onChange={(e) => setDescription(e.target.value)}
-                      placeholder="Annual maintenance contract — FY 2026-27"
+                      placeholder="What this retainer is for"
                     />
                   </Field>
                   <Field label="Amount" required>

@@ -206,7 +206,7 @@ export default function EwayBillsPage() {
                 <Input
                   value={vehicleNo}
                   onChange={(e) => setVehicleNo(e.target.value.toUpperCase())}
-                  placeholder="TN01AB1234"
+                  placeholder="AA00AA0000"
                   className="font-mono"
                 />
               </Field>
@@ -223,7 +223,7 @@ export default function EwayBillsPage() {
               <Input
                 value={transporter}
                 onChange={(e) => setTransporter(e.target.value)}
-                placeholder="Swift Logistics"
+                placeholder="Transporter name"
               />
             </Field>
             <div className="rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground">

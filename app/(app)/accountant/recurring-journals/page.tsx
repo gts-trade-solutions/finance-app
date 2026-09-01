@@ -152,7 +152,7 @@ export default function RecurringJournalsPage() {
                     <Input
                       value={f.name}
                       onChange={(e) => setF({ ...f, name: e.target.value })}
-                      placeholder="Monthly depreciation — furniture & equipment"
+                      placeholder="What this recurring entry is for"
                     />
                   </Field>
                   <div className="grid grid-cols-2 gap-4">
@@ -199,7 +199,7 @@ export default function RecurringJournalsPage() {
                     <Input
                       value={f.memo}
                       onChange={(e) => setF({ ...f, memo: e.target.value })}
-                      placeholder="Depreciation for the month"
+                      placeholder="Line narration"
                     />
                   </Field>
                   {create.error && <p className="text-sm text-destructive">{create.error}</p>}

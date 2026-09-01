@@ -224,8 +224,8 @@ await page.getByRole('button', { name: /add bank or credit card/i }).click();
 await page.waitForTimeout(700);
 
 const accountName = `Axis Bank – ${Date.now()}`;
-await page.getByPlaceholder('HDFC Bank – Current').fill(accountName);
-await page.getByPlaceholder('HDFC Bank', { exact: true }).fill('Axis Bank');
+await page.getByPlaceholder('Account name').fill(accountName);
+await page.getByPlaceholder('Bank name', { exact: true }).fill('Axis Bank');
 await page.getByRole('button', { name: /^Add account$/ }).click();
 await page.waitForTimeout(2000);
 check('The new account appears on the Banking page',
@@ -433,8 +433,8 @@ const freshCode = ['8544', '8511', '8536', '8607', '8483', '8409', '8482', '4011
 if (freshCode) {
   await page.getByRole('button', { name: /New Code/ }).click();
   await page.waitForTimeout(400);
-  await page.locator('input[placeholder="8708"]').fill(freshCode);
-  await page.locator('input[placeholder="Parts and accessories of motor vehicles"]')
+  await page.locator('input[placeholder="0000"]').fill(freshCode);
+  await page.locator('input[placeholder="Description of the goods or service"]')
     .fill('Added by the flow test');
   await page.getByRole('button', { name: /Add code/ }).click();
   await page.waitForTimeout(2000);

@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Check, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
@@ -15,6 +15,7 @@ import { isValidGstin } from '@/lib/tax/gst';
 import { Combobox } from '@/components/ui/combobox';
 import { stateOptions } from '@/lib/options';
 import { TDS_SECTIONS } from '@/lib/tax/tds';
+import { useAppStore } from '@/lib/store';
 
 export default function NewCustomerPage() {
   const router = useRouter();
@@ -23,7 +24,22 @@ export default function NewCustomerPage() {
   const [phone, setPhone] = useState('');
   const [gstin, setGstin] = useState('');
   const [treatment, setTreatment] = useState('registered');
-  const [stateCode, setStateCode] = useState('33');
+  // Defaults to the state this business is registered in, not a fixed one.
+  // Most customers are local, and a wrong default here is not cosmetic: state
+  // decides CGST+SGST versus IGST, so a Karnataka seller left on Tamil Nadu
+  // would charge integrated tax on its own doorstep sales.
+  const homeState = useAppStore(
+    (st) => st.branches.find((b) => b.id === st.activeBranchId)?.stateCode ?? '',
+  );
+  const [stateCode, setStateCode] = useState(homeState);
+
+  // The branch list arrives from /api/masters a moment after the form mounts,
+  // so the default is applied once it does — but never over a choice the user
+  // has already made.
+  const [stateTouched, setStateTouched] = useState(false);
+  useEffect(() => {
+    if (!stateTouched && homeState && !stateCode) setStateCode(homeState);
+  }, [homeState, stateCode, stateTouched]);
   const [line1, setLine1] = useState('');
   const [city, setCity] = useState('');
   const [pincode, setPincode] = useState('');
@@ -90,13 +106,13 @@ export default function NewCustomerPage() {
           <FormSection title="Basic details">
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Customer name" required className="sm:col-span-2">
-                <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Sharma Traders" />
+                <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Customer's business name" />
               </Field>
               <Field label="Email">
-                <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="accounts@example.in" />
+                <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@example.com" />
               </Field>
               <Field label="Phone">
-                <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+91 98400 12345" />
+                <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+91 00000 00000" />
               </Field>
             </div>
           </FormSection>
@@ -131,7 +147,7 @@ export default function NewCustomerPage() {
                   <Input
                     value={gstin}
                     onChange={(e) => setGstin(e.target.value.toUpperCase())}
-                    placeholder="33ABCDE1234F1Z5"
+                    placeholder="22AAAAA0000A1Z5"
                     maxLength={15}
                     className="pr-9 font-mono"
                   />
@@ -150,7 +166,7 @@ export default function NewCustomerPage() {
                 <Combobox
                   options={stateOptions()}
                   value={stateCode}
-                  onChange={setStateCode}
+                  onChange={(v) => { setStateCode(v); setStateTouched(true); }}
                   placeholder="Select state"
                   searchPlaceholder="Search all 37 states"
                   showAvatar={false}
@@ -162,13 +178,13 @@ export default function NewCustomerPage() {
           <FormSection title="Billing address">
             <div className="grid gap-4 sm:grid-cols-3">
               <Field label="Address" className="sm:col-span-3">
-                <Input value={line1} onChange={(e) => setLine1(e.target.value)} placeholder="12 Mount Road" />
+                <Input value={line1} onChange={(e) => setLine1(e.target.value)} placeholder="Building and street" />
               </Field>
               <Field label="City" className="sm:col-span-2">
-                <Input value={city} onChange={(e) => setCity(e.target.value)} placeholder="Chennai" />
+                <Input value={city} onChange={(e) => setCity(e.target.value)} placeholder="City" />
               </Field>
               <Field label="PIN code">
-                <Input value={pincode} onChange={(e) => setPincode(e.target.value)} placeholder="600002" />
+                <Input value={pincode} onChange={(e) => setPincode(e.target.value)} placeholder="000000" />
               </Field>
             </div>
           </FormSection>

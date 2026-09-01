@@ -247,7 +247,7 @@ export default function NewBillPage() {
             <Input
               value={vendorInvoiceNo}
               onChange={(e) => setVendorInvoiceNo(e.target.value)}
-              placeholder="BOS/26-27/1187"
+              placeholder="Their invoice number"
             />
           </FormRow>
           <FormRow label="Order Number">
@@ -307,7 +307,7 @@ export default function NewBillPage() {
           <Input
             value={subject}
             onChange={(e) => setSubject(e.target.value)}
-            placeholder="e.g. Brake components — August restock"
+            placeholder="What this bill is for"
           />
         </FormRow>
 

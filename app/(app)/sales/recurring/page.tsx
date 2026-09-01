@@ -180,7 +180,7 @@ export default function RecurringPage() {
                     <Input
                       value={f.name}
                       onChange={(e) => setF({ ...f, name: e.target.value })}
-                      placeholder="Monthly fleet maintenance retainer"
+                      placeholder="What the retainer covers"
                     />
                   </Field>
                   <Field label="Customer" required>

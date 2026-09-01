@@ -101,7 +101,7 @@ function LoginInner() {
                   autoComplete="username"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@company.in"
+                  placeholder="you@example.com"
                   required
                   disabled={busy}
                 />

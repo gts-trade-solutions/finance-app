@@ -170,7 +170,7 @@ export default function ItemsPage() {
                     <Input
                       value={form.name}
                       onChange={(e) => setForm({ ...form, name: e.target.value })}
-                      placeholder="Brake Pad Set"
+                      placeholder="Item name"
                     />
                   </Field>
                   <Field label="Type">
@@ -189,7 +189,7 @@ export default function ItemsPage() {
                     <Input
                       value={form.sku}
                       onChange={(e) => setForm({ ...form, sku: e.target.value })}
-                      placeholder="BP-SW-101"
+                      placeholder="SKU-0001"
                     />
                   </Field>
                   <Field

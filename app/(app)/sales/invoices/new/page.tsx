@@ -346,7 +346,7 @@ export default function NewInvoicePage() {
           <Input
             value={subject}
             onChange={(e) => setSubject(e.target.value)}
-            placeholder="e.g. Spare parts supply — August 2026"
+            placeholder="What this invoice is for"
           />
         </FormRow>
 

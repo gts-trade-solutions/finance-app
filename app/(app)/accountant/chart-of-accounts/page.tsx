@@ -126,7 +126,7 @@ export default function ChartOfAccountsPage() {
                       <Input
                         value={f.name}
                         onChange={(e) => setF({ ...f, name: e.target.value })}
-                        placeholder="Software Subscriptions"
+                        placeholder="Account name"
                       />
                     </Field>
                   </div>
@@ -134,7 +134,7 @@ export default function ChartOfAccountsPage() {
                     <Input
                       value={f.description}
                       onChange={(e) => setF({ ...f, description: e.target.value })}
-                      placeholder="Monthly SaaS tools and licences"
+                      placeholder="What this account is for"
                     />
                   </Field>
                   {create.error && <p className="text-sm text-destructive">{create.error}</p>}
