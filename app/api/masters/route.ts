@@ -1,7 +1,7 @@
 import { db } from '@/lib/server/db';
 import { route, asId } from '@/lib/server/http';
 import { toPaiseFromSql } from '@/lib/server/money-sql';
-import { peekNumber } from '@/lib/server/ledger/posting';
+import { peekNumber, peekOrgNumber } from '@/lib/server/ledger/posting';
 import { fyLabelFor } from '@/lib/server/services/sales';
 
 /**
@@ -18,11 +18,12 @@ export const GET = route(
     const forDate = url.searchParams.get('date') ?? new Date().toISOString().slice(0, 10);
     const branchId = Number(url.searchParams.get('branchId') || user.activeBranchId || 0);
 
-    const [contacts, items, hsnCodes, branches, users, accounts, bankAccounts, grants] = await Promise.all([
+    const [org, contacts, items, hsnCodes, branches, users, accounts, bankAccounts, grants] = await Promise.all([
+      db.selectFrom('organizations').selectAll().where('id', '=', orgId).executeTakeFirst(),
       db
         .selectFrom('contacts')
         .select([
-          'id', 'kind', 'display_name', 'gstin', 'gst_treatment', 'state_code',
+          'id', 'kind', 'display_name', 'gstin', 'pan', 'gst_treatment', 'state_code',
           'email', 'phone', 'payment_terms', 'is_msme', 'tds_section', 'billing_address',
         ])
         .where('org_id', '=', orgId)
@@ -68,7 +69,10 @@ export const GET = route(
         .execute(),
       db
         .selectFrom('bank_accounts')
-        .select(['id', 'kind', 'name', 'bank_name', 'account_last4', 'ledger_account_id'])
+        .select([
+          'id', 'kind', 'name', 'bank_name', 'account_last4', 'ifsc',
+          'ledger_account_id', 'opening_balance', 'is_primary', 'feed_connected',
+        ])
         .where('org_id', '=', orgId)
         .where('is_active', '=', 1)
         .orderBy('is_primary', 'desc')
@@ -93,18 +97,49 @@ export const GET = route(
 
     // Peeked, not allocated — showing a number in a form must not consume one,
     // or every abandoned draft leaves a gap in the series.
-    const nextInvoiceNumber = branchId
-      ? await db.transaction().execute((trx) =>
-          peekNumber(trx, orgId, branchId, 'INV', fyLabelFor(forDate), 'INV'),
-        )
-      : null;
+    // Invoices are numbered per branch — each GST registration keeps its own
+    // series. Bills are numbered once for the organisation, because our
+    // internal reference for a supplier's document is ours alone.
+    const { nextInvoiceNumber, nextBillNumber } = await db.transaction().execute(async (trx) => ({
+      nextInvoiceNumber: branchId
+        ? await peekNumber(trx, orgId, branchId, 'INV', fyLabelFor(forDate), 'INV')
+        : null,
+      nextBillNumber: await peekOrgNumber(trx, orgId, 'BILL', fyLabelFor(forDate), 'BILL'),
+    }));
+
+    // The financial year the organisation is in on `forDate`. April-to-March,
+    // read from the organisation rather than assumed, because the column exists
+    // precisely so the calendar is data.
+    const fyStartMonth = org?.fiscal_year_start_month ?? 4;
+    const d = new Date(forDate);
+    const fyStartYear = d.getMonth() + 1 >= fyStartMonth ? d.getFullYear() : d.getFullYear() - 1;
+    // The last day of the year is the day before the next one starts, which is
+    // the only definition that survives a non-April start month.
+    const fyEnd = new Date(Date.UTC(fyStartYear + 1, fyStartMonth - 1, 1) - 86_400_000);
 
     return {
+      org: org && {
+        id: asId(org.id),
+        name: org.name,
+        legalName: org.legal_name,
+        pan: org.pan,
+        gstRegistrationType: org.gst_registration_type,
+        aatoAbove5Cr: !!org.aato_above_5cr,
+        fiscalYearLabel: `FY ${fyStartYear}-${String((fyStartYear + 1) % 100).padStart(2, '0')}`,
+        fiscalYearStart: `${fyStartYear}-${String(fyStartMonth).padStart(2, '0')}-01`,
+        fiscalYearEnd: fyEnd.toISOString().slice(0, 10),
+        baseCurrency: org.base_currency,
+        address: org.address,
+        email: org.email,
+        phone: org.phone,
+        isDemo: !!org.is_demo,
+      },
       contacts: contacts.map((c) => ({
         id: asId(c.id),
         kind: c.kind,
         displayName: c.display_name,
         gstin: c.gstin,
+        pan: c.pan,
         gstTreatment: c.gst_treatment,
         stateCode: c.state_code,
         email: c.email,
@@ -167,9 +202,14 @@ export const GET = route(
         name: b.name,
         bankName: b.bank_name,
         accountLast4: b.account_last4,
+        ifsc: b.ifsc,
         ledgerAccountId: asId(b.ledger_account_id),
+        openingBalancePaise: toPaiseFromSql(b.opening_balance),
+        isPrimary: !!b.is_primary,
+        feedConnected: !!b.feed_connected,
       })),
       nextInvoiceNumber,
+      nextBillNumber,
     };
   },
   { permission: { module: 'sales', action: 'view' } },

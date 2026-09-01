@@ -51,6 +51,10 @@ const ROUTES = [
   '/reports/refund-history',
   // Depth
   '/ai', '/settings', '/settings/hsn-codes', '/portal',
+  // The signed-out surface. Visited last, and while signed in, which is fine:
+  // none of the three redirects on a session, and a console error on the
+  // landing page is the one a prospective customer would see first.
+  '/', '/login', '/register',
 ];
 
 /** Browser noise that says nothing about our code. */
@@ -83,7 +87,7 @@ current = '/login';
 await page.goto(`${BASE}/login`, { waitUntil: 'networkidle' });
 // Real credentials now — the role picker was a demo affordance and is gone.
 await page.locator('#email').fill('arun@raceautospares.in');
-await page.locator('#password').fill(process.env.DEMO_PASSWORD || 'Finora@2026');
+await page.locator('#password').fill(process.env.DEMO_PASSWORD || 'Rekonza@2026');
 await page.getByRole('button', { name: /^Sign in$/ }).click();
 await page.waitForURL('**/dashboard', { timeout: 30000 });
 await page.waitForTimeout(1200);

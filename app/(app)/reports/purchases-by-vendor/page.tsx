@@ -1,38 +1,33 @@
 'use client';
 
-import { useMemo } from 'react';
+// Spending ranked by supplier, net of GST.
+
 import { downloadCsv, ReportShell, useReportRange } from '@/components/shared/report-shell';
 import { RankedReport, type RankedRow } from '@/components/shared/ranked-report';
-import { useAppStore } from '@/lib/store';
-import { contactName } from '@/lib/selectors';
+import { AsyncPage } from '@/components/shared/async-state';
+import { reports, type SalesByReport } from '@/lib/api/client';
+import { useApi } from '@/lib/api/use-api';
 import { toRupees } from '@/lib/money';
+import { stateName } from '@/lib/tax/gst';
+
+function toRanked(d: SalesByReport): RankedRow[] {
+  return d.rows.map((r) => {
+    const state = r.detail ? stateName(r.detail.slice(0, 2)) : '';
+    return {
+      key: r.key,
+      label: r.name,
+      sublabel: `${r.count} bill${r.count === 1 ? '' : 's'}${state ? ` · ${state}` : ''}`,
+      amountPaise: r.taxablePaise,
+    };
+  });
+}
 
 export default function PurchasesByVendorPage() {
-  const s = useAppStore();
   const [range, setRange] = useReportRange();
-
-  const rows = useMemo<RankedRow[]>(() => {
-    const map = new Map<string, { amount: number; count: number }>();
-    for (const b of s.bills) {
-      if (b.status === 'void') continue;
-      if (b.date < range.from || b.date > range.to) continue;
-      const cur = map.get(b.vendorId) ?? { amount: 0, count: 0 };
-      cur.amount += b.subtotalPaise;
-      cur.count += 1;
-      map.set(b.vendorId, cur);
-    }
-    return [...map.entries()]
-      .map(([id, v]) => {
-        const vendor = s.contacts.find((x) => x.id === id);
-        return {
-          key: id,
-          label: contactName(s, id),
-          sublabel: `${v.count} bill${v.count === 1 ? '' : 's'}${vendor?.isMsme ? ' · MSME' : ''}`,
-          amountPaise: v.amount,
-        };
-      })
-      .sort((a, b) => b.amountPaise - a.amountPaise);
-  }, [s, range]);
+  const state = useApi<SalesByReport>(
+    () => reports.purchasesByVendor(range.from, range.to),
+    [range.from, range.to],
+  );
 
   return (
     <ReportShell
@@ -40,14 +35,17 @@ export default function PurchasesByVendorPage() {
       description="Spending ranked by supplier, excluding GST. The top of this list is where negotiating better terms pays off most."
       range={range}
       onRangeChange={setRange}
-      onExport={() =>
+      onExport={() => {
+        if (!state.data) return;
         downloadCsv('purchases-by-vendor.csv', [
           ['Vendor', 'Detail', 'Net purchases'],
-          ...rows.map((r) => [r.label, r.sublabel ?? '', toRupees(r.amountPaise)]),
-        ])
-      }
+          ...toRanked(state.data).map((r) => [r.label, r.sublabel ?? '', toRupees(r.amountPaise)]),
+        ]);
+      }}
     >
-      <RankedReport rows={rows} labelHeader="Vendor" valueHeader="Net purchases" />
+      <AsyncPage state={state}>
+        {(d) => <RankedReport rows={toRanked(d)} labelHeader="Vendor" valueHeader="Net purchases" />}
+      </AsyncPage>
     </ReportShell>
   );
 }

@@ -16,12 +16,12 @@
 // care — a read showing stale data is a nuisance, a write going to the wrong
 // place is a lost document.
 //
-// Only what a migrated page reads is mirrored. Accounts and bank accounts are
-// deliberately left alone: the seeded journal entries and bank lines that the
-// not-yet-migrated ledger, banking and report screens read still reference the
-// local ids, and replacing the account list underneath them would leave every
-// one of those rows pointing at nothing. Each of those collections switches
-// over when its own pages do.
+// Every collection a form reads is now mirrored, the organisation and the
+// chart of accounts included. They were held back during the migration because
+// the seeded journal entries still carried local ids; with every screen on the
+// API, the opposite is true — leaving them on the mock seed would show a new
+// business somebody else's company name in the topbar and somebody else's bank
+// accounts in its pickers.
 //
 // Documents are never mirrored — those are the things that change while you
 // are looking at them.
@@ -30,12 +30,19 @@
 import { useEffect, useState } from 'react';
 import { api } from './client';
 import { useAppStore } from '@/lib/store';
-import type { Account, Contact, HsnCode, Item, User } from '@/lib/types';
+import type { Account, BankAccount, Contact, HsnCode, Item, Org, User } from '@/lib/types';
 
 interface MastersResponse {
+  org: {
+    id: string; name: string; legalName: string | null; pan: string | null;
+    gstRegistrationType: Org['gstRegistrationType']; aatoAbove5Cr: boolean;
+    fiscalYearLabel: string; fiscalYearStart: string; fiscalYearEnd: string;
+    baseCurrency: string; address: string | null; email: string | null;
+    phone: string | null; isDemo: boolean;
+  } | null;
   contacts: {
     id: string; kind: 'customer' | 'vendor' | 'both'; displayName: string;
-    gstin: string | null; gstTreatment: string; stateCode: string;
+    gstin: string | null; pan: string | null; gstTreatment: string; stateCode: string;
     email: string | null; phone: string | null; paymentTerms: string | null;
     isMsme: boolean; tdsSection: string | null; billingAddress: string | null;
   }[];
@@ -61,10 +68,12 @@ interface MastersResponse {
     subtype: string | null; isSystem: boolean;
   }[];
   bankAccounts: {
-    id: string; kind: string; name: string; bankName: string | null;
-    accountLast4: string | null; ledgerAccountId: string;
+    id: string; kind: BankAccount['kind']; name: string; bankName: string | null;
+    accountLast4: string | null; ifsc: string | null; ledgerAccountId: string;
+    openingBalancePaise: number; isPrimary: boolean; feedConnected: boolean;
   }[];
   nextInvoiceNumber: string | null;
+  nextBillNumber: string | null;
 }
 
 const AVATAR = ['#4f7ce8', '#2fa4a0', '#e0883a', '#8a63d2', '#d9556b', '#3f9f5f'];
@@ -86,10 +95,16 @@ function address(line: string | null, stateCode: string) {
   };
 }
 
-export function useMasters(): { ready: boolean; error: string | null; nextInvoiceNumber: string | null } {
+export function useMasters(): {
+  ready: boolean;
+  error: string | null;
+  nextInvoiceNumber: string | null;
+  nextBillNumber: string | null;
+} {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [nextInvoiceNumber, setNext] = useState<string | null>(null);
+  const [nextBillNumber, setNextBill] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -100,6 +115,21 @@ export function useMasters(): { ready: boolean; error: string | null; nextInvoic
         if (cancelled) return;
 
         useAppStore.setState({
+          org: m.org && {
+            id: m.org.id,
+            name: m.org.name,
+            pan: m.org.pan ?? '',
+            gstRegistrationType: m.org.gstRegistrationType,
+            aatoAbove5Cr: m.org.aatoAbove5Cr,
+            fiscalYearLabel: m.org.fiscalYearLabel,
+            fiscalYearStart: m.org.fiscalYearStart,
+            fiscalYearEnd: m.org.fiscalYearEnd,
+            baseCurrency: 'INR',
+            address: m.org.address ?? '',
+            email: m.org.email ?? '',
+            phone: m.org.phone ?? '',
+          },
+
           contacts: m.contacts.map<Contact>((c) => ({
             id: c.id,
             kind: c.kind,
@@ -107,7 +137,7 @@ export function useMasters(): { ready: boolean; error: string | null; nextInvoic
             companyName: c.displayName,
             gstin: c.gstin,
             gstTreatment: c.gstTreatment as Contact['gstTreatment'],
-            pan: null,
+            pan: c.pan ?? null,
             stateCode: c.stateCode,
             email: c.email ?? '',
             phone: c.phone ?? '',
@@ -165,9 +195,39 @@ export function useMasters(): { ready: boolean; error: string | null; nextInvoic
             branchAccess: u.branchAccess,
           })),
 
+          accounts: m.accounts.map<Account>((a) => ({
+            id: a.id,
+            code: a.code,
+            name: a.name,
+            type: a.type,
+            // The chart is stored flat and read as a tree from the code
+            // prefixes, so there is no parent id to carry across.
+            parentId: null,
+            isSystem: a.isSystem,
+            isArchived: false,
+          })),
+
+          bankAccounts: m.bankAccounts.map<BankAccount>((b) => ({
+            id: b.id,
+            kind: b.kind,
+            name: b.name,
+            bankName: b.bankName ?? undefined,
+            accountLast4: b.accountLast4 ?? undefined,
+            ifsc: b.ifsc ?? undefined,
+            ledgerAccountId: b.ledgerAccountId,
+            openingBalancePaise: b.openingBalancePaise,
+            isPrimary: b.isPrimary,
+            feedConnected: b.feedConnected,
+          })),
         });
 
         setNext(m.nextInvoiceNumber);
+        setNextBill(m.nextBillNumber);
+        // Held in the store too, so a document form can show the number the
+        // database will actually assign rather than computing its own.
+        useAppStore.setState({
+          nextNumbers: { invoice: m.nextInvoiceNumber, bill: m.nextBillNumber },
+        });
         setReady(true);
       })
       .catch((err: unknown) => {
@@ -181,5 +241,5 @@ export function useMasters(): { ready: boolean; error: string | null; nextInvoic
     };
   }, []);
 
-  return { ready, error, nextInvoiceNumber };
+  return { ready, error, nextInvoiceNumber, nextBillNumber };
 }

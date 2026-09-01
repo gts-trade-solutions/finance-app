@@ -4,11 +4,21 @@ import { route, query, badRequest } from '@/lib/server/http';
 import {
   trialBalance, profitAndLoss, balanceSheet, generalLedger, ageing,
 } from '@/lib/server/reports/statements';
+import {
+  accountTypeSummary, businessRatios, cashFlow, expensesByCategory,
+  movementOfEquity, partyBalances, purchasesByVendor, refundHistory, salesBy, timeToGetPaid,
+} from '@/lib/server/reports/analysis';
 
 const ReportQuery = z.object({
   report: z.enum([
+    // Statements — what the books say.
     'trial-balance', 'profit-and-loss', 'balance-sheet',
     'general-ledger', 'ar-ageing', 'ap-ageing',
+    // Analysis — what that tells us. Same journal, different question.
+    'customer-balances', 'vendor-balances', 'sales-by-customer', 'sales-by-item',
+    'sales-by-salesperson', 'purchases-by-vendor', 'expenses-by-category',
+    'account-type-summary', 'cash-flow', 'business-ratios', 'movement-of-equity',
+    'time-to-get-paid', 'refund-history',
   ]),
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Give an end date as yyyy-mm-dd.'),
@@ -71,6 +81,41 @@ export const GET = route(
         const side = q.report === 'ar-ageing' ? 'receivable' : 'payable';
         const result = await ageing(db, orgId, side, q.to);
         return { report: q.report, asOf: q.to, side, ...result };
+      }
+
+      // ── Analysis. All of these cover a period, so all need a start date.
+      default: {
+        if (!q.from) throw badRequest('This report covers a period, so it needs a start date.');
+        const w = { from: q.from, to: q.to };
+
+        switch (q.report) {
+          case 'customer-balances':
+            return { report: q.report, ...w, rows: await partyBalances(db, orgId, 'customer', w) };
+          case 'vendor-balances':
+            return { report: q.report, ...w, rows: await partyBalances(db, orgId, 'vendor', w) };
+          case 'sales-by-customer':
+            return { report: q.report, ...w, rows: await salesBy(db, orgId, 'customer', w) };
+          case 'sales-by-item':
+            return { report: q.report, ...w, rows: await salesBy(db, orgId, 'item', w) };
+          case 'sales-by-salesperson':
+            return { report: q.report, ...w, rows: await salesBy(db, orgId, 'salesperson', w) };
+          case 'purchases-by-vendor':
+            return { report: q.report, ...w, rows: await purchasesByVendor(db, orgId, w) };
+          case 'expenses-by-category':
+            return { report: q.report, ...w, rows: await expensesByCategory(db, orgId, w) };
+          case 'account-type-summary':
+            return { report: q.report, asOf: q.to, rows: await accountTypeSummary(db, orgId, q.to) };
+          case 'cash-flow':
+            return { report: q.report, ...(await cashFlow(db, orgId, w)) };
+          case 'business-ratios':
+            return { report: q.report, ...w, ratios: await businessRatios(db, orgId, w) };
+          case 'movement-of-equity':
+            return { report: q.report, ...w, ...(await movementOfEquity(db, orgId, w)) };
+          case 'time-to-get-paid':
+            return { report: q.report, ...w, ...(await timeToGetPaid(db, orgId, w)) };
+          case 'refund-history':
+            return { report: q.report, ...w, rows: await refundHistory(db, orgId, w) };
+        }
       }
     }
   },

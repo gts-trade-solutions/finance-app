@@ -1,80 +1,108 @@
-# Finora — interactive MVP
+# REKONZA AI — Books. Made Smarter.
 
-A clickable prototype of an India-first accounting product. **No backend, no database, no external APIs** — everything runs in the browser on dummy data so the whole feature set can be reviewed and approved before any server work begins.
+Double-entry accounting, GST compliance, e-invoicing and banking for Indian business. Next.js 15 on the front, MySQL and a real posting engine behind it — every figure on every report is computed from the journal on request, so no two screens can disagree.
 
 ```bash
 npm install
-npm run dev          # http://localhost:5000
+cp .env.example .env.local     # DB_HOST, DB_USER, DB_PASSWORD, DB_NAME
+npm run db:migrate             # hand-numbered SQL migrations, checksum-enforced
+npm run db:seed                # builds the demo organisation
+npm run dev                    # http://localhost:5000
 ```
 
-Pick any user on the sign-in screen. Data is seeded automatically and persists in your browser's local storage. The **Demo** menu in the top bar resets it at any time.
+Then either **create an account** at `/register` — which gives you an empty, private set of books — or open the **demo book** from the sign-in page, which is a fully worked example you can click through without signing up.
 
 ---
 
 ## What makes this more than a mockup
 
-Under the screens sits a real double-entry ledger. Every invoice, bill and payment you create posts a balanced journal entry, and the Trial Balance, Profit & Loss and Balance Sheet are computed live from those entries. Nothing is faked with hardcoded numbers.
+Under the screens sits a real double-entry ledger in MySQL. Every invoice, bill and payment posts a balanced journal entry inside the same transaction that writes the document, and the Trial Balance, Profit & Loss and Balance Sheet are derived from those entries on every request. Nothing is cached, and nothing is faked with hard-coded numbers.
 
-- **The books always balance.** The posting engine (`lib/ledger/posting.ts`) rejects any entry whose debits and credits differ — by construction, not by checking afterwards.
-- **Nothing is ever deleted.** Voiding a document posts an opposite, cancelling entry. Both stay visible. This is what Indian law requires of accounting software, and it falls out of the design rather than being bolted on.
-- **The GST engine is real.** `lib/tax/gst.ts` resolves CGST+SGST vs IGST from the supplier's state and the place of supply, handles exports, SEZ, reverse charge and composition dealers, and validates GSTIN checksums. It is production code, not demo filler.
-- **TDS thresholds actually accumulate.** Bill a contractor past ₹1,00,000 in a year and the app starts withholding tax automatically.
+- **The books always balance.** `lib/server/ledger/posting.ts` rejects any entry whose debits and credits differ — by construction, not by checking afterwards. It is the only writer of journal lines in the codebase.
+- **Nothing is ever edited.** Voiding a document posts an opposite, cancelling entry; both stay visible. MCA Rule 11(g) requires an audit trail that cannot be switched off, so there is no update or delete path anywhere in `lib/server/audit.ts`.
+- **The GST engine is real.** `lib/tax/gst.ts` resolves CGST+SGST versus IGST from the supplier's registration and the place of supply, handles exports, SEZ, reverse charge and composition dealers, and validates GSTIN mod-36 checksums.
+- **Money never drifts.** Every amount is held as integer paise end to end — `DECIMAL(19,4)` in the database, string and BigInt arithmetic in between. No floating point touches a rupee value.
+- **TDS thresholds accumulate across the year.** Bill a contractor past ₹1,00,000 in a financial year and the app starts withholding, at the rate the vendor's PAN status actually earns.
 
-## A 5-minute walkthrough
+## A five-minute walkthrough
 
-1. **Sign in as Arun (Admin)** → the dashboard shows live receivables, cash position, profit, and compliance alerts.
-2. **Sales → Invoices → New invoice.** Pick *Sharma Traders* (Tamil Nadu) and watch the tax panel resolve to **CGST + SGST**. Switch the customer to *Apex Motors* (Karnataka) and it flips to **IGST** — same goods, different tax, decided by geography.
-3. Save it, then open the **Journal entry** tab on the invoice. That's the double-entry the customer never sees.
-4. **Submit to IRP** on the invoice → after a pause an IRN and signed QR code are stamped on the document. Print it to see the tax invoice.
-5. **Banking → Reconcile.** Two panes: bank lines on the left, suggested matches on the right. Use ↑ ↓ and Enter. The statement-vs-ledger delta at the top is the number that must reach zero.
-6. **Reports → Trial Balance.** Debits equal credits to the paisa. Do anything you like in the app first — it will still balance.
-7. **GST → ITC reconciliation.** Four buckets showing where input credit is safe, at risk, or being missed entirely.
-8. **Purchases → MSME 45-day tracker.** Countdown on unpaid small-supplier bills, because paying them late costs a tax deduction.
-9. **Demo menu → switch to Vikram (Sales).** Purchase costs, profit figures and whole modules disappear.
+Open the demo book as **Admin** from the sign-in page.
+
+1. **Dashboard** — receivables, cash, profit, and the two deadlines that cost money: invoices without an IRN, and MSME bills approaching day 45.
+2. **Sales → Invoices → New invoice.** Pick *Sharma Traders* (Tamil Nadu) and the tax panel resolves to **CGST + SGST**. Switch to *Apex Motors* (Karnataka) and it flips to **IGST** — same goods, different tax, decided by geography.
+3. Save it, then open the **Journal** tab. That is the double-entry the customer never sees.
+4. **Banking → Reconcile.** Statement lines on the left, suggested matches on the right, ↑ ↓ and Enter to work through them. The statement-versus-ledger delta at the top is the number that has to reach zero.
+5. **Reports → Trial Balance.** Debits equal credits to the paisa. Do anything you like in the app first; it will still balance.
+6. **GST → GSTR-1.** Section by section, with the portal JSON.
+7. **Purchases → MSME 45-day tracker.** A countdown on unpaid small-supplier bills, because paying them late costs the deduction under Section 43B(h).
 
 ## Module map
 
 | Area | What's in it |
 |---|---|
-| **Dashboard** | Cash, receivables, payables, profit, compliance alerts, AI flags |
-| **Sales** | Customers · Items · Estimates · Sales orders · Delivery challans · Invoices · Retainers · Payments · Credit notes · Recurring & reminders |
+| **Dashboard** | Cash, receivables, payables, profit, compliance alerts |
+| **Sales** | Customers · Items · Estimates · Sales orders · Delivery challans · Invoices · Retainers · Payments · Credit notes · Recurring profiles |
 | **Purchases** | Vendors · Expenses · Purchase orders · Bills (ITC / reverse charge / TDS) · Payment runs · Vendor credits · MSME tracker |
-| **Banking** | Accounts · Reconciliation workspace · CSV import & feeds · Rules · Transfers · Cheques & PDCs |
-| **Accountant** | Manual journals · Chart of accounts · Opening balances · Budgets · Period close · Audit trail |
-| **GST & taxes** | E-invoices (IRP) · E-way bills · GSTR-1 · GSTR-3B with set-off · ITC reconciliation · TDS & TCS |
+| **Banking** | Accounts · Reconciliation workspace · Statement import · Rules · Transfers · Cheques & PDCs |
+| **Accountant** | Manual journals · Chart of accounts · Opening balances · Budgets · Recurring journals · Period close · Transaction locks · Audit trail |
+| **GST & taxes** | E-invoices · E-way bills · GSTR-1 · GSTR-3B with the Section 49A set-off order · GSTR-2B reconciliation · TDS & TCS |
 | **Inventory** | Stock on hand · Adjustments · Warehouses |
-| **Reports** | 14 reports, all derived live from journal entries, all exportable |
-| **AI assistant** | Ask questions · Scan a document · What needs attention |
-| **Settings** | Organisation · Users & roles · Numbering · Custom fields · Automation · Integrations · Developer API |
-| **Portal** | Customer-facing view at `/portal` |
+| **Reports** | 33 reports, every one derived from the journal, all exportable |
+| **Settings** | Organisation · Numbering · HSN master · Custom fields · Automation · Integrations |
+| **Portal** | Customer-facing view at `/portal`, currently a signed-in preview |
 
 ## How it's put together
 
 ```
-app/(app)/…          screens, grouped by module
-app/login            role picker
-app/portal           customer-facing surface
+app/
+  page.tsx           the landing page (static, no session read)
+  login/ register/   sign in, sign up, and the demo door
+  (app)/…            the application, grouped by module
+  api/…              route handlers; every write goes through a service
+  portal/            customer-facing surface
 components/
-  ui/                shadcn (Base UI) primitives
-  shared/            money, tables, report shell, journal table…
-  forms/ layout/ print/ charts/
+  brand/logo.tsx     the single source of the name, tagline and artwork
+  ui/                shadcn primitives on Base UI
+  shared/ layout/ charts/
 lib/
-  ledger/posting.ts  the only writer of journal entries
-  ledger/reports.ts  TB / P&L / BS / GL — pure functions
+  server/
+    ledger/posting   the only writer of journal entries
+    ledger/chart-of-accounts
+    services/        invoices, bills, payments, banking, GST — the write layer
+    reports/         TB · P&L · BS · GL · ageing, computed on request
+    gst/             returns, e-invoicing, ITC reconciliation
+    seed/            the demo organisation
+    auth/            argon2id passwords, server-side sessions
   tax/gst.ts         supply-type resolver + GSTIN checksum
   tax/tds.ts         section master + threshold logic
-  services/          the future API surface, mock-backed today
-  store/             one Zustand store, persisted
-  mock/seed/         the demo dataset, built via the real services
-  mock/simulators.ts fake IRP, bank feed, OCR, assistant
+  api/client.ts      the typed browser-side API surface
+db/migrations/       hand-numbered SQL, checksum-enforced
 ```
 
-Money is stored as **integer paise** throughout and formatted with Indian digit grouping. No floating-point arithmetic touches a rupee value anywhere.
+## The demo book, and real books
 
-## Simulated, not real
+The demo organisation is a real row in the database carrying `is_demo = 1`. That flag is what the app keys off:
 
-The IRP, e-way bill portal, bank feeds, payment gateway, OCR and the assistant are all simulated locally with realistic delays and failure paths — one invoice deliberately gets rejected by the fake IRP so the retry flow is visible. Swapping these for real integrations is backend work, and each already sits behind a single function.
+- the sign-in page's one-click door only ever opens onto an organisation with it set;
+- the top bar shows "Demo book · nothing here is filed with any portal" only when it is set;
+- `npm run db:seed -- --fresh` deletes and rebuilds **only** organisations with it set, so a customer's ledger is never in range of the seed script.
 
-## Not built yet
+Nothing that comes through the sign-up form can set it. A new organisation gets the standard chart of accounts, a Cash in Hand account, numbering that starts at one, and nothing else.
 
-Payroll, manufacturing, fixed-asset depreciation, multi-currency and multi-entity consolidation are deliberately out of scope. See the approved plan for the reasoning.
+## Not connected yet
+
+Live IRN registration needs a contract with a GST Suvidha Provider. Automatic bank feeds need an Account Aggregator licence that accounting software does not hold. Outbound email needs a mail transport, and the payment button needs a merchant account. None of these are wired up, and the app says so where you would go looking for them rather than showing a green "Connected" badge over nothing.
+
+## Not built
+
+Payroll, manufacturing, fixed-asset depreciation, multi-currency and multi-entity consolidation are deliberately out of scope.
+
+## Checks
+
+```bash
+npm run test:unit      # posting engine, money arithmetic, services
+npm run test:api       # route handlers against a live server
+npm run smoke          # every route renders with no console errors
+npm run flows          # end-to-end journeys through the UI
+node scripts/onboarding.mjs   # landing page, sign-up, and the demo door
+```

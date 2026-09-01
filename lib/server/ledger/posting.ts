@@ -267,6 +267,29 @@ export async function peekNumber(
 }
 
 /**
+ * Peek at the next org-wide number without consuming it.
+ *
+ * The mirror of peekNumber for documents numbered once per organisation rather
+ * than per branch — bills, expenses, receipts, payments, retainers.
+ */
+export async function peekOrgNumber(
+  trx: Trx,
+  orgId: number,
+  docType: string,
+  fyLabel: string,
+  prefix: string,
+  padding = 4,
+): Promise<string> {
+  const row = await trx
+    .selectFrom('sequences')
+    .select('next_value')
+    .where('org_id', '=', orgId)
+    .where('name', '=', `${docType}:${fyLabel}`)
+    .executeTakeFirst();
+  return format(prefix, fyLabel, Number(row?.next_value ?? 1), padding);
+}
+
+/**
  * Validate and write one journal entry.
  *
  * Must be called inside a transaction. The caller composes the document write

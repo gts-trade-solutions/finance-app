@@ -22,10 +22,8 @@ import {
   branchOptionsForUser, dueDateFor, termsForDays, termsOptions, userBranches,
   vendorOptions,
 } from '@/lib/options';
-import { vendorFyTaxable } from '@/lib/services/purchases';
 import { api, ApiError } from '@/lib/api/client';
-import { peekNumber } from '@/lib/series';
-import { FY_SHORT } from '@/lib/mock/seed/org';
+import { useApi } from '@/lib/api/use-api';
 import { computeLineTax, stateName, sumTax, totalTaxPaise } from '@/lib/tax/gst';
 import { computeTds, TDS_SECTIONS } from '@/lib/tax/tds';
 import { formatINR } from '@/lib/money';
@@ -56,10 +54,22 @@ export default function NewBillPage() {
 
   const vendors = useMemo(() => vendorOptions(s), [s]);
   const branches = useMemo(() => branchOptionsForUser(s), [s]);
-  const internalNo = useMemo(
-    () => (branchId ? peekNumber(s.series, branchId, 'BILL', FY_SHORT) : ''),
-    [s.series, branchId],
+  // Peeked from the real sequence by /api/masters. Bills are numbered once for
+  // the organisation, so the figure does not depend on the branch.
+  const internalNo = s.nextNumbers.bill ?? '';
+
+  // What this vendor has already been billed this financial year. TDS
+  // thresholds are annual, so a bill is only correctly deducted in the context
+  // of everything before it — computing it from this bill alone under-deducts,
+  // and the shortfall is recovered from us with interest.
+  const vendorSummary = useApi(
+    async () =>
+      vendorId
+        ? api.get<{ summary: { fyTaxablePaise: number } }>(`/api/contacts/${vendorId}?summary=1`)
+        : null,
+    [vendorId],
   );
+  const fyTaxable = vendorSummary.data?.summary.fyTaxablePaise ?? 0;
 
   const vendor = s.contacts.find((c) => c.id === vendorId);
   const branch = s.branches.find((b) => b.id === branchId);
@@ -105,12 +115,12 @@ export default function NewBillPage() {
       sectionCode,
       hasPan: !!vendor?.pan,
       billTaxable: tax.taxablePaise,
-      fyPaidSoFar: vendorId ? vendorFyTaxable(vendorId) : 0,
+      fyPaidSoFar: fyTaxable,
     });
     const gross = tax.taxablePaise + (isRcm ? 0 : totalTaxPaise(tax));
     const qty = lines.reduce((t, l) => t + (l.qty || 0), 0);
     return { tax, tds, gross, payable: gross - tds.tdsPaise, qty };
-  }, [lines, supplyType, isComposition, vendor, tdsOverride, isRcm, vendorId]);
+  }, [lines, supplyType, isComposition, vendor, tdsOverride, isRcm, fyTaxable]);
 
   const valid = !!vendorId && !!vendorInvoiceNo.trim() && lines.some((l) => l.qty > 0 && l.ratePaise > 0);
 

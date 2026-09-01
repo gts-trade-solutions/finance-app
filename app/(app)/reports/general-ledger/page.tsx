@@ -1,35 +1,57 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import Link from 'next/link';
-import { Money } from '@/components/shared/money';
-import {
-  downloadCsv, ReportShell, ReportTable, useReportRange,
-} from '@/components/shared/report-shell';
-import { useAppStore } from '@/lib/store';
-import { Combobox } from '@/components/ui/combobox';
-import { accountOptions } from '@/lib/options';
-import { generalLedger } from '@/lib/ledger/reports';
-import { toRupees } from '@/lib/money';
-import { ACC } from '@/lib/mock/seed/accounts';
+// One account, in order, with a running balance.
+//
+// This is the drill-down behind every other report: a figure on the trial
+// balance or the profit and loss is a total of exactly these rows, and this is
+// where you go when one of them looks wrong.
 
-/** Where a source document lives, so every ledger line can drill through. */
+import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
+import { Combobox } from '@/components/ui/combobox';
+import { Money } from '@/components/shared/money';
+import { downloadCsv, ReportShell, ReportTable, useReportRange } from '@/components/shared/report-shell';
+import { AsyncPage, LoadingRows } from '@/components/shared/async-state';
+import { api, reports, type GeneralLedgerReport } from '@/lib/api/client';
+import { useApi } from '@/lib/api/use-api';
+import { toRupees } from '@/lib/money';
+
+/** Where a source document lives, so every line can drill through to it. */
 const SOURCE_ROUTE: Record<string, string> = {
   invoice: '/sales/invoices',
   bill: '/purchases/bills',
 };
 
 export default function GeneralLedgerPage() {
-  const s = useAppStore();
   const [range, setRange] = useReportRange();
-  const [accountId, setAccountId] = useState<string>(ACC.AR);
+  const [accountId, setAccountId] = useState('');
 
-  const rows = useMemo(
-    () => generalLedger(s.entries, accountId, range),
-    [s.entries, accountId, range],
+  const masters = useApi<{ accounts: { id: string; code: string; name: string; type: string }[] }>(
+    () => api.get('/api/masters'),
+    [],
   );
-  const account = s.accounts.find((a) => a.id === accountId);
-  const closing = rows.length ? rows[rows.length - 1].running : 0;
+
+  const options = useMemo(
+    () =>
+      (masters.data?.accounts ?? []).map((a) => ({
+        value: a.id,
+        label: a.name,
+        sublabel: `${a.code} · ${a.type}`,
+      })),
+    [masters.data],
+  );
+
+  // Open on Accounts Receivable — the account people check most often.
+  useEffect(() => {
+    if (accountId || !masters.data) return;
+    const ar = masters.data.accounts.find((a) => a.code === '1100');
+    setAccountId(ar?.id ?? masters.data.accounts[0]?.id ?? '');
+  }, [accountId, masters.data]);
+
+  const state = useApi<GeneralLedgerReport | null>(
+    () => (accountId ? reports.generalLedger(accountId, range.from, range.to) : Promise.resolve(null)),
+    [accountId, range.from, range.to],
+  );
 
   return (
     <ReportShell
@@ -38,93 +60,125 @@ export default function GeneralLedgerPage() {
       range={range}
       onRangeChange={setRange}
       extraActions={
-        <div className="space-y-1">
+        <div className="w-64 space-y-1">
           <label className="text-[11px] font-medium text-muted-foreground">Account</label>
           <Combobox
-            options={accountOptions(s)}
+            options={options}
             value={accountId}
             onChange={setAccountId}
-            placeholder="Select account"
-            searchPlaceholder="Search accounts by name or code"
+            placeholder="Select an account"
+            searchPlaceholder="Search by name or code"
             showAvatar={false}
-            className="w-64"
           />
         </div>
       }
-      onExport={() =>
-        downloadCsv(`general-ledger-${account?.code}.csv`, [
-          ['Date', 'JE#', 'Source', 'Narration', 'Debit', 'Credit', 'Balance'],
-          ...rows.map((r) => [
-            r.date, r.entryNo, r.sourceType, r.memo,
-            toRupees(r.debit), toRupees(r.credit), toRupees(r.running),
+      onExport={() => {
+        const gl = state.data;
+        if (!gl) return;
+        downloadCsv(`general-ledger-${gl.account.code}.csv`, [
+          ['Date', 'Entry', 'Source', 'Description', 'Contact', 'Debit', 'Credit', 'Balance'],
+          ['', '', '', 'Opening balance', '', '', '', toRupees(gl.openingPaise)],
+          ...gl.lines.map((l) => [
+            l.date, l.entryNo, l.sourceType, l.description ?? l.memo ?? '', l.contactName ?? '',
+            toRupees(l.debitPaise), toRupees(l.creditPaise), toRupees(l.runningPaise),
           ]),
-        ])
-      }
+          ['', '', '', 'Closing balance', '', '', '', toRupees(gl.closingPaise)],
+        ]);
+      }}
     >
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-muted/40 p-4">
-        <div>
-          <p className="text-xs text-muted-foreground">Account</p>
-          <p className="font-medium">
-            <span className="font-mono text-sm text-muted-foreground">{account?.code}</span> {account?.name}
-          </p>
-          <p className="mt-0.5 text-xs capitalize text-muted-foreground">{account?.type}</p>
-        </div>
-        <div className="text-right">
-          <p className="text-xs text-muted-foreground">Closing balance</p>
-          <Money value={Math.abs(closing)} className="text-xl font-semibold" />
-          <p className="text-xs text-muted-foreground">{closing >= 0 ? 'Debit' : 'Credit'}</p>
-        </div>
-      </div>
-
-      <ReportTable>
-        <thead>
-          <tr className="border-b bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
-            <th className="px-4 py-2.5 text-left font-semibold">Date</th>
-            <th className="px-4 py-2.5 text-left font-semibold">JE #</th>
-            <th className="px-4 py-2.5 text-left font-semibold">Narration</th>
-            <th className="px-4 py-2.5 text-left font-semibold">Source</th>
-            <th className="px-4 py-2.5 text-right font-semibold">Debit</th>
-            <th className="px-4 py-2.5 text-right font-semibold">Credit</th>
-            <th className="px-4 py-2.5 text-right font-semibold">Balance</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.length === 0 ? (
-            <tr>
-              <td colSpan={7} className="px-4 py-10 text-center text-sm text-muted-foreground">
-                No movement on this account in the selected period.
-              </td>
-            </tr>
+      <AsyncPage state={state} loading={<LoadingRows rows={10} />}>
+        {(gl) =>
+          !gl ? (
+            <p className="py-10 text-center text-sm text-muted-foreground">
+              Choose an account to see its ledger.
+            </p>
           ) : (
-            rows.map((r, idx) => (
-              <tr key={`${r.entryId}-${idx}`} className="border-b last:border-0 hover:bg-accent/40">
-                <td className="px-4 py-2 text-xs">{new Date(r.date).toLocaleDateString('en-IN')}</td>
-                <td className="px-4 py-2 font-mono text-xs text-muted-foreground">#{r.entryNo}</td>
-                <td className="px-4 py-2">{r.memo}</td>
-                <td className="px-4 py-2">
-                  {r.sourceId && SOURCE_ROUTE[r.sourceType] ? (
-                    <Link
-                      href={`${SOURCE_ROUTE[r.sourceType]}/${r.sourceId}`}
-                      className="text-xs capitalize text-primary hover:underline"
-                    >
-                      {r.sourceType.replace('_', ' ')} ↗
-                    </Link>
+            <>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="rounded-lg border p-4">
+                  <p className="text-xs text-muted-foreground">Opening balance</p>
+                  <Money value={gl.openingPaise} className="mt-1 block text-xl font-semibold" />
+                </div>
+                <div className="rounded-lg border p-4">
+                  <p className="text-xs text-muted-foreground">Movements</p>
+                  <p className="mt-1 tabular text-xl font-semibold">{gl.lines.length}</p>
+                </div>
+                <div className="rounded-lg border p-4">
+                  <p className="text-xs text-muted-foreground">Closing balance</p>
+                  <Money value={gl.closingPaise} className="mt-1 block text-xl font-semibold" />
+                </div>
+              </div>
+
+              <ReportTable>
+                <thead>
+                  <tr className="border-b bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
+                    <th className="px-4 py-2.5 text-left font-semibold">Date</th>
+                    <th className="px-4 py-2.5 text-left font-semibold">Entry</th>
+                    <th className="px-4 py-2.5 text-left font-semibold">Description</th>
+                    <th className="px-4 py-2.5 text-left font-semibold">Contact</th>
+                    <th className="px-4 py-2.5 text-right font-semibold">Debit</th>
+                    <th className="px-4 py-2.5 text-right font-semibold">Credit</th>
+                    <th className="px-4 py-2.5 text-right font-semibold">Balance</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="border-b bg-muted/20">
+                    <td className="px-4 py-2 text-sm text-muted-foreground" colSpan={6}>
+                      Opening balance at {new Date(gl.from).toLocaleDateString('en-IN')}
+                    </td>
+                    <td className="px-4 py-2 text-right font-medium"><Money value={gl.openingPaise} /></td>
+                  </tr>
+
+                  {gl.lines.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="px-4 py-10 text-center text-sm text-muted-foreground">
+                        Nothing moved through this account in the period.
+                      </td>
+                    </tr>
                   ) : (
-                    <span className="text-xs capitalize text-muted-foreground">{r.sourceType.replace('_', ' ')}</span>
+                    gl.lines.map((l, i) => {
+                      const route = SOURCE_ROUTE[l.sourceType];
+                      return (
+                        <tr key={`${l.entryId}-${i}`} className="border-b last:border-0 hover:bg-accent/40">
+                          <td className="px-4 py-2 tabular text-xs">
+                            {new Date(l.date).toLocaleDateString('en-IN', {
+                              day: '2-digit', month: 'short', year: '2-digit',
+                            })}
+                          </td>
+                          <td className="px-4 py-2 text-xs text-muted-foreground">#{l.entryNo}</td>
+                          <td className="px-4 py-2">
+                            {l.description ?? l.memo ?? '—'}
+                            <span className="ml-2 text-xs capitalize text-muted-foreground">
+                              {route ? (
+                                <Link href={route} className="underline underline-offset-2">
+                                  {l.sourceType.replace('_', ' ')}
+                                </Link>
+                              ) : (
+                                l.sourceType.replace('_', ' ')
+                              )}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2 text-sm text-muted-foreground">{l.contactName ?? '—'}</td>
+                          <td className="px-4 py-2 text-right"><Money value={l.debitPaise} showZero={false} /></td>
+                          <td className="px-4 py-2 text-right"><Money value={l.creditPaise} showZero={false} /></td>
+                          <td className="px-4 py-2 text-right font-medium"><Money value={l.runningPaise} /></td>
+                        </tr>
+                      );
+                    })
                   )}
-                </td>
-                <td className="px-4 py-2 text-right">
-                  {r.debit > 0 ? <Money value={r.debit} /> : <span className="text-muted-foreground">—</span>}
-                </td>
-                <td className="px-4 py-2 text-right">
-                  {r.credit > 0 ? <Money value={r.credit} /> : <span className="text-muted-foreground">—</span>}
-                </td>
-                <td className="px-4 py-2 text-right font-medium"><Money value={r.running} /></td>
-              </tr>
-            ))
-          )}
-        </tbody>
-      </ReportTable>
+
+                  <tr className="border-t-2 bg-muted/40 font-semibold">
+                    <td className="px-4 py-3" colSpan={6}>
+                      Closing balance at {new Date(gl.to).toLocaleDateString('en-IN')}
+                    </td>
+                    <td className="px-4 py-3 text-right"><Money value={gl.closingPaise} /></td>
+                  </tr>
+                </tbody>
+              </ReportTable>
+            </>
+          )
+        }
+      </AsyncPage>
     </ReportShell>
   );
 }

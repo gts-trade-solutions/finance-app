@@ -1,234 +1,250 @@
 'use client';
 
-import { useMemo } from 'react';
-import { Download, Receipt } from 'lucide-react';
+// TDS — tax deducted at source, in both directions.
+//
+// The two sides are opposites in every sense. What we deduct from a supplier is
+// a liability: we are holding the government's money and must deposit it by the
+// 7th of the following month. What a customer deducts from us is an asset —
+// they have already paid it on our behalf, and it comes back as credit against
+// our own income tax when we file.
+//
+// The period defaults to the financial year, not the month, because every TDS
+// threshold is annual. A monthly view cannot tell you whether one was crossed.
+
+import { useState } from 'react';
+import { Download, Receipt, TrendingDown, TrendingUp } from 'lucide-react';
 import { toast } from 'sonner';
-import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Progress } from '@/components/ui/progress';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { PageHeader } from '@/components/shared/page-header';
 import { Money } from '@/components/shared/money';
 import { StatTile } from '@/components/shared/stat-tile';
-import { useAppStore } from '@/lib/store';
-import { contactName, vendors } from '@/lib/selectors';
+import { AsyncPage } from '@/components/shared/async-state';
+import { downloadCsv } from '@/components/shared/report-shell';
+import { gst, type TdsResponse } from '@/lib/api/client';
+import { useApi } from '@/lib/api/use-api';
 import { TDS_SECTIONS } from '@/lib/tax/tds';
 import { formatINRCompact, toRupees } from '@/lib/money';
-import { downloadCsv } from '@/components/shared/report-shell';
+
+const short = (d: string) => new Date(d).toLocaleDateString('en-IN');
+
+/** '2026-27' for any date in the 2026-27 financial year. */
+function fyLabel(from: string): string {
+  const y = Number(from.slice(0, 4));
+  return `${y}-${String((y + 1) % 100).padStart(2, '0')}`;
+}
 
 export default function TdsTcsPage() {
-  const s = useAppStore();
+  const [tab, setTab] = useState('deducted');
+  const state = useApi<TdsResponse>(() => gst.tds(), []);
 
-  // TDS we withheld from vendors (a liability owed to the government)
-  const withheld = useMemo(() => {
-    const map = new Map<string, { section: string; gross: number; tds: number; bills: number }>();
-    for (const b of s.bills) {
-      if (b.status === 'void' || b.tdsPaise === 0) continue;
-      const key = `${b.vendorId}|${b.tdsSection}`;
-      const cur = map.get(key) ?? { section: b.tdsSection ?? '', gross: 0, tds: 0, bills: 0 };
-      cur.gross += b.subtotalPaise;
-      cur.tds += b.tdsPaise;
-      cur.bills += 1;
-      map.set(key, cur);
-    }
-    return [...map.entries()].map(([key, v]) => ({ vendorId: key.split('|')[0], ...v }));
-  }, [s.bills]);
-
-  // TDS our customers deducted from us (an asset we reclaim at filing)
-  const deductedFromUs = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const p of s.payments) {
-      if (p.kind !== 'received' || p.tdsPaise === 0) continue;
-      map.set(p.contactId, (map.get(p.contactId) ?? 0) + p.tdsPaise);
-    }
-    return [...map.entries()];
-  }, [s.payments]);
-
-  // Threshold progress per vendor — shows TDS kicking in automatically
-  const thresholds = useMemo(
-    () =>
-      vendors(s)
-        .filter((v) => v.tdsSection)
-        .map((v) => {
-          const section = TDS_SECTIONS.find((t) => t.code === v.tdsSection)!;
-          const ytd = s.bills
-            .filter((b) => b.vendorId === v.id && b.status !== 'void')
-            .reduce((t, b) => t + b.subtotalPaise, 0);
-          return {
-            vendor: v,
-            section,
-            ytd,
-            pct: Math.min(100, (ytd / section.thresholdAnnualPaise) * 100),
-            crossed: ytd >= section.thresholdAnnualPaise,
-          };
-        })
-        .sort((a, b) => b.pct - a.pct),
-    [s],
-  );
-
-  const totalWithheld = withheld.reduce((t, w) => t + w.tds, 0);
-  const totalReceivable = deductedFromUs.reduce((t, [, v]) => t + v, 0);
+  const exportCsv = (d: TdsResponse) => {
+    downloadCsv(`tds-${fyLabel(d.from)}.csv`, [
+      ['Section', 'Deductee', 'PAN', 'Bills', 'Taxable', 'TDS', 'Effective rate %'],
+      ...d.deducted.map((r) => [
+        r.section, r.vendorName, r.pan ?? '', r.billCount,
+        toRupees(r.taxablePaise), toRupees(r.tdsPaise), r.ratePct.toFixed(2),
+      ]),
+    ]);
+    toast.success('TDS register exported', {
+      description: 'The columns line up with what a 26Q return needs.',
+    });
+  };
 
   return (
     <>
       <PageHeader
         title="TDS & TCS"
-        description="Tax withheld at source — both the tax you hold back from vendors and the tax your customers hold back from you."
+        description="Tax withheld on payments — what you owe the government, and what your customers have already paid on your behalf."
         actions={
-          <Button
-            variant="outline"
-            size="sm"
-            className="gap-1.5"
-            onClick={() => {
-              downloadCsv('form-26Q-data.csv', [
-                ['Vendor', 'PAN', 'Section', 'Gross paid', 'TDS deducted', 'Bills'],
-                ...withheld.map((w) => {
-                  const v = s.contacts.find((c) => c.id === w.vendorId);
-                  return [contactName(s, w.vendorId), v?.pan ?? 'NOT AVAILABLE', w.section, toRupees(w.gross), toRupees(w.tds), w.bills];
-                }),
-              ]);
-              toast.success('Form 26Q data exported', { description: 'Hand this to your CA for the quarterly TDS return.' });
-            }}
-          >
-            <Download className="size-3.5" /> Export 26Q data
-          </Button>
+          state.data && (
+            <Button size="sm" className="gap-1.5" onClick={() => exportCsv(state.data!)}>
+              <Download className="size-3.5" /> Export register
+            </Button>
+          )
         }
       />
 
-      <div className="grid gap-3 sm:grid-cols-3">
-        <StatTile label="TDS payable" value={formatINRCompact(totalWithheld)} sub="Withheld from vendors, owed to government" icon={Receipt} tone="warning" />
-        <StatTile label="TDS receivable" value={formatINRCompact(totalReceivable)} sub="Deducted by customers, reclaimable" tone="positive" />
-        <StatTile label="Vendors tracked" value={String(thresholds.length)} sub={`${thresholds.filter((t) => t.crossed).length} past threshold`} />
-      </div>
-
-      <Tabs defaultValue="thresholds">
-        <TabsList>
-          <TabsTrigger value="thresholds">Threshold tracking</TabsTrigger>
-          <TabsTrigger value="payable">TDS payable ({withheld.length})</TabsTrigger>
-          <TabsTrigger value="receivable">TDS receivable ({deductedFromUs.length})</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="thresholds" className="mt-4 space-y-3">
-          <Card className="flex items-start gap-3 border-primary/30 bg-primary/5 p-4">
-            <Receipt className="mt-0.5 size-4 shrink-0 text-primary" />
-            <div className="text-sm">
-              <p className="font-medium">Why thresholds matter</p>
-              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                You only have to withhold tax once your payments to a vendor cross a limit for the year — for
-                contractors that&apos;s ₹1,00,000 annually, for professional fees ₹30,000. Below the line you pay in
-                full; above it you must hold back tax and remit it yourself. The app counts every vendor&apos;s running
-                total and starts deducting the moment the line is crossed, which is exactly the thing businesses forget
-                and get penalised for.
-              </p>
+      <AsyncPage state={state}>
+        {(d) => (
+          <>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <StatTile
+                label="TDS you deducted"
+                value={formatINRCompact(d.deductedTotalPaise)}
+                sub="Owed to the government by the 7th"
+                icon={TrendingDown}
+                tone={d.deductedTotalPaise > 0 ? 'warning' : 'default'}
+              />
+              <StatTile
+                label="TDS withheld from you"
+                value={formatINRCompact(d.withheldByCustomersPaise)}
+                sub="Reclaimable against your income tax"
+                icon={TrendingUp}
+                tone="positive"
+              />
+              <StatTile
+                label="Period"
+                value={`FY ${fyLabel(d.from)}`}
+                sub={`${short(d.from)} – ${short(d.to)}`}
+                icon={Receipt}
+              />
             </div>
-          </Card>
 
-          <div className="space-y-2">
-            {thresholds.map((t) => (
-              <Card key={t.vendor.id} className="flex flex-wrap items-center gap-4 p-4">
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="font-medium">{t.vendor.displayName}</p>
-                    <Badge variant="secondary" className="text-[10px]">{t.section.code}</Badge>
-                    <span className="text-xs text-muted-foreground">{t.section.description}</span>
-                    {!t.vendor.pan && (
-                      <Badge variant="outline" className="border-red-500/40 text-[9px]">No PAN → 20%</Badge>
-                    )}
-                    {t.crossed && (
-                      <Badge variant="outline" className="border-emerald-500/40 text-[9px]">Deducting at {t.vendor.pan ? t.section.ratePctWithPan : t.section.ratePctWithoutPan}%</Badge>
-                    )}
-                  </div>
-                  <div className="mt-2 max-w-md">
-                    <Progress value={t.pct} className={t.crossed ? '[&>div]:bg-emerald-500' : '[&>div]:bg-amber-500'} />
-                    <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
-                      <span>Billed this year: ₹{(t.ytd / 100).toLocaleString('en-IN')}</span>
-                      <span>Threshold: ₹{(t.section.thresholdAnnualPaise / 100).toLocaleString('en-IN')}</span>
-                    </div>
-                  </div>
-                </div>
-              </Card>
-            ))}
-          </div>
-        </TabsContent>
+            <Tabs value={tab} onValueChange={setTab}>
+              <TabsList>
+                <TabsTrigger value="deducted">You deducted ({d.deducted.length})</TabsTrigger>
+                <TabsTrigger value="withheld">Withheld from you ({d.withheldRows.length})</TabsTrigger>
+                <TabsTrigger value="sections">Sections & thresholds</TabsTrigger>
+              </TabsList>
 
-        <TabsContent value="payable" className="mt-4">
-          <div className="overflow-x-auto rounded-lg border thin-scroll">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
-                  <th className="px-3 py-2 text-left font-semibold">Vendor</th>
-                  <th className="px-3 py-2 text-left font-semibold">PAN</th>
-                  <th className="px-3 py-2 text-left font-semibold">Section</th>
-                  <th className="px-3 py-2 text-right font-semibold">Bills</th>
-                  <th className="px-3 py-2 text-right font-semibold">Gross billed</th>
-                  <th className="px-3 py-2 text-right font-semibold">TDS withheld</th>
-                </tr>
-              </thead>
-              <tbody>
-                {withheld.length === 0 ? (
-                  <tr><td colSpan={6} className="px-3 py-10 text-center text-sm text-muted-foreground">No TDS has been withheld yet.</td></tr>
-                ) : (
-                  withheld.map((w, i) => {
-                    const v = s.contacts.find((c) => c.id === w.vendorId);
-                    return (
-                      <tr key={i} className="border-b last:border-0">
-                        <td className="px-3 py-2 font-medium">{contactName(s, w.vendorId)}</td>
-                        <td className="px-3 py-2 font-mono text-xs">{v?.pan ?? <span className="text-destructive">Not available</span>}</td>
-                        <td className="px-3 py-2"><Badge variant="secondary" className="text-[10px]">{w.section}</Badge></td>
-                        <td className="px-3 py-2 text-right tabular">{w.bills}</td>
-                        <td className="px-3 py-2 text-right"><Money value={w.gross} /></td>
-                        <td className="px-3 py-2 text-right font-medium"><Money value={w.tds} /></td>
+              <TabsContent value="deducted" className="mt-4 space-y-3">
+                <p className="text-xs text-muted-foreground">
+                  A liability, not an expense. The money is the supplier&apos;s — you are holding it on the
+                  government&apos;s behalf and must deposit it by the 7th of the following month, then report it in
+                  the quarterly 26Q.
+                </p>
+                <div className="overflow-x-auto rounded-lg border thin-scroll">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
+                        <th className="px-3 py-2 text-left font-semibold">Section</th>
+                        <th className="px-3 py-2 text-left font-semibold">Deductee</th>
+                        <th className="px-3 py-2 text-left font-semibold">PAN</th>
+                        <th className="px-3 py-2 text-right font-semibold">Bills</th>
+                        <th className="px-3 py-2 text-right font-semibold">Taxable</th>
+                        <th className="px-3 py-2 text-right font-semibold">TDS</th>
+                        <th className="px-3 py-2 text-right font-semibold">Rate</th>
                       </tr>
-                    );
-                  })
-                )}
-                {withheld.length > 0 && (
-                  <tr className="border-t-2 bg-muted/40 font-semibold">
-                    <td className="px-3 py-2.5" colSpan={5}>Total payable to government</td>
-                    <td className="px-3 py-2.5 text-right"><Money value={totalWithheld} /></td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </TabsContent>
+                    </thead>
+                    <tbody>
+                      {d.deducted.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="px-3 py-8 text-center text-sm text-muted-foreground">
+                            No TDS deducted this year. Thresholds are annual — nothing has crossed one yet.
+                          </td>
+                        </tr>
+                      ) : (
+                        d.deducted.map((r) => (
+                          <tr key={`${r.vendorId}-${r.section}`} className="border-b last:border-0 hover:bg-accent/40">
+                            <td className="px-3 py-2">
+                              <Badge variant="secondary" className="text-[10px]">{r.section}</Badge>
+                            </td>
+                            <td className="px-3 py-2 font-medium">{r.vendorName}</td>
+                            <td className="px-3 py-2 font-mono text-[10px]">
+                              {r.pan ?? (
+                                <span className="text-destructive">No PAN — 20%</span>
+                              )}
+                            </td>
+                            <td className="px-3 py-2 text-right tabular text-xs">{r.billCount}</td>
+                            <td className="px-3 py-2 text-right"><Money value={r.taxablePaise} /></td>
+                            <td className="px-3 py-2 text-right"><Money value={r.tdsPaise} className="font-medium" /></td>
+                            <td className="px-3 py-2 text-right tabular text-xs">{r.ratePct.toFixed(2)}%</td>
+                          </tr>
+                        ))
+                      )}
+                      {d.deducted.length > 0 && (
+                        <tr className="border-t-2 bg-muted/40 font-semibold">
+                          <td className="px-3 py-2.5" colSpan={5}>Total to deposit</td>
+                          <td className="px-3 py-2.5 text-right"><Money value={d.deductedTotalPaise} /></td>
+                          <td />
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </TabsContent>
 
-        <TabsContent value="receivable" className="mt-4 space-y-3">
-          <p className="text-xs text-muted-foreground">
-            When a customer withholds tax from your invoice, they pay it to the government in your name. You reclaim it
-            when filing your income tax return — so it sits as an asset, not a loss. Check these against your Form 26AS.
-          </p>
-          <div className="overflow-x-auto rounded-lg border thin-scroll">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
-                  <th className="px-3 py-2 text-left font-semibold">Customer</th>
-                  <th className="px-3 py-2 text-right font-semibold">TDS deducted</th>
-                </tr>
-              </thead>
-              <tbody>
-                {deductedFromUs.length === 0 ? (
-                  <tr><td colSpan={2} className="px-3 py-10 text-center text-sm text-muted-foreground">No customer has withheld TDS yet.</td></tr>
-                ) : (
-                  deductedFromUs.map(([id, amt]) => (
-                    <tr key={id} className="border-b last:border-0">
-                      <td className="px-3 py-2 font-medium">{contactName(s, id)}</td>
-                      <td className="px-3 py-2 text-right font-medium"><Money value={amt} /></td>
-                    </tr>
-                  ))
-                )}
-                {deductedFromUs.length > 0 && (
-                  <tr className="border-t-2 bg-muted/40 font-semibold">
-                    <td className="px-3 py-2.5">Total reclaimable</td>
-                    <td className="px-3 py-2.5 text-right"><Money value={totalReceivable} /></td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </TabsContent>
-      </Tabs>
+              <TabsContent value="withheld" className="mt-4 space-y-3">
+                <p className="text-xs text-muted-foreground">
+                  An asset, not lost income. A customer who deducts TDS has still settled the invoice in full — part
+                  of it went to the government instead of to you, and it comes back as credit when you file. It sits
+                  in TDS Receivable until then.
+                </p>
+                <div className="overflow-x-auto rounded-lg border thin-scroll">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
+                        <th className="px-3 py-2 text-left font-semibold">Receipt</th>
+                        <th className="px-3 py-2 text-left font-semibold">Date</th>
+                        <th className="px-3 py-2 text-left font-semibold">Customer</th>
+                        <th className="px-3 py-2 text-right font-semibold">Cash received</th>
+                        <th className="px-3 py-2 text-right font-semibold">TDS withheld</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {d.withheldRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="px-3 py-8 text-center text-sm text-muted-foreground">
+                            No customer has withheld tax this year.
+                          </td>
+                        </tr>
+                      ) : (
+                        d.withheldRows.map((r) => (
+                          <tr key={r.paymentId} className="border-b last:border-0 hover:bg-accent/40">
+                            <td className="px-3 py-2 font-medium">{r.number}</td>
+                            <td className="px-3 py-2 text-xs">{short(r.date)}</td>
+                            <td className="px-3 py-2">{r.customerName}</td>
+                            <td className="px-3 py-2 text-right"><Money value={r.amountPaise} /></td>
+                            <td className="px-3 py-2 text-right"><Money value={r.tdsPaise} className="font-medium" /></td>
+                          </tr>
+                        ))
+                      )}
+                      {d.withheldRows.length > 0 && (
+                        <tr className="border-t-2 bg-muted/40 font-semibold">
+                          <td className="px-3 py-2.5" colSpan={4}>Total reclaimable</td>
+                          <td className="px-3 py-2.5 text-right"><Money value={d.withheldByCustomersPaise} /></td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </TabsContent>
+
+              <TabsContent value="sections" className="mt-4 space-y-3">
+                <p className="text-xs text-muted-foreground">
+                  Each section has two thresholds and either one triggers deduction: a single payment above the
+                  first, or everything billed to that supplier across the year above the second. That second one is
+                  why deduction is worked out from the year to date rather than from the bill in front of you —
+                  computing it one invoice at a time under-deducts, and the shortfall is recovered from you with
+                  interest, not from the supplier.
+                </p>
+                <div className="overflow-x-auto rounded-lg border thin-scroll">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
+                        <th className="px-3 py-2 text-left font-semibold">Section</th>
+                        <th className="px-3 py-2 text-left font-semibold">Covers</th>
+                        <th className="px-3 py-2 text-right font-semibold">Single payment</th>
+                        <th className="px-3 py-2 text-right font-semibold">Annual</th>
+                        <th className="px-3 py-2 text-right font-semibold">With PAN</th>
+                        <th className="px-3 py-2 text-right font-semibold">Without PAN</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {TDS_SECTIONS.map((t) => (
+                        <tr key={t.code} className="border-b last:border-0 hover:bg-accent/40">
+                          <td className="px-3 py-2">
+                            <Badge variant="secondary" className="text-[10px]">{t.code}</Badge>
+                          </td>
+                          <td className="px-3 py-2 text-sm">{t.description}</td>
+                          <td className="px-3 py-2 text-right"><Money value={t.thresholdSinglePaise} /></td>
+                          <td className="px-3 py-2 text-right"><Money value={t.thresholdAnnualPaise} /></td>
+                          <td className="px-3 py-2 text-right tabular text-xs">{t.ratePctWithPan}%</td>
+                          <td className="px-3 py-2 text-right tabular text-xs text-destructive">
+                            {t.ratePctWithoutPan}%
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </TabsContent>
+            </Tabs>
+          </>
+        )}
+      </AsyncPage>
     </>
   );
 }

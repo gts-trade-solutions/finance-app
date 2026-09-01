@@ -7,16 +7,14 @@ import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Switch } from '@/components/ui/switch';
 import { PageHeader } from '@/components/shared/page-header';
 import { Field, FormSection, MoneyInput } from '@/components/shared/form-bits';
-import { getState, setState } from '@/lib/store';
-import { isValidGstin, stateName } from '@/lib/tax/gst';
-import { genId } from '@/lib/ledger/posting';
+import { contacts } from '@/lib/api/client';
+import { useApiAction } from '@/lib/api/use-api';
+import { isValidGstin } from '@/lib/tax/gst';
 import { Combobox } from '@/components/ui/combobox';
 import { stateOptions } from '@/lib/options';
-import { logAudit } from '@/lib/services/audit';
-import type { Contact, GstTreatment } from '@/lib/types';
+import { TDS_SECTIONS } from '@/lib/tax/tds';
 
 export default function NewCustomerPage() {
   const router = useRouter();
@@ -24,18 +22,19 @@ export default function NewCustomerPage() {
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [gstin, setGstin] = useState('');
-  const [treatment, setTreatment] = useState<GstTreatment>('registered');
+  const [treatment, setTreatment] = useState('registered');
   const [stateCode, setStateCode] = useState('33');
   const [line1, setLine1] = useState('');
   const [city, setCity] = useState('');
   const [pincode, setPincode] = useState('');
-  const [terms, setTerms] = useState(30);
+  const [terms, setTerms] = useState('net_30');
   const [creditLimit, setCreditLimit] = useState(0);
-  const [deductsTds, setDeductsTds] = useState(false);
+  const [tdsSection, setTdsSection] = useState('');
+  const create = useApiAction(contacts.create);
 
   const gstinValid = gstin.length === 15 ? isValidGstin(gstin.toUpperCase()) : null;
 
-  const save = () => {
+  const save = async () => {
     if (!name.trim()) {
       toast.error('Customer name is required');
       return;
@@ -44,29 +43,32 @@ export default function NewCustomerPage() {
       toast.error('That GSTIN fails the checksum — please re-check it');
       return;
     }
-    const contact: Contact = {
-      id: genId('c'),
+
+    // The address is stored as one block. Splitting it into line/city/pin was a
+    // demo convenience; a GST invoice prints the address as written.
+    const address = [line1, [city, pincode].filter(Boolean).join(' ')]
+      .filter(Boolean)
+      .join(', ');
+
+    const result = await create.run({
       kind: 'customer',
-      displayName: name,
-      companyName: name,
+      displayName: name.trim(),
+      email: email || null,
+      phone: phone || null,
       gstin: gstin ? gstin.toUpperCase() : null,
+      // A GSTIN embeds the PAN at positions 3–12, so there is no reason to ask
+      // for it twice.
+      pan: gstin.length === 15 ? gstin.slice(2, 12).toUpperCase() : null,
       gstTreatment: treatment,
-      pan: gstin ? gstin.slice(2, 12) : null,
       stateCode,
-      email,
-      phone,
-      billingAddress: { label: 'Billing', line1, city, stateCode, pincode },
-      paymentTermsDays: terms,
-      creditLimit: creditLimit || null,
-      isMsme: false,
-      customerDeductsTds: deductsTds,
-      openingBalance: 0,
-      portalEnabled: true,
-      isArchived: false,
-    };
-    setState({ contacts: [contact, ...getState().contacts] });
-    logAudit('create', 'customer', contact.id, contact.displayName, `Customer created (${stateName(stateCode)})`);
-    toast.success(`${name} added`);
+      billingAddress: address || null,
+      paymentTerms: terms,
+      creditLimitPaise: creditLimit || 0,
+      tdsSection: tdsSection || null,
+    });
+    if (!result) return;
+
+    toast.success(`${result.displayName} added`);
     router.push('/sales/customers');
   };
 
@@ -77,7 +79,9 @@ export default function NewCustomerPage() {
         actions={
           <>
             <Button variant="outline" size="sm" onClick={() => router.back()}>Cancel</Button>
-            <Button size="sm" onClick={save}>Save customer</Button>
+            <Button size="sm" onClick={save} disabled={create.busy}>
+              {create.busy ? 'Saving…' : 'Save customer'}
+            </Button>
           </>
         }
       />
@@ -109,7 +113,7 @@ export default function NewCustomerPage() {
                     { value: 'sez', label: 'SEZ unit' },
                   ]}
                   value={treatment}
-                  onChange={(v) => setTreatment(v as GstTreatment)}
+                  onChange={setTreatment}
                   showAvatar={false}
                   searchPlaceholder="Search treatments"
                 />
@@ -172,21 +176,42 @@ export default function NewCustomerPage() {
 
         <Card className="space-y-6 p-5">
           <FormSection title="Terms & credit">
-            <Field label="Payment terms (days)" hint="Used to calculate invoice due dates">
-              <Input type="number" value={terms} onChange={(e) => setTerms(Number(e.target.value))} />
+            <Field label="Payment terms" hint="Used to calculate invoice due dates">
+              <Combobox
+                options={[
+                  { value: 'due_on_receipt', label: 'Due on receipt' },
+                  { value: 'net_15', label: 'Net 15 days' },
+                  { value: 'net_30', label: 'Net 30 days' },
+                  { value: 'net_45', label: 'Net 45 days' },
+                  { value: 'net_60', label: 'Net 60 days' },
+                ]}
+                value={terms}
+                onChange={setTerms}
+                showAvatar={false}
+              />
             </Field>
             <Field label="Credit limit" hint="Warns when outstanding exceeds this">
               <MoneyInput valuePaise={creditLimit} onChangePaise={setCreditLimit} />
             </Field>
-            <div className="flex items-start justify-between gap-3 rounded-md border p-3">
-              <div className="min-w-0">
-                <p className="text-sm font-medium">Deducts TDS on our invoices</p>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  Large customers withhold tax and pay you net. We&apos;ll track it as TDS Receivable.
-                </p>
-              </div>
-              <Switch checked={deductsTds} onCheckedChange={setDeductsTds} />
-            </div>
+            <Field
+              label="TDS section they deduct under"
+              hint="Large customers withhold tax and pay you net. It is tracked as TDS Receivable."
+            >
+              <Combobox
+                options={TDS_SECTIONS.map((t) => ({
+                  value: t.code,
+                  label: `${t.code} — ${t.description}`,
+                  sublabel: `${t.ratePctWithPan}% with PAN`,
+                }))}
+                value={tdsSection}
+                onChange={setTdsSection}
+                placeholder="They do not deduct TDS"
+                searchPlaceholder="Search sections"
+                showAvatar={false}
+                clearable
+              />
+            </Field>
+            {create.error && <p className="text-sm text-destructive">{create.error}</p>}
           </FormSection>
         </Card>
       </div>

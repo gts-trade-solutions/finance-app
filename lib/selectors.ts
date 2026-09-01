@@ -6,9 +6,26 @@
 import type { AppState } from './store';
 import type { Bill, Contact, Invoice, Paise } from './types';
 import { ageingBucket } from './ledger/reports';
-import { DEMO_TODAY } from './mock/seed';
 
-export const today = (): string => DEMO_TODAY;
+/**
+ * Today, as a yyyy-mm-dd string in the user's own timezone.
+ *
+ * This used to return a frozen date — the demo book's "today" — so that the
+ * seeded invoices always looked like they had been raised last week. With real
+ * organisations in the database that constant became a bug with teeth: it is
+ * what every document form offers as the date, so a business signing up would
+ * have had its first invoice stamped weeks in the past, and every "overdue"
+ * on the dashboard measured against a day that had already gone.
+ *
+ * Built from the local parts rather than toISOString(), which is UTC: between
+ * midnight and half past five in the morning IST those disagree, and dating a
+ * tax invoice to yesterday is not a rounding error.
+ */
+export const today = (): string => {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
 
 export function contactName(s: AppState, id: string | null | undefined): string {
   if (!id) return '—';

@@ -13,10 +13,13 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
 const page = await ctx.newPage();
 
-await page.goto(`${BASE}/login`, { waitUntil: 'networkidle' });
-await page.getByText('Arun Kumar').first().click();
+await page.goto(`${BASE}/login?demo=1`, { waitUntil: 'networkidle' });
+// The one-click demo door, rather than typing credentials: it signs in against
+// whichever organisation is flagged is_demo, so this keeps working if the
+// seeded emails ever change.
+await page.locator('[data-slot="demo-account"][data-role="admin"]').click();
 await page.waitForURL('**/dashboard');
-await page.waitForTimeout(1200);
+await page.waitForTimeout(1800);
 
 const shot = async (name, url, prep) => {
   if (url) {

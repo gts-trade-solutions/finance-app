@@ -16,7 +16,8 @@ import 'server-only';
 
 import type { Trx } from '../db';
 import type { Paise, SupplyKind, SupplyType } from '../../types';
-import { computeLineTax, resolveSupplyType, sumTax, totalTaxPaise } from '../../tax/gst';
+import { resolveSupplyType, totalTaxPaise } from '../../tax/gst';
+import { costLines, type DocumentLineInput } from './lines';
 import { roundToRupee } from '../../money';
 import { toPaiseFromSql, toSqlFromPaise } from '../money-sql';
 import { allocateNumber, postEntry, reverseEntry, type DraftLine } from '../ledger/posting';
@@ -30,17 +31,7 @@ export function fyLabelFor(date: string): string {
   return `${String(start).slice(2)}-${String((start + 1) % 100).padStart(2, '0')}`;
 }
 
-export interface InvoiceLineInput {
-  itemId?: number | null;
-  description?: string | null;
-  hsnSac?: string | null;
-  qty: number;
-  uqc?: string | null;
-  /** Omit to use the item's catalogue price. Required when there is no item. */
-  ratePaise?: Paise;
-  discountPct?: number;
-  gstRatePct?: number;
-}
+export type InvoiceLineInput = DocumentLineInput;
 
 export interface CreateInvoiceInput {
   branchId: number;
@@ -113,93 +104,19 @@ export async function createInvoice(
     exportWithTax: input.exportWithTax,
   }) as SupplyType;
 
-  // Resolve every item in one query rather than one per line.
-  const itemIds = input.lines.map((l) => l.itemId).filter((x): x is number => !!x);
-  const items = itemIds.length
-    ? await trx
-        .selectFrom('items')
-        .select(['id', 'name', 'kind', 'hsn_sac', 'uqc', 'gst_rate_pct', 'sale_price'])
-        .where('org_id', '=', orgId)
-        .where('id', 'in', itemIds)
-        .execute()
-    : [];
-  const itemById = new Map(items.map((i) => [i.id, i]));
+  const costed = await costLines(trx, orgId, supplyType, input.lines);
+  const computed = costed.lines;
 
-  // Only the organisation's approved HSN/SAC codes may reach a line. GSTR-1
-  // Table 12 is validated against the official master, and one bad code bounces
-  // the whole return — so this is checked on the server, not only in the picker.
-  const approved = await trx
-    .selectFrom('hsn_codes')
-    .select(['code', 'kind'])
-    .where('org_id', '=', orgId)
-    .where('is_active', '=', 1)
-    .execute();
-  const approvedCodes = new Map(approved.map((h) => [h.code, h.kind]));
-
-  const computed = input.lines.map((l, idx) => {
-    const item = l.itemId ? itemById.get(l.itemId) : undefined;
-    if (l.itemId && !item) throw badRequest(`Line ${idx + 1} refers to an item that does not exist.`);
-
-    const hsn = l.hsnSac ?? item?.hsn_sac ?? null;
-    if (hsn && !approvedCodes.has(hsn)) {
-      throw badRequest(
-        `Line ${idx + 1} uses HSN/SAC ${hsn}, which is not on the approved list. ` +
-          'An admin can add it under Settings → HSN & SAC Codes.',
-      );
-    }
-    if (l.qty <= 0) throw badRequest(`Line ${idx + 1} needs a quantity above zero.`);
-
-    // An unpriced line takes the catalogue price. Without an item there is
-    // nothing to fall back to, so the caller has to say what it is worth.
-    const ratePaise = l.ratePaise ?? (item ? toPaiseFromSql(item.sale_price) : undefined);
-    if (ratePaise === undefined) {
-      throw badRequest(`Line ${idx + 1} needs a rate — there is no item to take one from.`);
-    }
-
-    const gstRatePct = l.gstRatePct ?? Number(item?.gst_rate_pct ?? 0);
-    const { taxable, tax, total } = computeLineTax({
-      ratePaise,
-      qty: l.qty,
-      discountPct: l.discountPct ?? 0,
-      gstRatePct,
-      supplyType,
-    });
-
-    return {
-      itemId: l.itemId ?? null,
-      description: l.description ?? item?.name ?? null,
-      hsnSac: hsn,
-      qty: l.qty,
-      uqc: l.uqc ?? item?.uqc ?? 'NOS',
-      ratePaise,
-      discountPct: l.discountPct ?? 0,
-      gstRatePct,
-      taxable,
-      tax,
-      total,
-    };
-  });
-
-  const tax = sumTax(computed.map((c) => c.tax));
+  const tax = costed.tax;
   const shipping = input.shippingChargePaise ?? 0;
   const adjustment = input.adjustmentPaise ?? 0;
   const tcs = input.tcsPaise ?? 0;
   const gross = tax.taxablePaise + totalTaxPaise(tax) + shipping + adjustment + tcs;
   const { rounded, roundOff } = roundToRupee(gross);
 
-  // Infer goods/services from the lines when the caller does not say.
-  const supplyKind: SupplyKind =
-    input.supplyKind ??
-    (() => {
-      const kinds = new Set(
-        computed.map((c) => {
-          const item = c.itemId ? itemById.get(c.itemId) : undefined;
-          if (item) return item.kind === 'service' ? 'service' : 'goods';
-          return c.hsnSac?.startsWith('99') ? 'service' : 'goods';
-        }),
-      );
-      return kinds.size > 1 ? 'both' : kinds.has('service') ? 'service' : 'goods';
-    })();
+  // Goods, services, or a mix — inferred from the lines when the caller is
+  // silent. It decides which GSTR-1 table the supply is reported in.
+  const supplyKind: SupplyKind = input.supplyKind ?? costed.supplyKind;
 
   const status = input.status ?? 'draft';
   const number =

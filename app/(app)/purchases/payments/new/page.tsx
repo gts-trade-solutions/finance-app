@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Banknote } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
@@ -15,10 +15,12 @@ import { Field, FormSection, MoneyInput, TotalRow } from '@/components/shared/fo
 import { Money } from '@/components/shared/money';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { useAppStore } from '@/lib/store';
-import { billBalance, today, vendors } from '@/lib/selectors';
-import { bankAccountOptions, vendorOptions } from '@/lib/options';
-import { makePayment } from '@/lib/services/purchases';
-import type { PaymentAllocation, PaymentMode } from '@/lib/types';
+import { today, vendors } from '@/lib/selectors';
+import { vendorOptions } from '@/lib/options';
+import { api, ApiError, bills as billApi, type BillListResponse } from '@/lib/api/client';
+import { useApi } from '@/lib/api/use-api';
+import { useSession } from '@/components/layout/session-provider';
+import type { PaymentMode } from '@/lib/types';
 
 const MODES: PaymentMode[] = ['neft', 'imps', 'upi', 'cheque', 'cash', 'card'];
 
@@ -31,27 +33,51 @@ function PayInner() {
   const [vendorId, setVendorId] = useState('');
   const [date, setDate] = useState(today());
   const [mode, setMode] = useState<PaymentMode>('neft');
-  const [bankAccountId, setBankAccountId] = useState(s.bankAccounts[0]?.id ?? '');
+  const [bankAccountId, setBankAccountId] = useState('');
   const [reference, setReference] = useState('');
   const [selected, setSelected] = useState<Record<string, number>>({});
+  const [saving, setSaving] = useState(false);
+  const session = useSession();
 
+  // Bank accounts come from the server: the payment posts against the ledger
+  // account behind whichever one is chosen.
+  const mastersState = useApi<{ bankAccounts: { id: string; name: string; kind: string }[] }>(
+    () => api.get('/api/masters'),
+    [],
+  );
+  const bankOptions = useMemo(
+    () => (mastersState.data?.bankAccounts ?? []).map((b) => ({ value: b.id, label: b.name, sublabel: b.kind })),
+    [mastersState.data],
+  );
+  useEffect(() => {
+    if (!bankAccountId && bankOptions.length) setBankAccountId(bankOptions[0].value);
+  }, [bankAccountId, bankOptions]);
+
+  // This vendor's unpaid bills, oldest due first — the order a payment run
+  // works in, and the order that keeps MSME suppliers inside their 45 days.
+  const openState = useApi<BillListResponse>(
+    () =>
+      vendorId
+        ? billApi.list({ vendorId, open: true, limit: 200 })
+        : Promise.resolve({ bills: [], summary: { count: 0, totalPaise: 0, duePaise: 0 } }),
+    [vendorId],
+  );
+  const openBills = useMemo(
+    () => [...(openState.data?.bills ?? [])].sort((a, b) => a.dueDate.localeCompare(b.dueDate)),
+    [openState.data],
+  );
+
+  // Arriving from a bill's "pay" action: preselect it in full.
+  const preselected = useRef(false);
   useEffect(() => {
     const billId = params.get('bill');
-    if (!billId) return;
-    const b = s.bills.find((x) => x.id === billId);
+    if (!billId || preselected.current) return;
+    const b = openBills.find((x) => x.id === billId);
     if (!b) return;
     setVendorId(b.vendorId);
-    setSelected({ [b.id]: billBalance(b) });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params, s.bills.length]);
-
-  const openBills = useMemo(
-    () =>
-      s.bills
-        .filter((b) => b.vendorId === vendorId && b.status !== 'void' && billBalance(b) > 0)
-        .sort((a, b) => a.dueDate.localeCompare(b.dueDate)),
-    [s.bills, vendorId],
-  );
+    setSelected({ [b.id]: b.balancePaise });
+    preselected.current = true;
+  }, [params, openBills]);
 
   const vendor = vendorList.find((v) => v.id === vendorId);
   const total = Object.values(selected).reduce((t, v) => t + v, 0);
@@ -66,18 +92,49 @@ function PayInner() {
 
   const selectAll = () => {
     const all: Record<string, number> = {};
-    openBills.forEach((b) => { all[b.id] = billBalance(b); });
+    openBills.forEach((b) => { all[b.id] = b.balancePaise; });
     setSelected(all);
   };
 
-  const save = () => {
-    if (!vendorId || total <= 0) { toast.error('Pick a vendor and at least one bill.'); return; }
-    const allocations: PaymentAllocation[] = Object.entries(selected).map(([targetId, amountPaise]) => ({
-      targetType: 'bill', targetId, amountPaise,
-    }));
-    const p = makePayment({ vendorId, date, mode, bankAccountId, allocations, reference });
-    toast.success(`Payment ${p.number} recorded`, {
-      description: `${allocations.length} bill(s) settled. Payment advice sent to the vendor.`,
+  const save = async () => {
+    if (!vendorId || total <= 0) {
+      toast.error('Pick a vendor and at least one bill.');
+      return;
+    }
+    if (!bankAccountId) {
+      toast.error('Choose which account this is paid from.');
+      return;
+    }
+
+    setSaving(true);
+    const created = await api
+      .post<{ id: string; number: string; unappliedPaise: number }>('/api/payments', {
+        kind: 'made',
+        branchId: session.user.branchId ?? session.branches[0]?.id,
+        contactId: vendorId,
+        date,
+        mode,
+        bankAccountId,
+        amountPaise: total,
+        reference: reference || undefined,
+        allocations: Object.entries(selected).map(([targetId, amountPaise]) => ({
+          targetType: 'bill' as const,
+          targetId,
+          amountPaise,
+        })),
+      })
+      .catch((err: unknown) => {
+        setSaving(false);
+        toast.error(err instanceof ApiError ? err.message : 'Could not record the payment.', {
+          description: 'Nothing was saved.',
+        });
+        return null;
+      });
+
+    if (!created) return;
+
+    toast.success(`Payment ${created.number} recorded`, {
+      description: `${Object.keys(selected).length} bill(s) settled and a balanced entry posted.`,
     });
     router.push('/purchases/payments');
   };
@@ -90,7 +147,9 @@ function PayInner() {
         actions={
           <>
             <Button variant="outline" size="sm" onClick={() => router.back()}>Cancel</Button>
-            <Button size="sm" onClick={save} className="gap-1.5"><Banknote className="size-3.5" /> Record payment</Button>
+            <Button size="sm" onClick={save} disabled={saving} className="gap-1.5">
+              <Banknote className="size-3.5" /> {saving ? 'Recording…' : 'Record payment'}
+            </Button>
           </>
         }
       />
@@ -124,7 +183,7 @@ function PayInner() {
                 </Field>
                 <Field label="Pay from">
                   <Combobox
-                    options={bankAccountOptions(s)}
+                    options={bankOptions}
                     value={bankAccountId}
                     onChange={setBankAccountId}
                     placeholder="Select account"
@@ -169,7 +228,7 @@ function PayInner() {
                   </thead>
                   <tbody>
                     {openBills.map((b) => {
-                      const bal = billBalance(b);
+                      const bal = b.balancePaise;
                       const isSel = selected[b.id] != null;
                       const overdue = b.dueDate < today();
                       return (
@@ -177,12 +236,12 @@ function PayInner() {
                           <td className="px-3 py-2"><Checkbox checked={isSel} onCheckedChange={() => toggle(b.id, bal)} /></td>
                           <td className="px-3 py-2">
                             <p className="font-medium">{b.internalNo}</p>
-                            <p className="text-xs text-muted-foreground">{b.number}</p>
+                            <p className="text-xs text-muted-foreground">{b.vendorInvoiceNo}</p>
                           </td>
                           <td className={`px-3 py-2 text-xs ${overdue ? 'text-destructive' : 'text-muted-foreground'}`}>
                             {new Date(b.dueDate).toLocaleDateString('en-IN')}
                           </td>
-                          <td className="px-3 py-2"><StatusBadge status={overdue ? 'overdue' : b.status} /></td>
+                          <td className="px-3 py-2"><StatusBadge status={(overdue ? 'overdue' : b.status) as never} /></td>
                           <td className="px-3 py-2 text-right"><Money value={bal} /></td>
                           <td className="px-3 py-2">
                             {isSel ? (

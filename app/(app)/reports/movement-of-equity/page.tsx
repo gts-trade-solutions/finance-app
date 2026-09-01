@@ -1,68 +1,76 @@
 'use client';
 
-import { useMemo } from 'react';
+// How the owners’ stake changed over the period.
+//
+// The point of the report is the split: money the owners put in or took out is
+// not the same thing as profit the business earned, even though both land in
+// equity. A business can grow its equity purely on injected capital while
+// losing money, and this is where you would see that.
+
 import { Money } from '@/components/shared/money';
 import { downloadCsv, ReportShell, useReportRange } from '@/components/shared/report-shell';
 import { ReportGrid, gridCsv, type GridColumn } from '@/components/shared/report-grid';
-import { useAppStore } from '@/lib/store';
-import { accountNets, profitAndLoss } from '@/lib/ledger/reports';
+import { AsyncPage } from '@/components/shared/async-state';
+import { reports, type MovementOfEquityReport } from '@/lib/api/client';
+import { useApi } from '@/lib/api/use-api';
 import { toRupees } from '@/lib/money';
-import type { Paise } from '@/lib/types';
 
-interface Row { label: string; note: string; amount: Paise; emphasis?: boolean }
+type Row = MovementOfEquityReport['rows'][number];
+
+const NOTE: Record<string, string> = {
+  'Opening equity': 'Owners’ stake at the start of the period',
+  'Capital introduced or withdrawn': 'Money the owners put in or took out',
+  'Profit for the period': 'Earned by the business, not contributed by the owners',
+  'Loss for the period': 'Absorbed by the business, reducing the owners’ stake',
+  'Closing equity': 'Owners’ stake at the end of the period',
+};
+
+const columns: GridColumn<Row>[] = [
+  {
+    key: 'label', header: 'Particulars',
+    cell: (r) => (
+      <div>
+        <p className={r.label.startsWith('Closing') || r.label.startsWith('Opening') ? 'font-semibold' : 'font-medium'}>
+          {r.label}
+        </p>
+        <p className="text-xs text-muted-foreground">{NOTE[r.label] ?? ''}</p>
+      </div>
+    ),
+    csv: (r) => r.label,
+  },
+  {
+    key: 'amount', header: 'Amount', align: 'right',
+    cell: (r) => (
+      <Money
+        value={r.amountPaise}
+        colored={r.label.includes('for the period') || r.label.startsWith('Capital')}
+        className={r.label.startsWith('Closing') ? 'text-base font-semibold' : undefined}
+      />
+    ),
+    csv: (r) => toRupees(r.amountPaise),
+  },
+];
 
 export default function MovementOfEquityPage() {
-  const s = useAppStore();
   const [range, setRange] = useReportRange();
-
-  const rows = useMemo<Row[]>(() => {
-    const opening = accountNets(s.entries, { to: range.from });
-    const closing = accountNets(s.entries, { to: range.to });
-    const equityAccounts = s.accounts.filter((a) => a.type === 'equity');
-
-    const openingEquity = equityAccounts.reduce((t, a) => t + -(opening.get(a.id) ?? 0), 0);
-    const closingEquity = equityAccounts.reduce((t, a) => t + -(closing.get(a.id) ?? 0), 0);
-    const contributions = closingEquity - openingEquity;
-    const pl = profitAndLoss(s.accounts, s.entries, range);
-
-    return [
-      { label: 'Opening equity', note: `Owners' stake at ${new Date(range.from).toLocaleDateString('en-IN')}`, amount: openingEquity },
-      { label: 'Capital introduced / withdrawn', note: 'Money the owners put in or took out during the period', amount: contributions },
-      { label: pl.netProfit >= 0 ? 'Profit for the period' : 'Loss for the period', note: 'Earned by the business, not contributed by the owners', amount: pl.netProfit },
-      { label: 'Closing equity', note: `Owners' stake at ${new Date(range.to).toLocaleDateString('en-IN')}`, amount: openingEquity + contributions + pl.netProfit, emphasis: true },
-    ];
-  }, [s.accounts, s.entries, range]);
-
-  const columns: GridColumn<Row>[] = [
-    {
-      key: 'label',
-      header: 'Particulars',
-      cell: (r) => (
-        <span>
-          <span className={r.emphasis ? 'font-semibold' : 'font-medium'}>{r.label}</span>
-          <span className="mt-0.5 block text-xs text-muted-foreground">{r.note}</span>
-        </span>
-      ),
-      csv: (r) => r.label,
-    },
-    {
-      key: 'amount',
-      header: 'Amount',
-      align: 'right',
-      cell: (r) => <Money value={r.amount} colored={!r.emphasis} className={r.emphasis ? 'text-base font-semibold' : 'font-medium'} />,
-      csv: (r) => toRupees(r.amount),
-    },
-  ];
+  const state = useApi<MovementOfEquityReport>(
+    () => reports.movementOfEquity(range.from, range.to),
+    [range.from, range.to],
+  );
 
   return (
     <ReportShell
       title="Movement of Equity"
-      description="How the owners' stake changed over the period, separating money they put in from profit the business earned."
+      description="How the owners’ stake changed over the period, separating money they put in from profit the business earned."
       range={range}
       onRangeChange={setRange}
-      onExport={() => downloadCsv('movement-of-equity.csv', gridCsv(rows, columns))}
+      onExport={() => {
+        if (state.data) downloadCsv('movement-of-equity.csv', gridCsv(state.data.rows, columns));
+      }}
     >
-      <ReportGrid rows={rows} columns={columns} showTotals={false} />
+      <AsyncPage state={state}>
+        {(d) => <ReportGrid rows={d.rows} columns={columns} showTotals={false} />}
+      </AsyncPage>
     </ReportShell>
   );
 }

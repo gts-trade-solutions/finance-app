@@ -53,6 +53,19 @@ export const GET = route(
         .executeTakeFirst(),
     ]);
 
+    // How many documents each receipt settled. Fetched for the visible page
+    // only, and grouped rather than counted per row.
+    const ids = rows.map((r) => r.id);
+    const allocRows = ids.length
+      ? await db
+          .selectFrom('payment_allocations')
+          .select(['payment_id', sql<string>`COUNT(*)`.as('n')])
+          .where('payment_id', 'in', ids)
+          .groupBy('payment_id')
+          .execute()
+      : [];
+    const allocBy = new Map(allocRows.map((a) => [a.payment_id, Number(a.n)]));
+
     return {
       payments: rows.map((r) => ({
         id: asId(r.id),
@@ -69,6 +82,7 @@ export const GET = route(
         tdsPaise: toPaiseFromSql(r.tds_amount),
         bankChargesPaise: toPaiseFromSql(r.bank_charges),
         unappliedPaise: toPaiseFromSql(r.unapplied_amount),
+        allocationCount: allocBy.get(r.id) ?? 0,
       })),
       summary: {
         count: Number(totals?.count ?? 0),

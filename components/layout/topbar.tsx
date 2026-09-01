@@ -1,14 +1,21 @@
 'use client';
 
 // A light paper band separated from the workspace by a hairline. Carries
-// global search (focused with "/"), the branch switcher, quick create, and the
-// demo controls — all in ink, with no filled chrome.
+// global search (focused with "/"), the organisation switcher, quick create and
+// the account menu — all in ink, with no filled chrome.
+//
+// The demo controls that used to live here are gone. They reset a client-side
+// mock store, which stopped being where the books lived the moment there was a
+// database behind them: the button cleared the browser's copy and left the
+// ledger untouched, so it did nothing except look like it had. The demo book is
+// now a real organisation flagged is_demo, and it is rebuilt from the seed
+// script rather than from a menu inside the app.
 
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import {
-  Bell, Building2, ChevronDown, FlaskConical, LogOut, Menu, Moon, Plus,
-  RefreshCw, Search, Settings, Sun, UserCircle2,
+  Bell, Building2, ChevronDown, LogOut, Menu, Moon, Plus,
+  Search, Settings, Sun, UserCircle2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -20,8 +27,8 @@ import { Badge } from '@/components/ui/badge';
 import { useAppStore } from '@/lib/store';
 import { auth } from '@/lib/api/client';
 import { hasPermission } from '@/lib/store/hooks';
-import { seedDatabase } from '@/lib/mock/seed';
 import { cn } from '@/lib/utils';
+import { useSession } from './session-provider';
 import { Sidebar } from './sidebar';
 import { QuickCreate } from './quick-create';
 import { GlobalSearch } from './global-search';
@@ -60,7 +67,7 @@ function ThemeToggle() {
     const next = !dark;
     setDark(next);
     document.documentElement.classList.toggle('dark', next);
-    localStorage.setItem('finora-theme', next ? 'dark' : 'light');
+    localStorage.setItem('rekonza-theme', next ? 'dark' : 'light');
   };
   return (
     <BandButton label="Toggle theme" onClick={toggle}>
@@ -71,6 +78,7 @@ function ThemeToggle() {
 
 export function Topbar() {
   const router = useRouter();
+  const serverSession = useSession();
   const { org, branches, activeBranchId, users, session } = useAppStore();
   const logout = useAppStore((s) => s.logout);
   const [quickOpen, setQuickOpen] = useState(false);
@@ -130,10 +138,19 @@ export function Topbar() {
         </button>
 
         <div className="ml-auto flex items-center gap-1">
-          {/* Demo org / test banner */}
-          <span className="mr-1 hidden text-[11px] text-muted-foreground xl:inline">
-            Demo data · nothing is filed with any portal
-          </span>
+          {/*
+            Only on the demo book. On a real organisation this space stays
+            empty: a permanent "demo data" label over somebody's actual ledger
+            teaches them to distrust what the screen says.
+          */}
+          {serverSession.org?.isDemo && (
+            <span
+              data-slot="demo-banner"
+              className="mr-1 hidden rounded-full border border-warning/40 bg-warning/10 px-2.5 py-1 text-[11px] text-warning xl:inline"
+            >
+              Demo book · nothing here is filed with any portal
+            </span>
+          )}
 
           {/*
             Organisation switcher, as in Zoho. Branch is deliberately NOT here:
@@ -189,36 +206,6 @@ export function Topbar() {
           <BandButton label="Settings" onClick={() => router.push('/settings')}>
             <Settings className="size-4" />
           </BandButton>
-
-          {/* Demo controls */}
-          <DropdownMenu>
-            <DropdownMenuTrigger className="flex h-9 items-center gap-1.5 rounded-md px-2.5 text-[13px] text-foreground/80 transition-colors hover:bg-accent">
-              <FlaskConical className="size-4 opacity-70" />
-              <span className="hidden md:inline">Demo</span>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-60">
-              {/*
-                The role switcher that used to live here has been removed. Roles
-                now come from the server on every page load, so switching one
-                locally changed which buttons rendered while the API went on
-                refusing the clicks — a control that lies is worse than no
-                control. Sign out and sign in as the other user instead.
-              */}
-              <DropdownMenuLabel>Demo data</DropdownMenuLabel>
-              <DropdownMenuItem
-                onClick={() => {
-                  // keepSession, or resetting the demo signs the user out and
-                  // bounces them to /login mid-walkthrough.
-                  seedDatabase({ keepSession: true });
-                  toast.success('Reset to seed data', {
-                    description: 'Every document, entry and match is back to its starting state.',
-                  });
-                }}
-              >
-                <RefreshCw className="mr-2 size-4" /> Reset to seed data
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
 
           {/* Account */}
           <DropdownMenu>

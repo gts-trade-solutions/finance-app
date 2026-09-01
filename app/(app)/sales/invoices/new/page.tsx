@@ -26,8 +26,6 @@ import {
   termsOptions, userBranches, userOptions,
 } from '@/lib/options';
 import { api, ApiError } from '@/lib/api/client';
-import { peekNumber } from '@/lib/series';
-import { FY_SHORT } from '@/lib/mock/seed/org';
 import {
   computeLineTax, resolveSupplyType, stateName, sumTax, supplyTypeLabel, totalTaxPaise,
   TCS_RATE_PCT,
@@ -64,10 +62,10 @@ export default function NewInvoicePage() {
   const [saving, setSaving] = useState<false | 'draft' | 'send'>(false);
 
   // Zoho shows the number that will actually be used, not a placeholder.
-  const nextNumber = useMemo(
-    () => (branchId ? peekNumber(s.series, branchId, 'INV', FY_SHORT) : ''),
-    [s.series, branchId],
-  );
+  // Peeked from the real sequence by /api/masters, so the number shown here is
+  // the one the invoice will be given. Computing it locally would drift the
+  // moment anyone else raised a document.
+  const nextNumber = s.nextNumbers.invoice ?? '';
 
   // Only meaningful when this user is attached to more than one registration.
   const allowedBranches = useMemo(() => userBranches(s), [s]);

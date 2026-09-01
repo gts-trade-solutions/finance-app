@@ -1,25 +1,33 @@
 'use client';
 
-import { useMemo } from 'react';
+// Where the money goes, read off the expense accounts in the journal.
+//
+// Reading the journal rather than the expenses table matters: a cost can reach
+// an expense account from a bill, a standalone expense or a categorised bank
+// line, and only the journal sees all three.
+
 import { downloadCsv, ReportShell, useReportRange } from '@/components/shared/report-shell';
 import { RankedReport, type RankedRow } from '@/components/shared/ranked-report';
-import { useAppStore } from '@/lib/store';
-import { profitAndLoss } from '@/lib/ledger/reports';
+import { AsyncPage } from '@/components/shared/async-state';
+import { reports, type ExpensesByCategoryReport } from '@/lib/api/client';
+import { useApi } from '@/lib/api/use-api';
 import { toRupees } from '@/lib/money';
 
-export default function ExpensesByCategoryPage() {
-  const s = useAppStore();
-  const [range, setRange] = useReportRange();
+function toRanked(d: ExpensesByCategoryReport): RankedRow[] {
+  return d.rows.map((r) => ({
+    key: r.accountId,
+    label: r.name,
+    sublabel: `Account ${r.code} · ${r.count} posting${r.count === 1 ? '' : 's'}`,
+    amountPaise: r.amountPaise,
+  }));
+}
 
-  const rows = useMemo<RankedRow[]>(() => {
-    const pl = profitAndLoss(s.accounts, s.entries, range);
-    return pl.expenseRows.map((r) => ({
-      key: r.account.id,
-      label: r.account.name,
-      sublabel: `Account ${r.account.code}`,
-      amountPaise: r.amount,
-    }));
-  }, [s.accounts, s.entries, range]);
+export default function ExpensesByCategoryPage() {
+  const [range, setRange] = useReportRange();
+  const state = useApi<ExpensesByCategoryReport>(
+    () => reports.expensesByCategory(range.from, range.to),
+    [range.from, range.to],
+  );
 
   return (
     <ReportShell
@@ -27,14 +35,17 @@ export default function ExpensesByCategoryPage() {
       description="Where the money goes, taken straight from the expense accounts in your chart of accounts."
       range={range}
       onRangeChange={setRange}
-      onExport={() =>
+      onExport={() => {
+        if (!state.data) return;
         downloadCsv('expenses-by-category.csv', [
-          ['Category', 'Account code', 'Amount'],
-          ...rows.map((r) => [r.label, r.sublabel ?? '', toRupees(r.amountPaise)]),
-        ])
-      }
+          ['Category', 'Detail', 'Amount'],
+          ...toRanked(state.data).map((r) => [r.label, r.sublabel ?? '', toRupees(r.amountPaise)]),
+        ]);
+      }}
     >
-      <RankedReport rows={rows} labelHeader="Category" valueHeader="Amount" />
+      <AsyncPage state={state}>
+        {(d) => <RankedReport rows={toRanked(d)} labelHeader="Category" valueHeader="Amount" />}
+      </AsyncPage>
     </ReportShell>
   );
 }

@@ -1,5 +1,12 @@
 'use client';
 
+// Manual journals — the primitive underneath every other screen.
+//
+// Each line is one-sided: a debit or a credit, never both. The two columns must
+// agree exactly before anything can be posted, and the server enforces that
+// again on arrival. An entry that does not balance is not a warning to be
+// dismissed; it is an entry that cannot exist.
+
 import { useState } from 'react';
 import { BookOpen, Plus, Trash2, Undo2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -7,112 +14,134 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Combobox } from '@/components/ui/combobox';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog';
 import { PageHeader } from '@/components/shared/page-header';
 import { DataTable, type Column } from '@/components/shared/data-table';
 import { Money } from '@/components/shared/money';
+import { AsyncPage } from '@/components/shared/async-state';
 import { Field, MoneyInput } from '@/components/shared/form-bits';
-import { JournalTable } from '@/components/shared/journal-table';
-import { useAppStore } from '@/lib/store';
-import { Combobox } from '@/components/ui/combobox';
-import { accountOptions } from '@/lib/options';
+import { JournalEntryTable } from '@/components/shared/journal-table';
+import {
+  accounts as accountsApi, journal,
+  type AccountRow, type JournalEntryRow, type JournalResponse,
+} from '@/lib/api/client';
+import { useApi, useApiAction } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
-import { today } from '@/lib/selectors';
-import { createManualJournal, reverseEntry } from '@/lib/services/journal';
-import { UnbalancedEntryError } from '@/lib/ledger/posting';
-import type { JournalEntry } from '@/lib/types';
 
 interface DraftRow { key: string; accountId: string; debit: number; credit: number; description: string }
 
 const emptyRow = (k: string): DraftRow => ({ key: k, accountId: '', debit: 0, credit: 0, description: '' });
+const today = () => new Date().toISOString().slice(0, 10);
 
 export default function JournalsPage() {
-  const s = useAppStore();
   const canCreate = usePermission('accountant', 'create');
+
+  // Manual and opening entries only. Everything else on this ledger was posted
+  // by a document, and belongs on that document's screen rather than here.
+  const state = useApi<JournalResponse>(
+    () => journal.list({ sourceType: 'manual,opening', limit: 300 }),
+    [],
+  );
+  const chart = useApi<{ accounts: AccountRow[] }>(() => accountsApi.list(), []);
+
   const [open, setOpen] = useState(false);
   const [date, setDate] = useState(today());
   const [memo, setMemo] = useState('');
   const [rows, setRows] = useState<DraftRow[]>([emptyRow('r1'), emptyRow('r2')]);
-  const [viewId, setViewId] = useState<string | null>(null);
+  const [viewing, setViewing] = useState<JournalEntryRow | null>(null);
+
+  const create = useApiAction(journal.create);
+  const reverse = useApiAction(journal.reverse);
 
   const totalDr = rows.reduce((t, r) => t + r.debit, 0);
   const totalCr = rows.reduce((t, r) => t + r.credit, 0);
   const balanced = totalDr === totalCr && totalDr > 0;
 
+  const accountChoices = (chart.data?.accounts ?? []).map((a) => ({
+    value: a.id,
+    label: a.name,
+    sublabel: `${a.code} · ${a.type}`,
+  }));
+
   const update = (key: string, patch: Partial<DraftRow>) =>
     setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
 
-  const save = () => {
-    if (!memo.trim()) { toast.error('Add a narration so the entry can be understood later.'); return; }
-    try {
-      createManualJournal({
-        date,
-        memo,
-        lines: rows
-          .filter((r) => r.accountId && (r.debit > 0 || r.credit > 0))
-          .map((r) => ({ accountId: r.accountId, debit: r.debit, credit: r.credit, description: r.description })),
-      });
-      toast.success('Journal entry posted');
-      setOpen(false);
-      setRows([emptyRow('r1'), emptyRow('r2')]);
-      setMemo('');
-    } catch (e) {
-      if (e instanceof UnbalancedEntryError) {
-        toast.error('Entry does not balance', {
-          description: 'Total debits must equal total credits exactly. The entry was not posted.',
-        });
-      } else {
-        toast.error((e as Error).message);
-      }
+  const save = async () => {
+    if (!memo.trim()) {
+      toast.error('Add a narration so the entry can be understood later.');
+      return;
     }
+    const result = await create.run({
+      date,
+      memo: memo.trim(),
+      lines: rows
+        .filter((r) => r.accountId && (r.debit > 0 || r.credit > 0))
+        .map((r) => ({
+          accountId: r.accountId,
+          debitPaise: r.debit,
+          creditPaise: r.credit,
+          description: r.description || null,
+        })),
+    });
+    if (!result) {
+      toast.error(create.error ?? 'The entry was not posted');
+      return;
+    }
+    toast.success(`Journal entry #${result.entryNo} posted`);
+    setOpen(false);
+    setRows([emptyRow('r1'), emptyRow('r2')]);
+    setMemo('');
+    state.refetch();
   };
 
-  const manual = s.entries.filter((e) => e.sourceType === 'manual' || e.sourceType === 'opening');
+  const doReverse = async (r: JournalEntryRow) => {
+    const done = await reverse.run(r.id, `Manual reversal of JE #${r.entryNo}`);
+    if (!done) {
+      toast.error(reverse.error ?? 'Could not reverse that entry');
+      return;
+    }
+    toast.success(`Reversal posted as #${done.entryNo}`, {
+      description: 'The original entry stays in the books — nothing is ever deleted.',
+    });
+    state.refetch();
+  };
 
-  const columns: Column<JournalEntry>[] = [
+  const columns: Column<JournalEntryRow>[] = [
     { key: 'no', header: 'JE #', sortValue: (r) => r.entryNo, cell: (r) => <span className="font-mono font-medium">#{r.entryNo}</span> },
     { key: 'date', header: 'Date', sortValue: (r) => r.date, cell: (r) => new Date(r.date).toLocaleDateString('en-IN') },
     {
-      key: 'memo',
-      header: 'Narration',
-      sortValue: (r) => r.memo,
+      key: 'memo', header: 'Narration', sortValue: (r) => r.memo ?? '',
       cell: (r) => (
         <div className="flex items-center gap-2">
           <span>{r.memo}</span>
-          {r.isReversalOf && <Badge variant="outline" className="border-destructive/40 text-[9px]">Reversal</Badge>}
+          {r.reversalOf && <Badge variant="outline" className="border-destructive/40 text-[9px]">Reversal</Badge>}
           {r.sourceType === 'opening' && <Badge variant="secondary" className="text-[9px]">Opening</Badge>}
         </div>
       ),
     },
     { key: 'lines', header: 'Lines', align: 'center', sortValue: (r) => r.lines.length, cell: (r) => r.lines.length },
     {
-      key: 'amount',
-      header: 'Amount',
-      align: 'right',
-      sortValue: (r) => r.lines.reduce((t, l) => t + l.debit, 0),
-      cell: (r) => <Money value={r.lines.reduce((t, l) => t + l.debit, 0)} className="font-medium" />,
+      key: 'amount', header: 'Amount', align: 'right',
+      sortValue: (r) => r.totalDebitPaise,
+      cell: (r) => <Money value={r.totalDebitPaise} className="font-medium" />,
     },
     {
-      key: 'actions',
-      header: '',
-      align: 'right',
+      key: 'actions', header: '', align: 'right',
       cell: (r) => (
         <div className="flex justify-end gap-1.5">
-          <Button size="xs" variant="outline" onClick={(e) => { e.stopPropagation(); setViewId(r.id); }}>
+          <Button size="xs" variant="outline" onClick={(e) => { e.stopPropagation(); setViewing(r); }}>
             View
           </Button>
-          {canCreate && !r.isReversalOf && (
+          {canCreate && !r.reversalOf && (
             <Button
               size="xs"
               variant="outline"
-              onClick={(e) => {
-                e.stopPropagation();
-                reverseEntry(r.id, today(), 'Manual reversal');
-                toast.success('Reversal posted', { description: 'The original entry stays in the books.' });
-              }}
               className="gap-1"
+              disabled={reverse.busy}
+              onClick={(e) => { e.stopPropagation(); void doReverse(r); }}
             >
               <Undo2 className="size-3" /> Reverse
             </Button>
@@ -137,7 +166,8 @@ export default function JournalsPage() {
                 <DialogHeader>
                   <DialogTitle>New journal entry</DialogTitle>
                   <DialogDescription>
-                    Each line is one-sided — either a debit or a credit. The two columns must agree before this can be saved.
+                    Each line is one-sided — either a debit or a credit. The two columns must agree before this
+                    can be saved.
                   </DialogDescription>
                 </DialogHeader>
 
@@ -146,7 +176,11 @@ export default function JournalsPage() {
                     <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
                   </Field>
                   <Field label="Narration" required className="sm:col-span-2">
-                    <Input value={memo} onChange={(e) => setMemo(e.target.value)} placeholder="Depreciation for August 2026" />
+                    <Input
+                      value={memo}
+                      onChange={(e) => setMemo(e.target.value)}
+                      placeholder="Depreciation for August 2026"
+                    />
                   </Field>
                 </div>
 
@@ -166,7 +200,7 @@ export default function JournalsPage() {
                         <tr key={r.key} className="border-b last:border-0">
                           <td className="px-3 py-2">
                             <Combobox
-                              options={accountOptions(s)}
+                              options={accountChoices}
                               value={r.accountId}
                               onChange={(v) => update(r.key, { accountId: v })}
                               placeholder="Select account"
@@ -241,9 +275,13 @@ export default function JournalsPage() {
                   </Badge>
                 </div>
 
+                {create.error && <p className="text-sm text-destructive">{create.error}</p>}
+
                 <DialogFooter>
                   <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-                  <Button onClick={save} disabled={!balanced}>Post journal</Button>
+                  <Button onClick={save} disabled={!balanced || create.busy}>
+                    {create.busy ? 'Posting…' : 'Post journal'}
+                  </Button>
                 </DialogFooter>
               </DialogContent>
             </Dialog>
@@ -259,20 +297,24 @@ export default function JournalsPage() {
         </p>
       </Card>
 
-      <DataTable
-          dateFilter={{ getDate: (r) => r.date }}
-        rows={manual}
-        columns={columns}
-        getRowId={(r) => r.id}
-        initialSort={{ key: 'no', dir: 'desc' }}
-        searchPlaceholder="Search narration…"
-        emptyMessage="No manual journals yet."
-      />
+      <AsyncPage state={state}>
+        {(d) => (
+          <DataTable
+            rows={d.entries}
+            columns={columns}
+            getRowId={(r) => r.id}
+            initialSort={{ key: 'no', dir: 'desc' }}
+            dateFilter={{ getDate: (r) => r.date }}
+            searchPlaceholder="Search narration…"
+            emptyMessage="No manual journals yet."
+          />
+        )}
+      </AsyncPage>
 
-      <Dialog open={!!viewId} onOpenChange={(v) => !v && setViewId(null)}>
+      <Dialog open={!!viewing} onOpenChange={(v) => !v && setViewing(null)}>
         <DialogContent className="max-w-2xl">
           <DialogHeader><DialogTitle>Journal entry detail</DialogTitle></DialogHeader>
-          {viewId && <JournalTable entryId={viewId} />}
+          {viewing && <JournalEntryTable entry={viewing} />}
         </DialogContent>
       </Dialog>
     </>

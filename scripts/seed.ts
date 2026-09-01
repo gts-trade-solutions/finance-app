@@ -1,19 +1,31 @@
-// Seed the database.
+// Seed the demo book.
 //   npm run db:seed              create the demo organisation and master data
-//   npm run db:seed -- --fresh   wipe the data first, keeping the schema
+//   npm run db:seed -- --fresh   rebuild the demo book from scratch
 //
 // Runs inside one transaction: either the whole book appears or none of it
 // does. A half-seeded database is worse than an empty one, because it looks
 // usable right up until the first missing account.
+//
+// --fresh deletes ONLY organisations flagged is_demo. Real books created
+// through the sign-up form share this database, and a seed script that
+// truncated every table would take a customer's ledger with it. The wipe is
+// therefore scoped by org_id, and that flag is set by this script alone.
 
 import { db, transaction } from '../lib/server/db';
 import { bootstrap } from '../lib/server/seed/bootstrap';
 import { seedDemoBook } from '../lib/server/seed/demo-book';
+import { seedDemoDocuments } from '../lib/server/seed/demo-documents';
 import { verifyLedgerBalances } from '../lib/server/ledger/posting';
 
 const fresh = process.argv.includes('--fresh');
 
-/** Tables cleared by --fresh, in an order that respects foreign keys. */
+/**
+ * Tables cleared by --fresh, in an order that respects foreign keys.
+ *
+ * Every one of them carries org_id, so each delete is scoped to the demo
+ * organisation. `user_branches` is the exception — it hangs off users — and is
+ * handled separately below.
+ */
 const DATA_TABLES = [
   'payment_allocations', 'payments', 'bank_transactions', 'bank_statement_imports',
   'bank_transfers', 'bank_rules', 'cheques', 'bank_accounts',
@@ -22,36 +34,55 @@ const DATA_TABLES = [
   'challan_lines', 'bill_lines', 'purchase_order_lines',
   'credit_notes', 'invoices', 'delivery_challans', 'sales_orders', 'estimates',
   'retainer_invoices', 'vendor_credits', 'bills', 'expenses', 'purchase_orders',
-  'recurring_invoices', 'recurring_journals',
-  'journal_lines', 'journal_entries', 'number_series', 'transaction_locks',
+  'recurring_invoices', 'recurring_journals', 'budgets',
+  'stock_adjustments', 'warehouses',
+  'journal_lines', 'journal_entries', 'number_series', 'sequences', 'transaction_locks',
   'custom_field_values', 'custom_fields', 'approval_rules', 'workflow_rules',
   'api_tokens', 'jobs', 'files', 'settings', 'audit_log',
   'items', 'hsn_codes', 'contacts', 'accounts',
-  'user_branches', 'sessions', 'users', 'branches', 'organizations',
+  'sessions', 'users', 'branches',
 ];
 
 async function main() {
+  const demoOrgs = await db
+    .selectFrom('organizations')
+    .select('id')
+    .where('is_demo', '=', 1)
+    .execute();
+  const demoOrgIds = demoOrgs.map((o) => o.id);
+
   if (fresh) {
     if (process.env.APP_ENV === 'production') {
       console.error('Refusing to wipe data in production.');
       process.exit(1);
     }
-    console.log('Clearing existing data…');
-    const { sql } = await import('kysely');
-    await sql`SET FOREIGN_KEY_CHECKS = 0`.execute(db);
-    for (const t of DATA_TABLES) {
-      await sql.raw(`DELETE FROM \`${t}\``).execute(db);
-      await sql.raw(`ALTER TABLE \`${t}\` AUTO_INCREMENT = 1`).execute(db).catch(() => {
-        // Tables without an AUTO_INCREMENT column, such as settings.
-      });
-    }
-    await sql`SET FOREIGN_KEY_CHECKS = 1`.execute(db);
-    console.log(`  cleared ${DATA_TABLES.length} tables`);
-  }
 
-  const existing = await db.selectFrom('organizations').select('id').executeTakeFirst();
-  if (existing && !fresh) {
-    console.log('\n  An organisation already exists. Use --fresh to start over.\n');
+    if (demoOrgIds.length === 0) {
+      console.log('  No demo organisation to clear.');
+    } else {
+      console.log(`Clearing demo organisation(s) ${demoOrgIds.join(', ')}...`);
+      const { sql } = await import('kysely');
+      const idList = demoOrgIds.join(',');
+
+      // Relaxed only for the duration of these deletes. The order below is
+      // foreign-key safe on its own, but a few self-references — a credit note
+      // pointing at the invoice it credits — still need the checks off.
+      await sql`SET FOREIGN_KEY_CHECKS = 0`.execute(db);
+
+      await sql
+        .raw(`DELETE FROM user_branches WHERE user_id IN (SELECT id FROM users WHERE org_id IN (${idList}))`)
+        .execute(db);
+
+      for (const t of DATA_TABLES) {
+        await sql.raw(`DELETE FROM \`${t}\` WHERE org_id IN (${idList})`).execute(db);
+      }
+      await sql.raw(`DELETE FROM organizations WHERE id IN (${idList})`).execute(db);
+
+      await sql`SET FOREIGN_KEY_CHECKS = 1`.execute(db);
+      console.log(`  cleared ${DATA_TABLES.length} tables for the demo book`);
+    }
+  } else if (demoOrgIds.length > 0) {
+    console.log('\n  The demo organisation already exists. Use --fresh to rebuild it.\n');
     await db.destroy();
     return;
   }
@@ -61,10 +92,13 @@ async function main() {
 
   // One transaction for the whole book: a half-seeded database is worse than an
   // empty one, because it looks usable until the first missing account.
-  const { ids, book } = await transaction(async (trx) => {
-    const created = await bootstrap(trx);
+  const { ids, book, docs } = await transaction(async (trx) => {
+    const created = await bootstrap(trx, { isDemo: true });
     const history = masters ? null : await seedDemoBook(trx, created);
-    return { ids: created, book: history };
+    // The surrounding documents come second: the credit notes attach to real
+    // invoices and the retainer is applied against one.
+    const around = masters ? null : await seedDemoDocuments(trx, created);
+    return { ids: created, book: history, docs: around };
   });
 
   const check = await transaction(async (trx) => verifyLedgerBalances(trx, ids.orgId));
@@ -84,12 +118,20 @@ ${book ? `
     bills          ${book.bills}
     expenses       ${book.expenses}
     payments       ${book.payments}
-    bank lines     ${book.statementLines}` : `
+    bank lines     ${book.statementLines}${docs ? `
+
+    estimates      ${docs.estimates}
+    sales orders   ${docs.salesOrders}
+    challans       ${docs.challans}
+    credit notes   ${docs.creditNotes}
+    retainers      ${docs.retainers}
+    purchase ord.  ${docs.purchaseOrders}
+    vendor credits ${docs.vendorCredits}` : ''}` : `
     (masters only)`}
 
     ledger         ${check.balanced ? 'balanced' : 'OUT OF BALANCE'}
 
-  Sign in with any seeded user, password Finora@2026:
+  Sign in with any seeded user, password Rekonza@2026:
     arun@raceautospares.in     admin
     priya@raceautospares.in    accountant
     vikram@raceautospares.in   sales

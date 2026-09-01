@@ -290,16 +290,35 @@ async function applyAllocations(
         .where('id', '=', a.targetId)
         .execute();
     } else if (a.targetType === 'retainer') {
+      // Receiving money against a retainer settles the receivable. It does not
+      // spend the advance — that happens later, when work is invoiced and the
+      // retainer is applied against it. Two different columns, deliberately.
       const r = await trx
-        .selectFrom('retainer_invoices').select(['id', 'amount', 'applied_amount'])
+        .selectFrom('retainer_invoices').select(['id', 'amount', 'amount_paid', 'applied_amount'])
         .where('id', '=', a.targetId).where('org_id', '=', orgId).forUpdate().executeTakeFirst();
       if (!r) throw notFound(`Retainer ${a.targetId} not found.`);
-      const applied = toPaiseFromSql(r.applied_amount) + delta;
+
+      const total = toPaiseFromSql(r.amount);
+      const paid = toPaiseFromSql(r.amount_paid) + delta;
+      if (paid > total) {
+        throw new ApiError(
+          409,
+          `That would collect more than retainer ${a.targetId} is worth. ` +
+            'Leave the extra on account instead.',
+          'over_allocated',
+        );
+      }
+      const applied = toPaiseFromSql(r.applied_amount);
+
       await trx
         .updateTable('retainer_invoices')
         .set({
-          applied_amount: toSqlFromPaise(applied),
-          status: applied >= toPaiseFromSql(r.amount) ? 'applied' : applied > 0 ? 'partially_applied' : 'paid',
+          amount_paid: toSqlFromPaise(paid),
+          status:
+            applied >= total ? 'applied'
+            : applied > 0 ? 'partially_applied'
+            : paid >= total ? 'paid'
+            : 'sent',
         })
         .where('id', '=', a.targetId)
         .execute();

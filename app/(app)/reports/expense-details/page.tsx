@@ -1,48 +1,66 @@
 'use client';
 
-import { useMemo } from 'react';
+// Every expense in the period, with the input credit claimed on it.
+
 import { Money } from '@/components/shared/money';
+import { Badge } from '@/components/ui/badge';
 import { downloadCsv, ReportShell, useReportRange } from '@/components/shared/report-shell';
 import { ReportGrid, gridCsv, type GridColumn } from '@/components/shared/report-grid';
-import { useAppStore } from '@/lib/store';
-import { contactName } from '@/lib/selectors';
+import { AsyncPage } from '@/components/shared/async-state';
+import { expenses, type ExpenseListItem } from '@/lib/api/client';
+import { useApi } from '@/lib/api/use-api';
 import { toRupees } from '@/lib/money';
-import { Badge } from '@/components/ui/badge';
-import { totalTaxPaise } from '@/lib/tax/gst';
-import type { Expense } from '@/lib/types';
+
+interface Response { expenses: ExpenseListItem[]; summary: { count: number; totalPaise: number } }
+
+const short = (d: string) => new Date(d).toLocaleDateString('en-IN');
+
+const columns: GridColumn<ExpenseListItem>[] = [
+  { key: 'date', header: 'Date', cell: (r) => <span className="tabular text-xs">{short(r.date)}</span>, csv: (r) => r.date },
+  { key: 'number', header: 'Expense#', cell: (r) => <span className="font-medium">{r.number}</span>, csv: (r) => r.number },
+  { key: 'account', header: 'Category', cell: (r) => r.accountName, csv: (r) => r.accountName },
+  { key: 'vendor', header: 'Vendor', cell: (r) => r.vendorName ?? '—', csv: (r) => r.vendorName ?? '' },
+  { key: 'notes', header: 'Description', cell: (r) => <span className="text-xs text-muted-foreground">{r.notes ?? ''}</span>, csv: (r) => r.notes ?? '' },
+  {
+    key: 'billable', header: 'Billable', align: 'center',
+    cell: (r) => (r.isBillable ? <Badge variant="outline" className="text-[9px]">Billable</Badge> : <span className="text-xs text-muted-foreground">—</span>),
+    csv: (r) => (r.isBillable ? 'Yes' : 'No'),
+  },
+  {
+    key: 'itc', header: 'Input Credit', align: 'right',
+    // Tax on a blocked expense is not a credit you can claim, so it is not
+    // shown as one. Section 17(5) blocks it outright.
+    cell: (r) => (
+      r.itcEligibility === 'ineligible'
+        ? <span className="text-xs text-muted-foreground">Blocked</span>
+        : <Money value={r.taxPaise} showZero={false} />
+    ),
+    csv: (r) => (r.itcEligibility === 'ineligible' ? '0.00' : toRupees(r.taxPaise)),
+    total: (rs) => <Money value={rs.reduce((t, r) => t + (r.itcEligibility === 'ineligible' ? 0 : r.taxPaise), 0)} />,
+  },
+  { key: 'amount', header: 'Amount', align: 'right', cell: (r) => <Money value={r.totalPaise} className="font-medium" />, csv: (r) => toRupees(r.totalPaise), total: (rs) => <Money value={rs.reduce((t, r) => t + r.totalPaise, 0)} /> },
+];
 
 export default function ExpenseDetailsPage() {
-  const s = useAppStore();
   const [range, setRange] = useReportRange();
-
-  const rows = useMemo(
-    () =>
-      s.expenses
-        .filter((e) => e.status !== 'void' && e.date >= range.from && e.date <= range.to)
-        .sort((a, b) => b.date.localeCompare(a.date)),
-    [s.expenses, range],
+  const state = useApi<Response>(
+    () => expenses.list({ from: range.from, to: range.to, limit: 500 }),
+    [range.from, range.to],
   );
-
-  const columns: GridColumn<Expense>[] = [
-    { key: 'date', header: 'Date', cell: (r) => <span className="tabular text-xs">{new Date(r.date).toLocaleDateString('en-IN')}</span>, csv: (r) => r.date },
-    { key: 'number', header: 'Expense#', cell: (r) => <span className="font-medium">{r.number}</span>, csv: (r) => r.number },
-    { key: 'account', header: 'Category', cell: (r) => s.accounts.find((a) => a.id === r.accountId)?.name ?? '—', csv: (r) => s.accounts.find((a) => a.id === r.accountId)?.name ?? '' },
-    { key: 'vendor', header: 'Vendor', cell: (r) => (r.vendorId ? contactName(s, r.vendorId) : '—'), csv: (r) => (r.vendorId ? contactName(s, r.vendorId) : '') },
-    { key: 'notes', header: 'Description', cell: (r) => <span className="text-xs text-muted-foreground">{r.notes}</span>, csv: (r) => r.notes },
-    { key: 'billable', header: 'Billable', align: 'center', cell: (r) => (r.isBillable ? <Badge variant="outline" className="text-[9px]">Billable</Badge> : <span className="text-xs text-muted-foreground">—</span>), csv: (r) => (r.isBillable ? 'Yes' : 'No') },
-    { key: 'itc', header: 'Input Credit', align: 'right', cell: (r) => <Money value={totalTaxPaise(r.tax)} showZero={false} />, csv: (r) => toRupees(totalTaxPaise(r.tax)), total: (rs) => <Money value={rs.reduce((t, r) => t + totalTaxPaise(r.tax), 0)} /> },
-    { key: 'amount', header: 'Amount', align: 'right', cell: (r) => <Money value={r.amountPaise} className="font-medium" />, csv: (r) => toRupees(r.amountPaise), total: (rs) => <Money value={rs.reduce((t, r) => t + r.amountPaise, 0)} /> },
-  ];
 
   return (
     <ReportShell
       title="Expense Details"
-      description="Every expense line in the period, with the input credit claimed on it."
+      description="Every expense in the period, with the input credit claimed on it."
       range={range}
       onRangeChange={setRange}
-      onExport={() => downloadCsv('expense-details.csv', gridCsv(rows, columns))}
+      onExport={() => {
+        if (state.data) downloadCsv('expense-details.csv', gridCsv(state.data.expenses, columns));
+      }}
     >
-      <ReportGrid rows={rows} columns={columns} emptyMessage="No expenses in this period." />
+      <AsyncPage state={state}>
+        {(d) => <ReportGrid rows={d.expenses} columns={columns} emptyMessage="No expenses in this period." />}
+      </AsyncPage>
     </ReportShell>
   );
 }

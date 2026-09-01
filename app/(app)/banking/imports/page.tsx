@@ -1,19 +1,30 @@
 'use client';
 
+// Bringing bank transactions in.
+//
+// The CSV is parsed in the browser on purpose. Every Indian bank exports a
+// slightly different shape, and the column mapping is something a person has to
+// see and confirm — so the server only ever receives normalised rows, and none
+// of those bank-specific quirks live in it.
+//
+// Duplicate lines are skipped by the importer, not by the user. Re-importing an
+// overlapping statement is normal, and a fingerprint of each line is what stops
+// it doubling the balance.
+
 import { useRef, useState } from 'react';
 import Papa from 'papaparse';
-import { Download, FileSpreadsheet, Loader2, RefreshCw, Upload } from 'lucide-react';
+import { Download, FileSpreadsheet, Info, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Combobox } from '@/components/ui/combobox';
 import { PageHeader } from '@/components/shared/page-header';
 import { Field } from '@/components/shared/form-bits';
-import { useAppStore } from '@/lib/store';
-import { Combobox } from '@/components/ui/combobox';
-import { bankAccountOptions } from '@/lib/options';
-import { importBankTxns } from '@/lib/services/banking';
-import { fetchBankFeed } from '@/lib/mock/simulators';
+import { AsyncPage } from '@/components/shared/async-state';
+import { api } from '@/lib/api/client';
+import { useApi, useApiAction } from '@/lib/api/use-api';
+import { usePermission } from '@/lib/store/hooks';
 
 /** A sample statement the user can download, edit and re-upload. */
 const SAMPLE_CSV = `Date,Narration,Reference,Debit,Credit
@@ -24,44 +35,75 @@ const SAMPLE_CSV = `Date,Narration,Reference,Debit,Credit
 2026-08-02,BANK CHARGES RTGS,CHG9931,354.00,
 `;
 
-export default function BankImportsPage() {
-  const s = useAppStore();
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [accountId, setAccountId] = useState(s.bankAccounts[0]?.id ?? '');
-  const [busy, setBusy] = useState(false);
+interface BankAccountRow {
+  id: string;
+  name: string;
+  kind: string;
+  bankName: string | null;
+  accountLast4: string | null;
+}
 
-  const batches = Array.from(new Set(s.bankTxns.map((t) => t.importBatch))).map((batch) => {
-    const lines = s.bankTxns.filter((t) => t.importBatch === batch);
-    return {
-      batch,
-      count: lines.length,
-      matched: lines.filter((l) => l.status === 'matched').length,
-      account: s.bankAccounts.find((b) => b.id === lines[0]?.bankAccountId)?.name ?? '—',
-      from: lines.reduce((min, l) => (l.date < min ? l.date : min), lines[0]?.date ?? ''),
-      to: lines.reduce((max, l) => (l.date > max ? l.date : max), lines[0]?.date ?? ''),
-    };
-  });
+interface ImportRow {
+  id: string;
+  filename: string;
+  bankName: string;
+  rowsTotal: number;
+  rowsImported: number;
+  rowsDuplicate: number;
+  matched: number;
+  lines: number;
+  periodFrom: string | null;
+  periodTo: string | null;
+  importedBy: string | null;
+  at: string;
+}
+
+const short = (d: string | null) => (d ? new Date(d).toLocaleDateString('en-IN') : '—');
+
+export default function BankImportsPage() {
+  const canImport = usePermission('banking', 'create');
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [accountId, setAccountId] = useState('');
+
+  const accounts = useApi<{ accounts: BankAccountRow[] }>(() => api.get('/api/banking/accounts'), []);
+  const history = useApi<{ imports: ImportRow[] }>(() => api.get('/api/banking/import'), []);
+
+  const upload = useApiAction((input: unknown) =>
+    api.post<{ imported: number; duplicates: number }>('/api/banking/import', input),
+  );
+
+  const options = (accounts.data?.accounts ?? []).map((a) => ({
+    value: a.id,
+    label: a.name,
+    sublabel: a.accountLast4 ? `${a.bankName ?? a.kind} ····${a.accountLast4}` : a.kind,
+  }));
+
+  // Default to the first account once they arrive, so the picker is never empty.
+  const activeAccount = accountId || options[0]?.value || '';
 
   const onFile = (file: File) => {
+    if (!activeAccount) {
+      toast.error('Pick the account to import into first.');
+      return;
+    }
     Papa.parse<Record<string, string>>(file, {
       header: true,
       skipEmptyLines: true,
-      complete: (res) => {
+      complete: async (res) => {
         const rows = res.data
           .map((r) => {
             const debit = parseFloat((r.Debit ?? r.debit ?? '0').replace(/,/g, '') || '0');
             const credit = parseFloat((r.Credit ?? r.credit ?? '0').replace(/,/g, '') || '0');
-            const amount = credit > 0 ? credit : debit;
-            if (!amount) return null;
+            if (!debit && !credit) return null;
             return {
               date: (r.Date ?? r.date ?? '').slice(0, 10),
-              amountPaise: Math.round(amount * 100),
-              direction: (credit > 0 ? 'in' : 'out') as 'in' | 'out',
               narration: r.Narration ?? r.narration ?? r.Description ?? 'Imported line',
-              reference: r.Reference ?? r.reference ?? '',
+              reference: r.Reference ?? r.reference ?? null,
+              depositPaise: Math.round(credit * 100),
+              withdrawalPaise: Math.round(debit * 100),
             };
           })
-          .filter((x): x is NonNullable<typeof x> => x !== null);
+          .filter((x): x is NonNullable<typeof x> => x !== null && /^\d{4}-\d{2}-\d{2}$/.test(x.date));
 
         if (rows.length === 0) {
           toast.error('No usable rows found', {
@@ -69,13 +111,19 @@ export default function BankImportsPage() {
           });
           return;
         }
-        const result = importBankTxns(accountId, rows, file.name);
+
+        const result = await upload.run({ bankAccountId: activeAccount, filename: file.name, rows });
+        if (!result) {
+          toast.error(upload.error ?? 'The statement was not imported');
+          return;
+        }
         toast.success(`${result.imported} transactions imported`, {
           description:
             result.duplicates > 0
               ? `${result.duplicates} duplicate line(s) were skipped automatically.`
               : 'No duplicates found.',
         });
+        history.refetch();
       },
       error: () => toast.error('Could not read that file'),
     });
@@ -91,18 +139,11 @@ export default function BankImportsPage() {
     URL.revokeObjectURL(url);
   };
 
-  const pullFeed = async () => {
-    setBusy(true);
-    const n = await fetchBankFeed(accountId);
-    setBusy(false);
-    toast.success(`${n} transactions pulled from the bank feed`);
-  };
-
   return (
     <>
       <PageHeader
-        title="Imports & feeds"
-        description="Bring bank transactions in by file upload or a live feed. Duplicate lines are detected and skipped."
+        title="Imports"
+        description="Bring bank transactions in by file upload. Duplicate lines are detected and skipped."
       />
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -116,8 +157,8 @@ export default function BankImportsPage() {
 
           <Field label="Import into account">
             <Combobox
-              options={bankAccountOptions(s)}
-              value={accountId}
+              options={options}
+              value={activeAccount}
               onChange={setAccountId}
               placeholder="Select account"
               searchPlaceholder="Search accounts"
@@ -125,17 +166,19 @@ export default function BankImportsPage() {
           </Field>
 
           <div
-            onClick={() => fileRef.current?.click()}
+            onClick={() => canImport && fileRef.current?.click()}
             onDragOver={(e) => e.preventDefault()}
             onDrop={(e) => {
               e.preventDefault();
               const f = e.dataTransfer.files[0];
-              if (f) onFile(f);
+              if (f && canImport) onFile(f);
             }}
             className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed p-8 text-center transition-colors hover:border-primary/50 hover:bg-accent/40"
           >
             <Upload className="mb-2 size-6 text-muted-foreground" />
-            <p className="text-sm font-medium">Drop a CSV here or click to browse</p>
+            <p className="text-sm font-medium">
+              {upload.busy ? 'Importing…' : 'Drop a CSV here or click to browse'}
+            </p>
             <p className="mt-1 text-xs text-muted-foreground">Most Indian banks export this format directly</p>
           </div>
           <input
@@ -157,60 +200,75 @@ export default function BankImportsPage() {
 
         <Card className="space-y-4 p-5">
           <div>
-            <h3 className="text-sm font-semibold">Live bank feed</h3>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              Transactions arrive automatically each day — no uploading, no typing.
+            <h3 className="text-sm font-semibold">Automatic bank feeds</h3>
+            <p className="mt-0.5 text-xs text-muted-foreground">Not available yet — and here is the honest reason.</p>
+          </div>
+
+          <div className="flex items-start gap-3 rounded-md border border-amber-500/30 bg-amber-500/5 p-3">
+            <Info className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              A live feed in India runs through the Account Aggregator framework, and pulling data from it directly
+              requires being a licensed Financial Information User — which means being regulated by the RBI, SEBI,
+              IRDAI or PFRDA. Accounting software is none of those. The route open to us is going through a licensed
+              aggregator as a partner, which is a commercial arrangement rather than a feature we can simply build.
+              Until that is in place, uploading a statement is the honest option, and the duplicate detection means
+              re-uploading an overlapping period costs nothing.
             </p>
           </div>
 
           <div className="space-y-2">
-            {s.bankAccounts.map((b) => (
+            {(accounts.data?.accounts ?? []).map((b) => (
               <div key={b.id} className="flex items-center justify-between gap-3 rounded-md border p-3">
                 <div className="min-w-0">
                   <p className="text-sm font-medium">{b.name}</p>
                   <p className="text-xs text-muted-foreground">
-                    {b.feedConnected ? 'Connected · syncing daily' : 'Not connected'}
+                    {b.accountLast4 ? `${b.bankName ?? b.kind} ····${b.accountLast4}` : b.kind}
                   </p>
                 </div>
-                {b.feedConnected ? (
-                  <Badge variant="outline" className="border-emerald-500/40 text-[10px]">Live</Badge>
-                ) : (
-                  <Button variant="outline" size="sm" onClick={() => toast.info('Consent flow would open here', { description: 'In production this opens the bank’s consent screen.' })}>
-                    Connect
-                  </Button>
-                )}
+                <Badge variant="outline" className="text-[10px]">Upload only</Badge>
               </div>
             ))}
           </div>
-
-          <Button onClick={pullFeed} disabled={busy} size="sm" className="gap-1.5">
-            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
-            {busy ? 'Fetching…' : 'Fetch now'}
-          </Button>
         </Card>
       </div>
 
       <Card className="p-5">
         <h3 className="mb-3 text-sm font-semibold">Import history</h3>
-        {batches.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No imports yet.</p>
-        ) : (
-          <div className="divide-y">
-            {batches.map((b) => (
-              <div key={b.batch} className="flex flex-wrap items-center gap-3 py-3">
-                <FileSpreadsheet className="size-4 shrink-0 text-muted-foreground" />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">{b.batch}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {b.account} · {new Date(b.from).toLocaleDateString('en-IN')} – {new Date(b.to).toLocaleDateString('en-IN')}
-                  </p>
-                </div>
-                <Badge variant="secondary" className="text-[10px]">{b.count} lines</Badge>
-                <Badge variant="outline" className="text-[10px]">{b.matched} matched</Badge>
+        <AsyncPage state={history}>
+          {(d) =>
+            d.imports.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No imports yet.</p>
+            ) : (
+              <div className="divide-y">
+                {d.imports.map((b) => (
+                  <div key={b.id} className="flex flex-wrap items-center gap-3 py-3">
+                    <FileSpreadsheet className="size-4 shrink-0 text-muted-foreground" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium">{b.filename}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {b.bankName} · {short(b.periodFrom)} – {short(b.periodTo)}
+                        {b.importedBy ? ` · by ${b.importedBy}` : ''}
+                      </p>
+                    </div>
+                    <Badge variant="secondary" className="text-[10px]">{b.rowsImported} lines</Badge>
+                    {b.rowsDuplicate > 0 && (
+                      <Badge variant="outline" className="text-[10px]">{b.rowsDuplicate} skipped</Badge>
+                    )}
+                    <Badge
+                      variant="outline"
+                      className={
+                        'text-[10px] ' +
+                        (b.lines > 0 && b.matched === b.lines ? 'border-emerald-500/40' : '')
+                      }
+                    >
+                      {b.matched} of {b.lines} matched
+                    </Badge>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        )}
+            )
+          }
+        </AsyncPage>
       </Card>
     </>
   );

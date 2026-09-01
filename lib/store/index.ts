@@ -59,6 +59,14 @@ export interface AppState {
   entries: JournalEntry[];
   nextEntryNo: number;
   series: NumberSeriesState;
+  /**
+   * The next document numbers, peeked from the database sequences.
+   *
+   * Held here so a form can show what it will actually be assigned. Peeked,
+   * never allocated — showing a number must not consume one, or every
+   * abandoned draft leaves a gap in a series GST requires to be unbroken.
+   */
+  nextNumbers: { invoice: string | null; bill: string | null };
   audit: AuditEvent[];
 
   gstr2b: Gstr2bEntry[];
@@ -108,6 +116,7 @@ export const EMPTY_COLLECTIONS = {
   entries: [] as JournalEntry[],
   nextEntryNo: 1,
   series: {} as NumberSeriesState,
+  nextNumbers: { invoice: null, bill: null } as { invoice: string | null; bill: string | null },
   audit: [] as AuditEvent[],
   gstr2b: [] as Gstr2bEntry[],
   ewayBills: [] as EwayBill[],

@@ -1,415 +1,414 @@
 'use client';
 
-// The reconciliation workspace — the screen accountants live in.
-// Two panes: bank lines on the left, suggested matches on the right.
-// Keyboard: ↑/↓ move, Enter confirms the top suggestion.
+// Reconciliation: statement lines on the left, what to do with each on the right.
+//
+// The statement is the bank's version of events and the ledger is ours. The job
+// is finding where the two disagree, which is why a line stays outside the
+// books until somebody says what it was for.
+//
+// Two outcomes, and the difference matters:
+//   * Match to a payment already recorded — posts nothing. The payment posted
+//     when it was entered; posting again would double the money.
+//   * Categorise to an account — posts a new entry, because the money moved and
+//     no document explained it.
+//
+// Suggestions are offered, never applied. A wrong automatic match is invisible
+// until somebody reconciles the account by hand months later.
 
-import { useEffect, useMemo, useState } from 'react';
-import {
-  Check, EyeOff, Link2, Loader2, RefreshCw, Search, Split, Undo2, Zap,
-} from 'lucide-react';
+import { Suspense, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { ArrowDownLeft, ArrowUpRight, Check, Link2, Loader2, Undo2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
+import { Combobox } from '@/components/ui/combobox';
 import { PageHeader } from '@/components/shared/page-header';
 import { Money } from '@/components/shared/money';
 import { EmptyState } from '@/components/shared/empty-state';
-import { useAppStore } from '@/lib/store';
-import { Combobox } from '@/components/ui/combobox';
-import { bankAccountOptions } from '@/lib/options';
+import { AsyncPage, LoadingRows, Refreshing } from '@/components/shared/async-state';
+import { Field } from '@/components/shared/form-bits';
+import { api } from '@/lib/api/client';
+import { useApi, useApiAction } from '@/lib/api/use-api';
 import { cn } from '@/lib/utils';
-import { contactName } from '@/lib/selectors';
-import {
-  applyBankRules, excludeBankTxn, matchBankTxn, unmatchBankTxn, ruleMatches,
-} from '@/lib/services/banking';
-import { createExpense } from '@/lib/services/purchases';
-import { fetchBankFeed } from '@/lib/mock/simulators';
 
-interface Suggestion {
-  kind: 'payment' | 'expense' | 'rule';
+interface TxnRow {
   id: string;
-  label: string;
-  sublabel: string;
-  amountPaise: number;
-  confidence: number; // 0–1
-  accountId?: string;
+  date: string;
+  narration: string;
+  reference: string | null;
+  depositPaise: number;
+  withdrawalPaise: number;
+  status: string;
+  matchedType: string | null;
+  matchedId: string | null;
+  bankAccountId: string;
+  bankName: string;
 }
 
-export default function ReconcilePage() {
-  const s = useAppStore();
-  const [accountId, setAccountId] = useState(s.bankAccounts[0]?.id ?? '');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [query, setQuery] = useState('');
-  const [feedBusy, setFeedBusy] = useState(false);
+interface Suggestion {
+  id: string;
+  number: string;
+  date: string;
+  amountPaise: number;
+}
 
-  const txns = useMemo(
+interface TxnResponse {
+  transactions: TxnRow[];
+  suggestions: Record<string, Suggestion[]>;
+  summary: { count: number; unmatched: number; depositsPaise: number; withdrawalsPaise: number };
+}
+
+/** Accounts whose balance must come from documents, never a free-hand entry. */
+const CONTROL_ACCOUNTS = new Set([
+  '1100', // Accounts Receivable — the sum of unpaid invoices
+  '2100', // Accounts Payable — the sum of unpaid bills
+]);
+
+interface Masters {
+  accounts: { id: string; code: string; name: string; type: string }[];
+  bankAccounts: { id: string; name: string }[];
+  contacts: { id: string; kind: string; displayName: string }[];
+}
+
+function ReconcileInner() {
+  const params = useSearchParams();
+  const [accountId, setAccountId] = useState(params.get('account') ?? '');
+  const [tab, setTab] = useState<'unmatched' | 'matched'>('unmatched');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [categoryId, setCategoryId] = useState('');
+  const [contactId, setContactId] = useState('');
+
+  const masters = useApi<Masters>(() => api.get('/api/masters'), []);
+
+  const state = useApi<TxnResponse>(
     () =>
-      s.bankTxns
-        .filter((t) => t.bankAccountId === accountId)
-        .filter((t) => !query || t.narration.toLowerCase().includes(query.toLowerCase()))
-        .sort((a, b) => b.date.localeCompare(a.date)),
-    [s.bankTxns, accountId, query],
+      api.get('/api/banking/transactions', {
+        status: tab,
+        bankAccountId: accountId || undefined,
+        limit: 300,
+      }),
+    [tab, accountId],
   );
 
-  const unmatched = txns.filter((t) => t.status === 'unmatched');
-  const selected = txns.find((t) => t.id === selectedId) ?? unmatched[0] ?? null;
+  const act = useApiAction((input: unknown) =>
+    api.post<{ id: string; journalEntryId: string | null }>('/api/banking/transactions', input),
+  );
 
-  // Ledger balance vs statement balance — the number that must reach zero
-  const account = s.bankAccounts.find((b) => b.id === accountId);
-  const ledgerBalance = useMemo(() => {
-    if (!account) return 0;
-    return s.entries
-      .flatMap((e) => e.lines)
-      .filter((l) => l.accountId === account.ledgerAccountId)
-      .reduce((t, l) => t + l.debit - l.credit, 0);
-  }, [s.entries, account]);
+  const accountOptions = useMemo(
+    () => [
+      { value: '', label: 'All accounts' },
+      ...(masters.data?.bankAccounts ?? []).map((b) => ({ value: b.id, label: b.name })),
+    ],
+    [masters.data],
+  );
 
-  const statementNet = txns
-    .filter((t) => t.status !== 'excluded')
-    .reduce((t, x) => t + (x.direction === 'in' ? x.amountPaise : -x.amountPaise), 0);
+  const categoryOptions = useMemo(
+    () =>
+      (masters.data?.accounts ?? [])
+        .filter((a) => ['expense', 'income', 'asset', 'liability'].includes(a.type))
+        // Control accounts are excluded. Receivables and payables are the sum
+        // of the invoices and bills behind them, so posting to one directly
+        // makes the ageing stop agreeing with it — and the ageing is what
+        // anybody actually chases. Money moving there belongs on a document.
+        .filter((a) => !CONTROL_ACCOUNTS.has(a.code))
+        .map((a) => ({ value: a.id, label: a.name, sublabel: `${a.code} · ${a.type}` })),
+    [masters.data],
+  );
 
-  /** Suggestions for the selected line — exact amount matches rank highest. */
-  const suggestions = useMemo<Suggestion[]>(() => {
-    if (!selected) return [];
-    const out: Suggestion[] = [];
+  const contactOptions = useMemo(
+    () => (masters.data?.contacts ?? []).map((c) => ({ value: c.id, label: c.displayName })),
+    [masters.data],
+  );
 
-    // Rule hits
-    for (const rule of s.bankRules.filter((r) => r.isActive)) {
-      if (ruleMatches(rule, selected)) {
-        const acc = s.accounts.find((a) => a.id === rule.actionAccountId);
-        out.push({
-          kind: 'rule',
-          id: rule.id,
-          label: `Categorise as ${acc?.name}`,
-          sublabel: `Rule: ${rule.name}`,
-          amountPaise: selected.amountPaise,
-          confidence: 0.95,
-          accountId: rule.actionAccountId,
-        });
-      }
-    }
+  const selected = state.data?.transactions.find((t) => t.id === selectedId) ?? null;
+  const suggestions = selectedId ? (state.data?.suggestions[selectedId] ?? []) : [];
 
-    // Existing payments not yet reconciled
-    const alreadyMatched = new Set(
-      s.bankTxns.filter((t) => t.matchedTo).map((t) => `${t.matchedTo!.type}:${t.matchedTo!.id}`),
-    );
-    for (const p of s.payments) {
-      if (alreadyMatched.has(`payment:${p.id}`)) continue;
-      const wantsIn = p.kind === 'received';
-      if ((selected.direction === 'in') !== wantsIn) continue;
-      const diff = Math.abs(p.amountPaise - selected.amountPaise);
-      if (diff > selected.amountPaise * 0.02) continue; // 2% tolerance
-      const nameHit = contactName(s, p.contactId)
-        .toLowerCase()
-        .split(' ')[0];
-      const narrationHit = selected.narration.toLowerCase().includes(nameHit);
-      out.push({
-        kind: 'payment',
-        id: p.id,
-        label: `${p.number} · ${contactName(s, p.contactId)}`,
-        sublabel: `${p.kind === 'received' ? 'Payment received' : 'Payment made'} on ${new Date(p.date).toLocaleDateString('en-IN')}`,
-        amountPaise: p.amountPaise,
-        confidence: diff === 0 ? (narrationHit ? 0.99 : 0.9) : 0.7,
-      });
-    }
+  const refresh = async () => {
+    setSelectedId(null);
+    setCategoryId('');
+    setContactId('');
+    await state.refetch();
+  };
 
-    // Existing expenses
-    for (const e of s.expenses) {
-      if (alreadyMatched.has(`expense:${e.id}`)) continue;
-      if (selected.direction !== 'out') continue;
-      const total = e.tax.taxablePaise + e.tax.cgstPaise + e.tax.sgstPaise + e.tax.igstPaise;
-      if (Math.abs(total - selected.amountPaise) > 100) continue;
-      out.push({
-        kind: 'expense',
-        id: e.id,
-        label: `${e.number} · ${e.notes}`,
-        sublabel: `Expense on ${new Date(e.date).toLocaleDateString('en-IN')}`,
-        amountPaise: total,
-        confidence: 0.85,
-      });
-    }
-
-    return out.sort((a, b) => b.confidence - a.confidence);
-  }, [selected, s]);
-
-  const confirm = (sug: Suggestion) => {
+  const matchToPayment = async (paymentId: string, number: string) => {
     if (!selected) return;
-    if (sug.kind === 'rule' && sug.accountId) {
-      // Categorising creates the expense, then matches to it
-      const exp = createExpense({
-        branchId: s.activeBranchId,
-        date: selected.date,
-        accountId: sug.accountId,
-        paidThroughId: selected.bankAccountId,
-        amountPaise: selected.amountPaise,
-        gstRatePct: 0,
-        notes: selected.narration,
-        receiptAttached: false,
-      });
-      matchBankTxn(selected.id, { type: 'expense', id: exp.id, label: exp.number });
-    } else {
-      matchBankTxn(selected.id, {
-        type: sug.kind === 'payment' ? 'payment' : 'expense',
-        id: sug.id,
-        label: sug.label,
-      });
-    }
-    toast.success('Matched', { description: sug.label });
-    const next = unmatched.find((t) => t.id !== selected.id);
-    setSelectedId(next?.id ?? null);
+    const ok = await act.run({ action: 'match', transactionId: selected.id, paymentId });
+    if (!ok) return toast.error(act.error ?? 'Could not match that line.');
+    toast.success(`Matched to ${number}`, {
+      description: 'Nothing new was posted — that payment was already in the books.',
+    });
+    await refresh();
   };
 
-  // Keyboard navigation
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
-      const idx = txns.findIndex((t) => t.id === selected?.id);
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        setSelectedId(txns[Math.min(idx + 1, txns.length - 1)]?.id ?? null);
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        setSelectedId(txns[Math.max(idx - 1, 0)]?.id ?? null);
-      } else if (e.key === 'Enter' && suggestions[0]) {
-        e.preventDefault();
-        confirm(suggestions[0]);
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  });
-
-  const runRules = () => {
-    const hits = applyBankRules(accountId);
-    toast.success(`${hits.length} line(s) matched by rules`);
+  const categorise = async () => {
+    if (!selected || !categoryId) return;
+    const ok = await act.run({
+      action: 'categorise',
+      transactionId: selected.id,
+      accountId: categoryId,
+      contactId: contactId || undefined,
+    });
+    if (!ok) return toast.error(act.error ?? 'Could not categorise that line.');
+    toast.success('Line categorised', { description: 'A balanced entry has been posted.' });
+    await refresh();
   };
 
-  const runFeed = async () => {
-    setFeedBusy(true);
-    const n = await fetchBankFeed(accountId);
-    setFeedBusy(false);
-    toast.success(`${n} new transaction(s) pulled from the bank feed`);
+  const unmatch = async (txnId: string) => {
+    const ok = await act.run({ action: 'unmatch', transactionId: txnId });
+    if (!ok) return toast.error(act.error ?? 'Could not unmatch that line.');
+    toast.info('Line unmatched', {
+      description: 'Any entry it posted has been reversed, not deleted.',
+    });
+    await refresh();
   };
 
   return (
     <>
       <PageHeader
         title="Reconcile"
-        description="Match what the bank says against what your books say. Use ↑ ↓ to move and Enter to accept the top suggestion."
+        description="The statement is the bank's version of events and the ledger is ours. This is where the two are squared."
         actions={
           <>
-            <Combobox
-              options={bankAccountOptions(s)}
-              value={accountId}
-              onChange={(v) => { setAccountId(v); setSelectedId(null); }}
-              placeholder="Select account"
-              searchPlaceholder="Search accounts"
-              className="w-56"
-            />
-            {account?.feedConnected && (
-              <Button variant="outline" size="sm" onClick={runFeed} disabled={feedBusy} className="gap-1.5">
-                {feedBusy ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
-                Fetch feed
-              </Button>
-            )}
-            <Button variant="outline" size="sm" onClick={runRules} className="gap-1.5">
-              <Zap className="size-3.5" /> Run rules
-            </Button>
+            <Refreshing active={state.refreshing} />
+            <div className="w-56">
+              <Combobox
+                options={accountOptions}
+                value={accountId}
+                onChange={setAccountId}
+                showAvatar={false}
+                searchPlaceholder="Search accounts"
+              />
+            </div>
           </>
         }
       />
 
-      {/* The delta that must reach zero */}
-      <Card className="flex flex-wrap items-center gap-6 p-4">
-        <div>
-          <p className="text-xs text-muted-foreground">Statement (net movement)</p>
-          <Money value={statementNet} className="text-lg font-semibold" />
-        </div>
-        <div className="text-muted-foreground">vs</div>
-        <div>
-          <p className="text-xs text-muted-foreground">Ledger balance</p>
-          <Money value={ledgerBalance} className="text-lg font-semibold" />
-        </div>
-        <div className="ml-auto flex items-center gap-3">
-          <div className="text-right">
-            <p className="text-xs text-muted-foreground">Lines to reconcile</p>
-            <p className="text-lg font-semibold tabular">{unmatched.length}</p>
-          </div>
-          <Badge
-            variant="outline"
+      <div className="flex flex-wrap items-center gap-1 border-b">
+        {(['unmatched', 'matched'] as const).map((t) => (
+          <button
+            key={t}
+            type="button"
+            data-slot="reconcile-tab"
+            data-tab={t}
+            onClick={() => { setTab(t); setSelectedId(null); }}
             className={cn(
-              'text-[11px]',
-              unmatched.length === 0
-                ? 'border-emerald-500/40 text-emerald-700 dark:text-emerald-300'
-                : 'border-amber-500/40 text-amber-700 dark:text-amber-300',
+              '-mb-px border-b-2 px-3 py-2 text-[13px] capitalize transition-colors',
+              tab === t ? 'border-primary font-medium text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground',
             )}
           >
-            {unmatched.length === 0 ? 'Fully reconciled' : 'In progress'}
-          </Badge>
-        </div>
-      </Card>
+            {t}
+            {t === 'unmatched' && state.data ? (
+              <span className="ml-1.5 tabular text-xs text-muted-foreground">
+                {state.data.summary.unmatched}
+              </span>
+            ) : null}
+          </button>
+        ))}
+      </div>
 
-      {txns.length === 0 ? (
-        <EmptyState
-          icon={Split}
-          title="No transactions to reconcile"
-          description="Import a bank statement or pull the feed to get started."
-        />
-      ) : (
-        <div className="grid gap-4 lg:grid-cols-2">
-          {/* Left: bank lines */}
-          <Card className="flex flex-col p-0">
-            <div className="flex items-center gap-2 border-b p-3">
-              <div className="relative flex-1">
-                <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Filter narration…"
-                  className="h-8 pl-8"
-                />
-              </div>
-              <Badge variant="secondary" className="text-[10px]">{txns.length} lines</Badge>
-            </div>
-            <div className="max-h-[560px] overflow-y-auto thin-scroll">
-              {txns.map((t) => (
-                <button
-                  key={t.id}
-                  onClick={() => setSelectedId(t.id)}
-                  className={cn(
-                    'flex w-full items-start gap-3 border-b px-3 py-2.5 text-left transition-colors last:border-0',
-                    selected?.id === t.id ? 'bg-accent' : 'hover:bg-accent/50',
-                    t.status !== 'unmatched' && 'opacity-60',
-                  )}
-                >
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">{t.narration}</p>
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      {new Date(t.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
-                      {t.reference && ` · ${t.reference}`}
-                    </p>
-                    {t.matchedTo && (
-                      <p className="mt-1 flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400">
-                        <Link2 className="size-3" /> {t.matchedTo.label}
-                      </p>
-                    )}
-                  </div>
-                  <div className="text-right">
-                    <Money
-                      value={t.direction === 'in' ? t.amountPaise : -t.amountPaise}
-                      colored
-                      className="text-sm font-medium"
-                    />
-                    {t.status === 'matched' && (
-                      <Badge variant="outline" className="mt-1 gap-0.5 border-emerald-500/40 text-[9px]">
-                        <Check className="size-2.5" /> Matched
-                      </Badge>
-                    )}
-                    {t.status === 'excluded' && (
-                      <Badge variant="secondary" className="mt-1 text-[9px]">Excluded</Badge>
-                    )}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </Card>
-
-          {/* Right: suggestions for the selected line */}
-          <Card className="p-4">
-            {!selected ? (
-              <div className="flex h-full items-center justify-center py-16 text-sm text-muted-foreground">
-                All lines on this account are reconciled.
-              </div>
-            ) : (
-              <>
-                <div className="mb-4 rounded-lg border bg-muted/40 p-3">
-                  <p className="text-sm font-medium">{selected.narration}</p>
-                  <div className="mt-1.5 flex items-center gap-3 text-xs text-muted-foreground">
-                    <span>{new Date(selected.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}</span>
-                    <Money
-                      value={selected.direction === 'in' ? selected.amountPaise : -selected.amountPaise}
-                      colored
-                      className="font-medium"
-                    />
-                  </div>
+      <AsyncPage state={state} loading={<LoadingRows rows={8} />}>
+        {(data) =>
+          data.transactions.length === 0 ? (
+            <EmptyState
+              icon={Check}
+              title={tab === 'unmatched' ? 'Nothing left to reconcile' : 'Nothing matched yet'}
+              description={
+                tab === 'unmatched'
+                  ? 'Every statement line has been accounted for.'
+                  : 'Matched lines will appear here once you start reconciling.'
+              }
+            />
+          ) : (
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
+              {/* ── Statement lines ─────────────────────────────────────── */}
+              <Card className="overflow-hidden p-0">
+                <div className="divide-y">
+                  {data.transactions.map((t) => {
+                    const isDeposit = t.depositPaise > 0;
+                    const isSelected = t.id === selectedId;
+                    const hint = data.suggestions[t.id]?.length ?? 0;
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        data-slot="bank-line"
+                        onClick={() => setSelectedId(isSelected ? null : t.id)}
+                        className={cn(
+                          'flex w-full items-center gap-3 p-3.5 text-left transition-colors',
+                          isSelected ? 'bg-accent' : 'hover:bg-accent/40',
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            'grid size-7 shrink-0 place-items-center rounded-full',
+                            isDeposit
+                              ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                              : 'bg-muted text-muted-foreground',
+                          )}
+                        >
+                          {isDeposit ? <ArrowDownLeft className="size-3.5" /> : <ArrowUpRight className="size-3.5" />}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm">{t.narration}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {new Date(t.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' })}
+                            {' · '}{t.bankName}
+                            {t.reference && ` · ${t.reference}`}
+                          </p>
+                        </div>
+                        {hint > 0 && tab === 'unmatched' && (
+                          <Badge variant="outline" className="shrink-0 gap-1 text-[9px]">
+                            <Link2 className="size-2.5" /> {hint} match{hint === 1 ? '' : 'es'}
+                          </Badge>
+                        )}
+                        {tab === 'matched' && (
+                          <Badge variant="secondary" className="shrink-0 text-[9px]">
+                            {t.matchedType === 'payment' ? 'Payment' : 'Categorised'}
+                          </Badge>
+                        )}
+                        <Money
+                          value={t.depositPaise || t.withdrawalPaise}
+                          className={cn('shrink-0 font-medium', isDeposit && 'text-emerald-600 dark:text-emerald-400')}
+                        />
+                      </button>
+                    );
+                  })}
                 </div>
+              </Card>
 
-                {selected.status !== 'unmatched' ? (
-                  <div className="space-y-3">
-                    <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/5 p-3">
-                      <p className="text-sm font-medium">
-                        {selected.status === 'matched' ? 'Already matched' : 'Excluded from reconciliation'}
-                      </p>
-                      {selected.matchedTo && (
-                        <p className="mt-0.5 text-xs text-muted-foreground">{selected.matchedTo.label}</p>
-                      )}
-                    </div>
-                    <Button variant="outline" size="sm" onClick={() => { unmatchBankTxn(selected.id); toast.info('Unmatched'); }} className="gap-1.5">
-                      <Undo2 className="size-3.5" /> Undo
+              {/* ── What to do with it ──────────────────────────────────── */}
+              <div className="space-y-4">
+                {!selected ? (
+                  <Card className="p-6 text-center text-sm text-muted-foreground">
+                    Pick a line on the left to match or categorise it.
+                  </Card>
+                ) : tab === 'matched' ? (
+                  <Card className="space-y-3 p-5">
+                    <p className="text-sm font-medium">{selected.narration}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {selected.matchedType === 'payment'
+                        ? 'Matched to a payment already in the books. Nothing was posted for the match itself.'
+                        : 'Categorised, which posted a journal entry.'}
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={act.busy}
+                      onClick={() => unmatch(selected.id)}
+                      className="gap-1.5"
+                    >
+                      {act.busy ? <Loader2 className="size-3.5 animate-spin" /> : <Undo2 className="size-3.5" />}
+                      Unmatch
                     </Button>
-                  </div>
+                  </Card>
                 ) : (
                   <>
-                    <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                      Suggested matches
-                    </p>
-                    {suggestions.length === 0 ? (
-                      <div className="rounded-lg border border-dashed p-6 text-center">
-                        <p className="text-sm text-muted-foreground">
-                          Nothing in your books matches this line.
-                        </p>
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          Record it as an expense, or exclude it if it isn&apos;t a business transaction.
-                        </p>
+                    <Card className="p-5">
+                      <p className="micro-label">Selected line</p>
+                      <p className="mt-1 text-sm font-medium">{selected.narration}</p>
+                      <div className="mt-2 flex items-baseline gap-2">
+                        <Money
+                          value={selected.depositPaise || selected.withdrawalPaise}
+                          className="text-lg font-semibold"
+                        />
+                        <span className="text-xs text-muted-foreground">
+                          {selected.depositPaise ? 'received' : 'paid out'} on{' '}
+                          {new Date(selected.date).toLocaleDateString('en-IN', {
+                            day: 'numeric', month: 'short', year: 'numeric',
+                          })}
+                        </span>
                       </div>
-                    ) : (
-                      <div className="space-y-2">
-                        {suggestions.map((sug, idx) => (
-                          <div
-                            key={`${sug.kind}-${sug.id}`}
-                            className={cn(
-                              'flex items-center gap-3 rounded-lg border p-3',
-                              idx === 0 && 'border-primary/50 bg-primary/5',
-                            )}
-                          >
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate text-sm font-medium">{sug.label}</p>
-                              <p className="text-xs text-muted-foreground">{sug.sublabel}</p>
+                    </Card>
+
+                    {suggestions.length > 0 && (
+                      <Card className="p-5">
+                        <p className="micro-label">Already in the books</p>
+                        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                          Same amount, same account, within a week. Matching one of these posts nothing —
+                          the payment posted when it was recorded.
+                        </p>
+                        <div className="mt-3 space-y-2">
+                          {suggestions.map((sg) => (
+                            <div
+                              key={sg.id}
+                              className="flex items-center gap-3 rounded-[3px] border p-2.5"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <p className="text-sm font-medium">{sg.number}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {new Date(sg.date).toLocaleDateString('en-IN', {
+                                    day: 'numeric', month: 'short', year: 'numeric',
+                                  })}
+                                </p>
+                              </div>
+                              <Money value={sg.amountPaise} className="text-sm" />
+                              <Button
+                                size="xs"
+                                disabled={act.busy}
+                                onClick={() => matchToPayment(sg.id, sg.number)}
+                              >
+                                Match
+                              </Button>
                             </div>
-                            <div className="text-right">
-                              <Money value={sug.amountPaise} className="text-sm" />
-                              <p className="text-[10px] text-muted-foreground">
-                                {Math.round(sug.confidence * 100)}% match
-                              </p>
-                            </div>
-                            <Button size="sm" onClick={() => confirm(sug)} className="gap-1">
-                              <Check className="size-3.5" />
-                              {idx === 0 ? 'Match ⏎' : 'Match'}
-                            </Button>
-                          </div>
-                        ))}
-                      </div>
+                          ))}
+                        </div>
+                      </Card>
                     )}
 
-                    <div className="mt-4 flex flex-wrap gap-2 border-t pt-4">
+                    <Card className="space-y-4 p-5">
+                      <div>
+                        <p className="micro-label">Or categorise it</p>
+                        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                          For money that moved with no document behind it — a bank charge, a direct debit.
+                          This posts a new entry.
+                        </p>
+                      </div>
+                      <Field label="Account" required>
+                        <Combobox
+                          options={categoryOptions}
+                          value={categoryId}
+                          onChange={setCategoryId}
+                          placeholder="Select an account"
+                          searchPlaceholder="Search by name or code"
+                          showAvatar={false}
+                        />
+                      </Field>
+                      <Field label="Contact" hint="Optional — links the entry to a customer or vendor">
+                        <Combobox
+                          options={contactOptions}
+                          value={contactId}
+                          onChange={setContactId}
+                          placeholder="None"
+                          searchPlaceholder="Search contacts"
+                          clearable
+                        />
+                      </Field>
+                      {act.error && <p className="text-sm text-destructive">{act.error}</p>}
                       <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => { excludeBankTxn(selected.id); toast.info('Line excluded'); }}
-                        className="gap-1.5"
+                        onClick={categorise}
+                        disabled={!categoryId || act.busy}
+                        className="w-full gap-1.5"
                       >
-                        <EyeOff className="size-3.5" /> Exclude
+                        {act.busy ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
+                        Categorise and post
                       </Button>
-                    </div>
+                    </Card>
                   </>
                 )}
-              </>
-            )}
-          </Card>
-        </div>
-      )}
+              </div>
+            </div>
+          )
+        }
+      </AsyncPage>
     </>
+  );
+}
+
+export default function ReconcilePage() {
+  return (
+    <Suspense fallback={<LoadingRows rows={8} />}>
+      <ReconcileInner />
+    </Suspense>
   );
 }

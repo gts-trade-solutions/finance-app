@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Info, Wallet } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
@@ -14,10 +14,12 @@ import { Field, FormSection, MoneyInput, TotalRow } from '@/components/shared/fo
 import { Money } from '@/components/shared/money';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { useAppStore } from '@/lib/store';
-import { customers, effectiveInvoiceStatus, invoiceBalance, today } from '@/lib/selectors';
-import { bankAccountOptions, customerOptions } from '@/lib/options';
-import { receivePayment } from '@/lib/services/sales';
-import type { PaymentAllocation, PaymentMode } from '@/lib/types';
+import { customers, today } from '@/lib/selectors';
+import { customerOptions } from '@/lib/options';
+import { api, ApiError, invoices as invoiceApi, type InvoiceListResponse } from '@/lib/api/client';
+import { useApi } from '@/lib/api/use-api';
+import { useSession } from '@/components/layout/session-provider';
+import type { PaymentMode } from '@/lib/types';
 
 const MODES: PaymentMode[] = ['neft', 'upi', 'imps', 'cheque', 'cash', 'card', 'gateway'];
 
@@ -30,31 +32,54 @@ function NewPaymentInner() {
   const [customerId, setCustomerId] = useState(params.get('customer') ?? '');
   const [date, setDate] = useState(today());
   const [mode, setMode] = useState<PaymentMode>('neft');
-  const [bankAccountId, setBankAccountId] = useState(s.bankAccounts[0]?.id ?? '');
+  const [bankAccountId, setBankAccountId] = useState('');
   const [reference, setReference] = useState('');
   const [tdsPaise, setTdsPaise] = useState(0);
   const [chargesPaise, setChargesPaise] = useState(0);
   const [selected, setSelected] = useState<Record<string, number>>({});
+  const [saving, setSaving] = useState(false);
+  const session = useSession();
 
-  // Preselect the invoice passed in the query string
+  // Bank accounts come from the server, because the payment posts against the
+  // ledger account behind whichever one is picked.
+  const mastersState = useApi<{ bankAccounts: { id: string; name: string; kind: string }[] }>(
+    () => api.get('/api/masters'),
+    [],
+  );
+  const bankOptions = useMemo(
+    () => (mastersState.data?.bankAccounts ?? []).map((b) => ({ value: b.id, label: b.name, sublabel: b.kind })),
+    [mastersState.data],
+  );
+  useEffect(() => {
+    if (!bankAccountId && bankOptions.length) setBankAccountId(bankOptions[0].value);
+  }, [bankAccountId, bankOptions]);
+
+  // Only this customer's unsettled invoices, oldest first — which is the order
+  // anybody applying a receipt works in.
+  const openState = useApi<InvoiceListResponse>(
+    () =>
+      customerId
+        ? invoiceApi.list({ customerId, open: true, limit: 200 })
+        : Promise.resolve({ invoices: [], statusCounts: {}, summary: { count: 0, totalPaise: 0, duePaise: 0 } }),
+    [customerId],
+  );
+  const openInvs = useMemo(
+    () => [...(openState.data?.invoices ?? [])].sort((a, b) => a.dueDate.localeCompare(b.dueDate)),
+    [openState.data],
+  );
+
+  // Arriving from an invoice's "record payment" action: preselect it in full.
+  const preselected = useRef(false);
   useEffect(() => {
     const invId = params.get('invoice');
-    if (!invId) return;
-    const inv = s.invoices.find((i) => i.id === invId);
+    if (!invId || preselected.current) return;
+    const inv = openInvs.find((i) => i.id === invId);
     if (!inv) return;
-    setCustomerId(inv.customerId);
-    setSelected({ [inv.id]: invoiceBalance(inv) });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params, s.invoices.length]);
+    setSelected({ [inv.id]: inv.balancePaise });
+    preselected.current = true;
+  }, [params, openInvs]);
 
   const customer = custList.find((c) => c.id === customerId);
-  const openInvs = useMemo(
-    () =>
-      s.invoices
-        .filter((i) => i.customerId === customerId && i.status !== 'void' && i.status !== 'draft' && invoiceBalance(i) > 0)
-        .sort((a, b) => a.dueDate.localeCompare(b.dueDate)),
-    [s.invoices, customerId],
-  );
 
   const allocated = Object.values(selected).reduce((t, v) => t + v, 0);
   const cashReceived = allocated - tdsPaise - chargesPaise;
@@ -68,29 +93,52 @@ function NewPaymentInner() {
     });
   };
 
-  const save = () => {
+  const save = async () => {
     if (!customerId || allocated <= 0) {
       toast.error('Pick a customer and at least one invoice to apply this payment to.');
       return;
     }
-    const allocations: PaymentAllocation[] = Object.entries(selected).map(([targetId, amountPaise]) => ({
-      targetType: 'invoice',
-      targetId,
-      amountPaise,
-    }));
-    const p = receivePayment({
-      customerId,
-      date,
-      mode,
-      bankAccountId,
-      amountPaise: cashReceived,
-      tdsPaise,
-      bankChargesPaise: chargesPaise,
-      reference,
-      allocations,
-    });
-    toast.success(`Payment ${p.number} recorded`, {
-      description: 'Invoices updated and a balanced journal entry posted.',
+    if (!bankAccountId) {
+      toast.error('Choose which account the money landed in.');
+      return;
+    }
+
+    setSaving(true);
+    const created = await api
+      .post<{ id: string; number: string; unappliedPaise: number }>('/api/payments', {
+        kind: 'received',
+        branchId: session.user.branchId ?? session.branches[0]?.id,
+        contactId: customerId,
+        date,
+        mode,
+        bankAccountId,
+        // The cash figure only. TDS the customer withheld never reaches the
+        // bank, but it still settles the invoice, so it travels separately.
+        amountPaise: cashReceived,
+        tdsPaise,
+        bankChargesPaise: chargesPaise,
+        reference: reference || undefined,
+        allocations: Object.entries(selected).map(([targetId, amountPaise]) => ({
+          targetType: 'invoice' as const,
+          targetId,
+          amountPaise,
+        })),
+      })
+      .catch((err: unknown) => {
+        setSaving(false);
+        toast.error(err instanceof ApiError ? err.message : 'Could not record the payment.', {
+          description: 'Nothing was saved.',
+        });
+        return null;
+      });
+
+    if (!created) return;
+
+    toast.success(`Receipt ${created.number} recorded`, {
+      description:
+        created.unappliedPaise > 0
+          ? `${(created.unappliedPaise / 100).toFixed(2)} left on account for the next invoice.`
+          : 'Invoices updated and a balanced journal entry posted.',
     });
     router.push('/sales/payments');
   };
@@ -103,7 +151,7 @@ function NewPaymentInner() {
         actions={
           <>
             <Button variant="outline" size="sm" onClick={() => router.back()}>Cancel</Button>
-            <Button size="sm" onClick={save} className="gap-1.5">
+            <Button size="sm" onClick={save} disabled={saving} className="gap-1.5">
               <Wallet className="size-3.5" /> Record payment
             </Button>
           </>
@@ -139,9 +187,8 @@ function NewPaymentInner() {
                 </Field>
                 <Field label="Deposit to">
                   <Combobox
-                    options={bankAccountOptions(s).filter((o) =>
-                      s.bankAccounts.find((b) => b.id === o.value)?.kind !== 'card',
-                    )}
+                    // A credit card cannot receive a customer's money.
+                    options={bankOptions.filter((o) => o.sublabel !== 'card')}
                     value={bankAccountId}
                     onChange={setBankAccountId}
                     placeholder="Select account"
@@ -179,7 +226,7 @@ function NewPaymentInner() {
                     </thead>
                     <tbody>
                       {openInvs.map((inv) => {
-                        const bal = invoiceBalance(inv);
+                        const bal = inv.balancePaise;
                         const isSel = selected[inv.id] != null;
                         return (
                           <tr key={inv.id} className="border-b last:border-0">
@@ -190,7 +237,7 @@ function NewPaymentInner() {
                             <td className="px-3 py-2 text-xs text-muted-foreground">
                               {new Date(inv.dueDate).toLocaleDateString('en-IN')}
                             </td>
-                            <td className="px-3 py-2"><StatusBadge status={effectiveInvoiceStatus(inv)} /></td>
+                            <td className="px-3 py-2"><StatusBadge status={inv.status as never} /></td>
                             <td className="px-3 py-2 text-right"><Money value={bal} /></td>
                             <td className="px-3 py-2">
                               {isSel ? (

@@ -1,8 +1,22 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+// The e-invoice queue.
+//
+// A B2B invoice above the turnover threshold is not legally valid without an
+// IRN, and the portal only accepts one within 30 days of the invoice date.
+// After that the invoice cannot be made valid at all — the only remedy is a
+// credit note and a fresh invoice. So the days-left column is the whole point
+// of this screen.
+//
+// The IRP call itself is not wired up: that needs a GSP contract and production
+// credentials, which are a commercial arrangement rather than code. Everything
+// around it is real — the eligibility rules, the window, the attempt count —
+// and the IRN produced is prefixed DEMO so nothing can mistake it for one the
+// government issued.
+
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Clock, FileCheck2, Loader2, TriangleAlert, Zap } from 'lucide-react';
+import { Clock, FileCheck2, Info, Loader2, TriangleAlert, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -12,172 +26,204 @@ import { DataTable, type Column } from '@/components/shared/data-table';
 import { Money } from '@/components/shared/money';
 import { StatTile } from '@/components/shared/stat-tile';
 import { StatusBadge } from '@/components/shared/status-badge';
-import { EInvoiceMark } from '@/components/shared/einvoice-mark';
-import { useAppStore } from '@/lib/store';
-import { contactName, today } from '@/lib/selectors';
-import { submitToIrp } from '@/lib/mock/simulators';
+import { AsyncPage } from '@/components/shared/async-state';
+import { gst, type EinvoiceRow } from '@/lib/api/client';
+import { useApi, useApiAction } from '@/lib/api/use-api';
+import { usePermission } from '@/lib/store/hooks';
 import { formatINRCompact } from '@/lib/money';
-import type { Invoice } from '@/lib/types';
+import { cn } from '@/lib/utils';
 
-/** Days remaining in the 30-day IRP reporting window. */
-function daysLeft(invoiceDate: string): number {
-  const deadline = new Date(invoiceDate);
-  deadline.setDate(deadline.getDate() + 30);
-  return Math.ceil((deadline.getTime() - new Date(today()).getTime()) / 86_400_000);
+interface Response {
+  einvoices: EinvoiceRow[];
+  statusCounts: Record<string, number>;
 }
 
 export default function EInvoicesPage() {
-  const s = useAppStore();
   const router = useRouter();
+  const canSubmit = usePermission('gst', 'approve');
+  const state = useApi<Response>(() => gst.einvoices(), []);
+
   const [busy, setBusy] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const submit = useApiAction(gst.submitEinvoice);
 
-  const applicable = useMemo(
-    () => s.invoices.filter((i) => i.einvoice.status !== 'not_applicable' && i.status !== 'void'),
-    [s.invoices],
-  );
-  const pending = applicable.filter((i) => i.einvoice.status === 'pending' || i.einvoice.status === 'failed');
-  const registered = applicable.filter((i) => i.einvoice.status === 'submitted');
-  const urgent = pending.filter((i) => daysLeft(i.date) <= 7);
+  const rows = state.data?.einvoices ?? [];
+  const pending = rows.filter((r) => r.status === 'pending' || r.status === 'failed');
+  const registered = rows.filter((r) => r.status === 'submitted');
+  const urgent = pending.filter((r) => r.daysLeft <= 7);
+  const expired = pending.filter((r) => r.daysLeft < 0);
 
-  const submitOne = async (id: string) => {
-    setBusy(id);
-    const res = await submitToIrp(id);
+  const submitOne = async (r: EinvoiceRow) => {
+    setBusy(r.invoiceId);
+    const done = await submit.run(r.invoiceId);
     setBusy(null);
-    if (res.ok) toast.success('IRN generated');
-    else toast.error('IRP rejected the invoice', { description: res.error });
+    if (!done) {
+      toast.error('The portal rejected it', { description: submit.error ?? undefined });
+      return;
+    }
+    toast.success(`IRN generated for ${r.number}`);
+    state.refetch();
   };
 
   const submitAll = async () => {
     setBulkBusy(true);
-    let ok = 0, failed = 0;
-    for (const inv of pending) {
-      const res = await submitToIrp(inv.id);
-      if (res.ok) ok += 1; else failed += 1;
+    let ok = 0;
+    let failed = 0;
+    for (const r of pending) {
+      const done = await submit.run(r.invoiceId);
+      if (done) ok++;
+      else failed++;
     }
     setBulkBusy(false);
-    toast[failed ? 'warning' : 'success'](`${ok} registered, ${failed} failed`, {
-      description: failed ? 'Open the failed ones to see the IRP error and retry.' : 'All pending invoices now carry an IRN.',
+    if (failed === 0) toast.success(`${ok} invoice(s) registered`);
+    else toast.warning(`${ok} registered, ${failed} rejected`, {
+      description: 'Open the failed ones to see what the portal objected to.',
     });
+    state.refetch();
   };
 
-  const columns: Column<Invoice>[] = [
+  const columns: Column<EinvoiceRow>[] = [
     {
-      key: 'number',
-      header: 'Invoice #',
-      sortValue: (r) => r.number,
-      cell: (r) => (
-        <div className="flex items-center gap-1.5">
-          <span className="font-medium">{r.number}</span>
-          <EInvoiceMark einvoice={r.einvoice} />
-        </div>
-      ),
+      key: 'number', header: 'Invoice', sortValue: (r) => r.number,
+      cell: (r) => <span className="font-medium">{r.number}</span>,
     },
-    { key: 'customer', header: 'Customer', sortValue: (r) => contactName(s, r.customerId), cell: (r) => contactName(s, r.customerId) },
-    { key: 'date', header: 'Date', sortValue: (r) => r.date, cell: (r) => new Date(r.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) },
-    { key: 'total', header: 'Value', align: 'right', sortValue: (r) => r.totalPaise, cell: (r) => <Money value={r.totalPaise} /> },
-    { key: 'status', header: 'IRP status', sortValue: (r) => r.einvoice.status, cell: (r) => <StatusBadge status={r.einvoice.status} /> },
     {
-      key: 'deadline',
-      header: 'Reporting window',
-      sortValue: (r) => daysLeft(r.date),
+      key: 'date', header: 'Date', sortValue: (r) => r.date,
+      cell: (r) => <span className="tabular text-xs">{new Date(r.date).toLocaleDateString('en-IN')}</span>,
+    },
+    { key: 'customer', header: 'Customer', sortValue: (r) => r.customerName, cell: (r) => r.customerName },
+    {
+      key: 'gstin', header: 'GSTIN', sortValue: (r) => r.gstin ?? '',
+      cell: (r) => <span className="font-mono text-[10px]">{r.gstin ?? '—'}</span>,
+    },
+    { key: 'status', header: 'Status', sortValue: (r) => r.status, cell: (r) => <StatusBadge status={r.status} /> },
+    {
+      key: 'window', header: 'Registration window', sortValue: (r) => r.daysLeft,
       cell: (r) => {
-        if (r.einvoice.status === 'submitted') {
-          return <span className="text-xs text-muted-foreground">Reported</span>;
+        if (r.status === 'submitted') {
+          return <span className="font-mono text-[10px] text-muted-foreground">{r.irn?.slice(0, 20)}…</span>;
         }
-        const d = daysLeft(r.date);
+        if (r.status === 'not_applicable') return <span className="text-xs text-muted-foreground">—</span>;
         return (
           <Badge
             variant="outline"
-            className={
-              d <= 0 ? 'border-red-500/40 text-[10px] text-red-600 dark:text-red-400'
-                : d <= 7 ? 'border-amber-500/40 text-[10px] text-amber-700 dark:text-amber-300'
-                  : 'text-[10px]'
-            }
+            className={cn(
+              'text-[10px]',
+              r.daysLeft < 0
+                ? 'border-destructive/40 text-destructive'
+                : r.daysLeft <= 7
+                  ? 'border-amber-500/40 text-amber-700 dark:text-amber-300'
+                  : '',
+            )}
           >
-            {d <= 0 ? 'Window closed' : `${d} day${d === 1 ? '' : 's'} left`}
+            {r.daysLeft < 0 ? `${Math.abs(r.daysLeft)} days past` : `${r.daysLeft} days left`}
           </Badge>
         );
       },
     },
     {
-      key: 'irn',
-      header: 'IRN',
-      sortValue: (r) => r.einvoice.irn ?? '',
-      cell: (r) =>
-        r.einvoice.irn ? (
-          <span className="font-mono text-[10px] text-muted-foreground">{r.einvoice.irn.slice(0, 20)}…</span>
-        ) : r.einvoice.error ? (
-          <span className="text-[11px] text-destructive">{r.einvoice.error.slice(0, 44)}…</span>
-        ) : (
-          <span className="text-xs text-muted-foreground">—</span>
-        ),
+      key: 'total', header: 'Value', align: 'right', sortValue: (r) => r.totalPaise,
+      cell: (r) => <Money value={r.totalPaise} />,
     },
     {
-      key: 'actions',
-      header: '',
-      align: 'right',
+      key: 'actions', header: '', align: 'right',
       cell: (r) =>
-        r.einvoice.status === 'submitted' ? null : (
-          <Button size="xs" disabled={busy === r.id} onClick={(e) => { e.stopPropagation(); submitOne(r.id); }} className="gap-1">
-            {busy === r.id ? <Loader2 className="size-3 animate-spin" /> : <FileCheck2 className="size-3" />}
-            {r.einvoice.status === 'failed' ? 'Retry' : 'Submit'}
-          </Button>
-        ),
+        r.status === 'pending' || r.status === 'failed' ? (
+          canSubmit ? (
+            <Button
+              size="xs"
+              className="gap-1"
+              disabled={busy === r.invoiceId || bulkBusy}
+              onClick={(e) => { e.stopPropagation(); void submitOne(r); }}
+            >
+              {busy === r.invoiceId ? <Loader2 className="size-3 animate-spin" /> : <Zap className="size-3" />}
+              Register
+            </Button>
+          ) : null
+        ) : null,
     },
   ];
 
   return (
     <>
       <PageHeader
-        title="E-invoices (IRP)"
-        description="B2B invoices must be registered with the government portal before they are legally valid."
+        title="E-invoicing"
+        description="B2B invoices must be registered with the government portal within 30 days, or they are not legally valid."
         actions={
+          canSubmit &&
           pending.length > 0 && (
-            <Button size="sm" onClick={submitAll} disabled={bulkBusy} className="gap-1.5">
+            <Button size="sm" className="gap-1.5" disabled={bulkBusy} onClick={() => void submitAll()}>
               {bulkBusy ? <Loader2 className="size-3.5 animate-spin" /> : <Zap className="size-3.5" />}
-              Submit all {pending.length} pending
+              {bulkBusy ? 'Registering…' : `Register all ${pending.length}`}
             </Button>
           )
         }
       />
 
-      <Card className="flex items-start gap-3 border-primary/30 bg-primary/5 p-4">
-        <FileCheck2 className="mt-0.5 size-4 shrink-0 text-primary" />
-        <div className="text-sm">
-          <p className="font-medium">How e-invoicing works</p>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            Above a turnover threshold, a B2B invoice isn&apos;t just a document you print — it has to be sent to the
-            government&apos;s Invoice Registration Portal first. The portal checks it, then returns an Invoice
-            Reference Number and a digitally signed QR code, which must appear on the printed invoice. Without them
-            the invoice is not valid, your customer can be denied their input credit, and there is a
-            <span className="font-medium text-foreground"> 30-day window</span> after the invoice date to report it.
-            Miss the window and it can never be reported at all.
-          </p>
-        </div>
-      </Card>
+      <AsyncPage state={state}>
+        {(d) => (
+          <>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <StatTile
+                label="Awaiting an IRN"
+                value={String(pending.length)}
+                sub={formatINRCompact(pending.reduce((t, r) => t + r.totalPaise, 0))}
+                icon={Clock}
+                tone={pending.length ? 'warning' : 'positive'}
+              />
+              <StatTile
+                label="Window closing"
+                value={String(urgent.length)}
+                sub={expired.length ? `${expired.length} already past 30 days` : 'Within 7 days of the deadline'}
+                icon={TriangleAlert}
+                tone={expired.length ? 'danger' : urgent.length ? 'warning' : 'positive'}
+              />
+              <StatTile
+                label="Registered"
+                value={String(registered.length)}
+                sub={formatINRCompact(registered.reduce((t, r) => t + r.totalPaise, 0))}
+                icon={FileCheck2}
+                tone="positive"
+              />
+            </div>
 
-      <div className="grid gap-3 sm:grid-cols-4">
-        <StatTile label="Registered" value={String(registered.length)} sub="IRN issued" icon={FileCheck2} tone="positive" />
-        <StatTile label="Pending" value={String(pending.length)} sub="Not yet reported" icon={Clock} tone={pending.length ? 'warning' : 'default'} />
-        <StatTile label="Closing in 7 days" value={String(urgent.length)} sub="Report these first" icon={TriangleAlert} tone={urgent.length ? 'danger' : 'default'} />
-        <StatTile
-          label="Value pending"
-          value={formatINRCompact(pending.reduce((t, i) => t + i.totalPaise, 0))}
-          sub="Invoices without an IRN"
-        />
-      </div>
+            {expired.length > 0 && (
+              <Card className="flex items-start gap-3 border-destructive/40 bg-destructive/5 p-4">
+                <TriangleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  <span className="font-medium text-foreground">
+                    {expired.length} invoice(s) are past the 30-day window.
+                  </span>{' '}
+                  The portal will no longer accept them, so they cannot be made valid. The remedy is a credit note
+                  against each and a fresh invoice dated today.
+                </p>
+              </Card>
+            )}
 
-      <DataTable
-          dateFilter={{ getDate: (r) => r.date }}
-        rows={applicable}
-        columns={columns}
-        getRowId={(r) => r.id}
-        onRowClick={(r) => router.push(`/sales/invoices/${r.id}`)}
-        initialSort={{ key: 'deadline', dir: 'asc' }}
-        searchPlaceholder="Search invoice or customer…"
-        emptyMessage="No invoices require e-invoicing."
-      />
+            <DataTable
+              rows={d.einvoices}
+              columns={columns}
+              getRowId={(r) => r.id}
+              onRowClick={(r) => router.push(`/sales/invoices/${r.invoiceId}`)}
+              initialSort={{ key: 'window', dir: 'asc' }}
+              dateFilter={{ getDate: (r) => r.date }}
+              searchPlaceholder="Search invoice or customer…"
+              emptyMessage="No invoices need an IRN."
+            />
+
+            <Card className="flex items-start gap-3 p-4">
+              <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                The connection to the Invoice Registration Portal is not live in this build — that needs a GSP
+                contract and production credentials. The rules around it are real: the eligibility check, the
+                30-day window, and the fact that a registered invoice can no longer be quietly edited. IRNs
+                generated here start with <span className="font-mono">DEMO</span> so they can never be mistaken for
+                government-issued ones.
+              </p>
+            </Card>
+          </>
+        )}
+      </AsyncPage>
     </>
   );
 }

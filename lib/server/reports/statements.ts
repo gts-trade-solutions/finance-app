@@ -21,6 +21,7 @@ import { sql } from 'kysely';
 import type { Executor } from '../db';
 import type { Paise } from '../../types';
 import { toPaiseFromSql } from '../money-sql';
+import { CODE } from '../ledger/chart-of-accounts';
 
 export type AccountType = 'asset' | 'liability' | 'equity' | 'income' | 'expense';
 
@@ -343,53 +344,114 @@ export async function ageing(
   side: 'receivable' | 'payable',
   asOf: string,
 ): Promise<{ rows: AgeingRow[]; totals: Record<string, Paise>; grandTotalPaise: Paise }> {
-  const { rows } = side === 'receivable'
-    ? await sql<{ contact_id: number; name: string; due_date: string; balance: string }>`
-        SELECT i.customer_id AS contact_id, c.display_name AS name,
-               i.due_date, (i.total - i.amount_paid) AS balance
+  // The ageing is the subsidiary ledger behind the control account, so it has
+  // to equal it — at every date, not only today.
+  //
+  // That is why the amount comes from the journal rather than from the current
+  // balance on each document. A document's `amount_paid` is what it says right
+  // now; asking what was owed on 31 March and reading today's payment status
+  // against March's invoices gives a figure that belongs to neither date. The
+  // journal, filtered to the as-of, is the only thing that knows.
+  //
+  // The buckets then come from the documents: each party's balance is spread
+  // across their open documents oldest first, which is how a payment with no
+  // allocation is conventionally read anyway.
+  const control = side === 'receivable' ? CODE.AR : CODE.AP;
+  const sign = side === 'receivable' ? 1 : -1;
+
+  const { rows: balances } = await sql<{ contact_id: number; name: string; v: string }>`
+    SELECT jl.contact_id, c.display_name AS name,
+           COALESCE(SUM(jl.debit - jl.credit), 0) AS v
+      FROM journal_lines jl
+      JOIN accounts a ON a.id = jl.account_id
+      JOIN contacts c ON c.id = jl.contact_id
+     WHERE jl.org_id = ${orgId} AND a.code = ${control}
+       AND jl.contact_id IS NOT NULL
+       AND jl.entry_date <= ${asOf}
+     GROUP BY jl.contact_id, c.display_name
+  `.execute(ex);
+
+  // The open documents each party has, oldest first, so a balance can be laid
+  // against them in the order it would actually be settled.
+  const { rows: docs } = side === 'receivable'
+    ? await sql<{ contact_id: number; due_date: string; amount: string }>`
+        SELECT i.customer_id AS contact_id, i.due_date, i.total AS amount
           FROM invoices i
-          JOIN contacts c ON c.id = i.customer_id
          WHERE i.org_id = ${orgId} AND i.status NOT IN ('void', 'draft')
-           AND i.total > i.amount_paid AND i.invoice_date <= ${asOf}
+           AND i.invoice_date <= ${asOf}
+         ORDER BY i.due_date, i.id
       `.execute(ex)
-    : await sql<{ contact_id: number; name: string; due_date: string; balance: string }>`
-        SELECT b.vendor_id AS contact_id, c.display_name AS name,
-               b.due_date, (b.total - b.amount_paid) AS balance
+    : await sql<{ contact_id: number; due_date: string; amount: string }>`
+        SELECT b.vendor_id AS contact_id, b.due_date, b.total AS amount
           FROM bills b
-          JOIN contacts c ON c.id = b.vendor_id
          WHERE b.org_id = ${orgId} AND b.status NOT IN ('void', 'draft')
-           AND b.total > b.amount_paid AND b.bill_date <= ${asOf}
+           AND b.bill_date <= ${asOf}
+         ORDER BY b.due_date, b.id
       `.execute(ex);
 
-  const byContact = new Map<number, AgeingRow>();
-  const totals: Record<string, Paise> = Object.fromEntries(AGEING_BUCKETS.map((b) => [b, 0]));
+  const docsByContact = new Map<number, { dueDate: string; amount: Paise }[]>();
+  for (const d of docs) {
+    const list = docsByContact.get(d.contact_id) ?? [];
+    list.push({ dueDate: String(d.due_date).slice(0, 10), amount: toPaiseFromSql(d.amount) });
+    docsByContact.set(d.contact_id, list);
+  }
 
-  for (const r of rows) {
+  const bucketFor = (dueDate: string) => {
     const days = Math.floor(
-      (new Date(asOf).getTime() - new Date(String(r.due_date).slice(0, 10)).getTime()) / 86_400_000,
+      (new Date(asOf).getTime() - new Date(dueDate).getTime()) / 86_400_000,
     );
-    const bucket =
-      days <= 0 ? 'Current'
+    return days <= 0 ? 'Current'
       : days <= 15 ? '1–15'
       : days <= 30 ? '16–30'
       : days <= 45 ? '31–45'
       : days <= 60 ? '46–60'
       : '60+';
+  };
 
-    const balance = toPaiseFromSql(r.balance);
-    const row = byContact.get(r.contact_id) ?? {
-      contactId: String(r.contact_id),
-      name: r.name,
-      buckets: Object.fromEntries(AGEING_BUCKETS.map((b) => [b, 0])),
-      totalPaise: 0,
+  const out: AgeingRow[] = [];
+  const totals: Record<string, Paise> = Object.fromEntries(AGEING_BUCKETS.map((b) => [b, 0]));
+
+  for (const b of balances) {
+    // Signed in the party's own direction: what a customer owes us, or what we
+    // owe a supplier. A negative means they are in credit.
+    const owed = sign * toPaiseFromSql(b.v);
+    if (owed === 0) continue;
+
+    const row: AgeingRow = {
+      contactId: String(b.contact_id),
+      name: b.name,
+      buckets: Object.fromEntries(AGEING_BUCKETS.map((x) => [x, 0])),
+      totalPaise: owed,
     };
-    row.buckets[bucket] += balance;
-    row.totalPaise += balance;
-    byContact.set(r.contact_id, row);
-    totals[bucket] += balance;
+
+    if (owed < 0) {
+      // A credit balance is not aged — nothing is overdue about money we hold.
+      row.buckets.Current += owed;
+      totals.Current += owed;
+    } else {
+      // Lay the balance against the open documents, oldest first. Anything left
+      // over has no document behind it — an advance, or a retainer still
+      // unpaid — and belongs in Current.
+      let left = owed;
+      for (const d of docsByContact.get(b.contact_id) ?? []) {
+        if (left <= 0) break;
+        const applied = Math.min(left, d.amount);
+        const bucket = bucketFor(d.dueDate);
+        row.buckets[bucket] += applied;
+        totals[bucket] += applied;
+        left -= applied;
+      }
+      if (left > 0) {
+        row.buckets.Current += left;
+        totals.Current += left;
+      }
+    }
+
+    out.push(row);
   }
 
-  const out = [...byContact.values()].sort((a, b) => b.totalPaise - a.totalPaise);
+  out.sort((a, b) => b.totalPaise - a.totalPaise);
+
   return {
     rows: out,
     totals,

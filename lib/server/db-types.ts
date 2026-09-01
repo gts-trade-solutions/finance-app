@@ -228,6 +228,19 @@ export interface Branches {
   updated_at: Generated<Date>;
 }
 
+export interface Budgets {
+  account_id: number;
+  amount: Generated<Decimal>;
+  branch_id: Generated<number>;
+  created_at: Generated<Date>;
+  created_by_user_id: number | null;
+  fy_label: string;
+  id: Generated<number>;
+  notes: string | null;
+  org_id: number;
+  updated_at: Generated<Date>;
+}
+
 export interface ChallanLines {
   challan_id: number;
   description: string | null;
@@ -686,6 +699,7 @@ export interface Organizations {
   fiscal_year_start_month: Generated<number>;
   gst_registration_type: Generated<"composition" | "regular" | "unregistered">;
   id: Generated<number>;
+  is_demo: Generated<number>;
   legal_name: string | null;
   logo_file_id: number | null;
   name: string;
@@ -812,6 +826,7 @@ export interface RecurringJournals {
 
 export interface RetainerInvoices {
   amount: Generated<Decimal>;
+  amount_paid: Generated<Decimal>;
   applied_amount: Generated<Decimal>;
   branch_id: number;
   created_at: Generated<Date>;
@@ -908,6 +923,20 @@ export interface Settings {
   value: Json;
 }
 
+export interface StockAdjustments {
+  adjust_date: ColumnType<string, string, string>;
+  created_at: Generated<Date>;
+  created_by_user_id: number | null;
+  id: Generated<number>;
+  item_id: number;
+  journal_entry_id: number | null;
+  notes: string | null;
+  org_id: number;
+  qty_delta: Decimal;
+  reason: Generated<"damage" | "expiry" | "opening" | "other" | "sample" | "stocktake" | "theft">;
+  warehouse_id: number | null;
+}
+
 export interface TransactionLocks {
   id: Generated<number>;
   locked_by_user_id: number | null;
@@ -958,6 +987,19 @@ export interface VendorCredits {
   vendor_id: number;
 }
 
+export interface Warehouses {
+  address: string | null;
+  branch_id: number | null;
+  code: string | null;
+  created_at: Generated<Date>;
+  id: Generated<number>;
+  is_active: Generated<number>;
+  is_primary: Generated<number>;
+  name: string;
+  org_id: number;
+  updated_at: Generated<Date>;
+}
+
 export interface WorkflowRules {
   actions: Json;
   conditions: Json | null;
@@ -983,6 +1025,7 @@ export interface DB {
   bill_lines: BillLines;
   bills: Bills;
   branches: Branches;
+  budgets: Budgets;
   challan_lines: ChallanLines;
   cheques: Cheques;
   contacts: Contacts;
@@ -1020,9 +1063,11 @@ export interface DB {
   sequences: Sequences;
   sessions: Sessions;
   settings: Settings;
+  stock_adjustments: StockAdjustments;
   transaction_locks: TransactionLocks;
   user_branches: UserBranches;
   users: Users;
   vendor_credits: VendorCredits;
+  warehouses: Warehouses;
   workflow_rules: WorkflowRules;
 }

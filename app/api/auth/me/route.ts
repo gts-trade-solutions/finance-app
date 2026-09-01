@@ -49,6 +49,8 @@ export const GET = route(async ({ user }) => {
       email: org.email,
       phone: org.phone,
       onboarded: !!org.onboarded_at,
+      // The app says different things on a demo book than on a real one.
+      isDemo: !!org.is_demo,
     },
     // No explicit grants means the user works in their home branch only.
     branches: branches

@@ -10,6 +10,8 @@ const ListQuery = z.object({
   from: z.string().optional(),
   to: z.string().optional(),
   status: z.string().optional(),
+  /** Issued and not yet fully settled — what a payment screen can be applied to. */
+  open: z.coerce.boolean().optional(),
   customerId: z.string().optional(),
   search: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(500).default(200),
@@ -36,6 +38,13 @@ export const GET = route(
     if (q.from) base = base.where('invoices.invoice_date', '>=', q.from);
     if (q.to) base = base.where('invoices.invoice_date', '<=', q.to);
     if (q.status && q.status !== 'all') base = base.where('invoices.status', '=', q.status as never);
+    if (q.open) {
+      // A draft was never issued and a void one was cancelled, so neither can
+      // be paid. Everything else with a balance is fair game.
+      base = base
+        .where('invoices.status', 'not in', ['draft', 'void'])
+        .where((eb) => eb(eb.ref('invoices.total'), '>', eb.ref('invoices.amount_paid')));
+    }
     if (q.customerId) base = base.where('invoices.customer_id', '=', Number(q.customerId));
     if (q.search) {
       const term = `%${q.search}%`;
@@ -55,6 +64,11 @@ export const GET = route(
     if (q.from) countBase = countBase.where('invoices.invoice_date', '>=', q.from);
     if (q.to) countBase = countBase.where('invoices.invoice_date', '<=', q.to);
     if (q.customerId) countBase = countBase.where('invoices.customer_id', '=', Number(q.customerId));
+    if (q.open) {
+      countBase = countBase
+        .where('invoices.status', 'not in', ['draft', 'void'])
+        .where((eb) => eb(eb.ref('invoices.total'), '>', eb.ref('invoices.amount_paid')));
+    }
     if (q.search) {
       const term = `%${q.search}%`;
       countBase = countBase.where((eb) =>

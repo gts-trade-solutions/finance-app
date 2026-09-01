@@ -1,41 +1,33 @@
 'use client';
 
-import { useMemo } from 'react';
+// What actually sells — quantity beside value.
+//
+// Lines typed in by hand with no catalogue item behind them still count; they
+// group under their own description rather than being dropped.
+
 import { downloadCsv, ReportShell, useReportRange } from '@/components/shared/report-shell';
 import { RankedReport, type RankedRow } from '@/components/shared/ranked-report';
-import { useAppStore } from '@/lib/store';
+import { AsyncPage } from '@/components/shared/async-state';
+import { reports, type SalesByReport } from '@/lib/api/client';
+import { useApi } from '@/lib/api/use-api';
 import { toRupees } from '@/lib/money';
 
-export default function SalesByItemPage() {
-  const s = useAppStore();
-  const [range, setRange] = useReportRange();
+function toRanked(d: SalesByReport): RankedRow[] {
+  return d.rows.map((r) => ({
+    key: r.key,
+    label: r.name,
+    sublabel: r.detail ?? (r.key.startsWith('adhoc:') ? 'Ad-hoc line' : undefined),
+    qty: r.qty,
+    amountPaise: r.taxablePaise,
+  }));
+}
 
-  const rows = useMemo<RankedRow[]>(() => {
-    const map = new Map<string, { amount: number; qty: number }>();
-    for (const inv of s.invoices) {
-      if (inv.status === 'void' || inv.status === 'draft') continue;
-      if (inv.date < range.from || inv.date > range.to) continue;
-      for (const l of inv.lines) {
-        const key = l.itemId ?? l.description;
-        const cur = map.get(key) ?? { amount: 0, qty: 0 };
-        cur.amount += l.tax.taxablePaise;
-        cur.qty += l.qty;
-        map.set(key, cur);
-      }
-    }
-    return [...map.entries()]
-      .map(([key, v]) => {
-        const item = s.items.find((i) => i.id === key);
-        return {
-          key,
-          label: item?.name ?? key,
-          sublabel: item ? `${item.sku} · HSN ${item.hsnSac}` : undefined,
-          qty: v.qty,
-          amountPaise: v.amount,
-        };
-      })
-      .sort((a, b) => b.amountPaise - a.amountPaise);
-  }, [s, range]);
+export default function SalesByItemPage() {
+  const [range, setRange] = useReportRange();
+  const state = useApi<SalesByReport>(
+    () => reports.salesBy('item', range.from, range.to),
+    [range.from, range.to],
+  );
 
   return (
     <ReportShell
@@ -43,14 +35,19 @@ export default function SalesByItemPage() {
       description="What actually sells. Quantity and value side by side, so you can see the difference between what moves often and what earns most."
       range={range}
       onRangeChange={setRange}
-      onExport={() =>
+      onExport={() => {
+        if (!state.data) return;
         downloadCsv('sales-by-item.csv', [
           ['Item', 'Detail', 'Quantity', 'Net sales'],
-          ...rows.map((r) => [r.label, r.sublabel ?? '', r.qty ?? 0, toRupees(r.amountPaise)]),
-        ])
-      }
+          ...toRanked(state.data).map((r) => [r.label, r.sublabel ?? '', r.qty ?? 0, toRupees(r.amountPaise)]),
+        ]);
+      }}
     >
-      <RankedReport rows={rows} labelHeader="Item" valueHeader="Net sales" showQty qtyHeader="Qty sold" />
+      <AsyncPage state={state}>
+        {(d) => (
+          <RankedReport rows={toRanked(d)} labelHeader="Item" valueHeader="Net sales" showQty qtyHeader="Qty sold" />
+        )}
+      </AsyncPage>
     </ReportShell>
   );
 }

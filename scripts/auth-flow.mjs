@@ -48,7 +48,7 @@ check('The refusal does not reveal whether the email exists',
 check('A failed sign-in does not enter the app', page.url().includes('/login'));
 
 // ── 3. Real credentials get in
-await page.locator('#password').fill('Finora@2026');
+await page.locator('#password').fill('Rekonza@2026');
 await page.getByRole('button', { name: /^Sign in$/ }).click();
 await page.waitForURL('**/dashboard', { timeout: 20000 });
 // The shell loads master data before it renders, so wait for content rather
@@ -63,10 +63,10 @@ check('The signed-in user is shown in the shell', /Arun/.test(shell));
 
 // ── 4. The session is a server cookie, not readable by script
 const cookies = await ctx.cookies();
-const session = cookies.find((c) => c.name === 'finora_session');
+const session = cookies.find((c) => c.name === 'rekonza_session');
 check('A session cookie was issued', !!session);
 check('The session cookie is httpOnly', !!session?.httpOnly);
-const readable = await page.evaluate(() => document.cookie.includes('finora_session'));
+const readable = await page.evaluate(() => document.cookie.includes('rekonza_session'));
 check('Page scripts cannot read the session cookie', readable === false);
 
 // ── 5. Invoices come from the database, not from local storage
@@ -84,7 +84,7 @@ const viewerAttempt = await page.evaluate(async () => {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: 'deepa@raceautospares.in', password: 'Finora@2026' }),
+    body: JSON.stringify({ email: 'deepa@raceautospares.in', password: 'Rekonza@2026' }),
   });
   const r = await fetch('/api/invoices', {
     method: 'POST',

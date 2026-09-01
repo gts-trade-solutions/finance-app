@@ -11,7 +11,8 @@ import { ChevronRight, Plus } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAppStore } from '@/lib/store';
 import { hasPermission } from '@/lib/store/hooks';
-import { msmeTracker } from '@/lib/selectors';
+import { navCounts, type NavCounts } from '@/lib/api/client';
+import { BRAND, LogoMark } from '@/components/brand/logo';
 import { BOTTOM_LEVEL, NAV_GROUPS, TOP_LEVEL, type NavItem } from './nav-config';
 
 /** Where the "+" on a nav row should go, when that module has a create form. */
@@ -24,16 +25,34 @@ const CREATE_HREF: Record<string, string> = {
 };
 
 /**
- * Counts are selected as primitives. Returning an object from a Zustand
- * selector builds a new snapshot each render and loops useSyncExternalStore.
+ * The rail's three badges, counted on the server.
+ *
+ * They were counted in the browser while the book lived in a Zustand store.
+ * Now the book is in a database, so counting them here would mean downloading
+ * every invoice and bank line to work out three integers — one small endpoint
+ * returns the aggregates instead.
+ *
+ * A failed request yields zeros rather than an error: a missing badge is a
+ * missing hint, and breaking the whole navigation over one would be a poor
+ * trade.
  */
-function useBadgeCounts() {
-  const einvoicePending = useAppStore(
-    (s) => s.invoices.filter((i) => i.einvoice.status === 'pending' || i.einvoice.status === 'failed').length,
-  );
-  const unmatched = useAppStore((s) => s.bankTxns.filter((t) => t.status === 'unmatched').length);
-  const msmeRisk = useAppStore((s) => msmeTracker(s).filter((m) => m.risk !== 'ok').length);
-  return { einvoicePending, unmatched, msmeRisk };
+function useBadgeCounts(): NavCounts {
+  const [counts, setCounts] = useState<NavCounts>({
+    einvoicePending: 0,
+    unmatched: 0,
+    msmeRisk: 0,
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    navCounts
+      .load()
+      .then((c) => { if (!cancelled) setCounts(c); })
+      .catch(() => { /* leave the badges hidden */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  return counts;
 }
 
 function NavRow({ item, count, nested }: { item: NavItem; count?: number; nested?: boolean }) {
@@ -96,12 +115,14 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
   return (
     <div className="flex h-full flex-col border-r bg-sidebar" onClick={onNavigate}>
-      {/* Wordmark */}
+      {/* Wordmark. The glyph rather than the full lockup: the rail is narrow,
+          and it inverts cleanly when the sidebar goes dark, which a navy
+          wordmark on a navy ground would not. */}
       <Link href="/dashboard" className="flex h-16 shrink-0 items-center gap-2.5 border-b px-5">
-        <span className="h-6 w-[3px] shrink-0 bg-primary" />
+        <LogoMark size={26} />
         <span className="min-w-0">
-          <span className="block text-[17px] font-semibold leading-none tracking-[-0.02em] text-foreground">
-            Finora
+          <span className="block text-[16px] font-semibold leading-none tracking-[-0.02em] text-foreground">
+            {BRAND.display}
           </span>
           <span className="micro-label mt-1 block">{org?.fiscalYearLabel ?? 'Books'}</span>
         </span>

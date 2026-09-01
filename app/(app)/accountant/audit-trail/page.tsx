@@ -1,6 +1,14 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+// The audit trail.
+//
+// Rows here are a by-product of how the system works rather than a feature
+// somebody switched on: the ledger only ever adds entries, never edits or
+// deletes them, and every business action writes its own record as it happens.
+// There is no endpoint that can write one directly and none at all that can
+// remove one — which is what MCA Rule 11(g) actually requires.
+
+import { useState } from 'react';
 import { Lock, ShieldCheck } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -10,8 +18,9 @@ import {
 import { PageHeader } from '@/components/shared/page-header';
 import { DataTable, type Column } from '@/components/shared/data-table';
 import { EmptyState } from '@/components/shared/empty-state';
-import { useAppStore } from '@/lib/store';
-import type { AuditEvent } from '@/lib/types';
+import { AsyncPage } from '@/components/shared/async-state';
+import { audit, type AuditEventRow, type AuditResponse } from '@/lib/api/client';
+import { useApi } from '@/lib/api/use-api';
 
 const ACTION_TONE: Record<string, string> = {
   create: 'border-emerald-500/40 text-emerald-700 dark:text-emerald-300',
@@ -19,70 +28,57 @@ const ACTION_TONE: Record<string, string> = {
   approve: 'border-blue-500/40 text-blue-700 dark:text-blue-300',
   send: 'border-blue-500/40 text-blue-700 dark:text-blue-300',
   match: 'border-blue-500/40 text-blue-700 dark:text-blue-300',
+  import: 'border-blue-500/40 text-blue-700 dark:text-blue-300',
+  export: 'border-blue-500/40 text-blue-700 dark:text-blue-300',
   void: 'border-red-500/40 text-red-700 dark:text-red-300',
   login: 'border-muted-foreground/30 text-muted-foreground',
 };
 
+const columns: Column<AuditEventRow>[] = [
+  {
+    key: 'at', header: 'When', sortValue: (r) => r.at,
+    cell: (r) => (
+      <div>
+        <p className="text-sm">
+          {new Date(r.at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          {new Date(r.at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+        </p>
+      </div>
+    ),
+  },
+  {
+    key: 'user', header: 'Who', sortValue: (r) => r.actorName,
+    cell: (r) => <span className="font-medium">{r.actorName}</span>,
+  },
+  {
+    key: 'action', header: 'Action', sortValue: (r) => r.action,
+    cell: (r) => (
+      <Badge variant="outline" className={`text-[10px] capitalize ${ACTION_TONE[r.action] ?? ''}`}>
+        {r.action}
+      </Badge>
+    ),
+  },
+  {
+    key: 'entity', header: 'Record', sortValue: (r) => r.targetType,
+    cell: (r) => (
+      <div>
+        <p className="text-sm font-medium">{r.targetLabel}</p>
+        <p className="text-xs capitalize text-muted-foreground">{r.targetType.replace(/[_-]/g, ' ')}</p>
+      </div>
+    ),
+  },
+  {
+    key: 'detail', header: 'Detail', sortValue: (r) => r.detail,
+    cell: (r) => <span className="text-sm text-muted-foreground">{r.detail}</span>,
+    className: 'whitespace-normal max-w-md',
+  },
+];
+
 export default function AuditTrailPage() {
-  const s = useAppStore();
   const [entity, setEntity] = useState('all');
-
-  const entities = useMemo(
-    () => ['all', ...Array.from(new Set(s.audit.map((a) => a.entity)))],
-    [s.audit],
-  );
-
-  const rows = entity === 'all' ? s.audit : s.audit.filter((a) => a.entity === entity);
-
-  const columns: Column<AuditEvent>[] = [
-    {
-      key: 'at',
-      header: 'When',
-      sortValue: (r) => r.at,
-      cell: (r) => (
-        <div>
-          <p className="text-sm">{new Date(r.at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
-          <p className="text-xs text-muted-foreground">
-            {new Date(r.at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-          </p>
-        </div>
-      ),
-    },
-    {
-      key: 'user',
-      header: 'Who',
-      sortValue: (r) => r.userName,
-      cell: (r) => <span className="font-medium">{r.userName}</span>,
-    },
-    {
-      key: 'action',
-      header: 'Action',
-      sortValue: (r) => r.action,
-      cell: (r) => (
-        <Badge variant="outline" className={`text-[10px] capitalize ${ACTION_TONE[r.action] ?? ''}`}>
-          {r.action}
-        </Badge>
-      ),
-    },
-    {
-      key: 'entity',
-      header: 'Record',
-      sortValue: (r) => r.entity,
-      cell: (r) => (
-        <div>
-          <p className="text-sm font-medium">{r.entityLabel}</p>
-          <p className="text-xs capitalize text-muted-foreground">{r.entity.replace('_', ' ')}</p>
-        </div>
-      ),
-    },
-    {
-      key: 'detail',
-      header: 'Detail',
-      sortValue: (r) => r.detail,
-      cell: (r) => <span className="text-sm text-muted-foreground">{r.detail}</span>,
-      className: 'whitespace-normal max-w-md',
-    },
-  ];
+  const state = useApi<AuditResponse>(() => audit.list({ targetType: entity, limit: 500 }), [entity]);
 
   return (
     <>
@@ -107,35 +103,49 @@ export default function AuditTrailPage() {
             </Badge>
             <Badge variant="outline" className="border-emerald-500/40 text-[10px]">8-year retention</Badge>
             <Badge variant="outline" className="border-emerald-500/40 text-[10px]">No disable switch</Badge>
-            <Badge variant="outline" className="border-emerald-500/40 text-[10px]">{s.audit.length} events recorded</Badge>
+            {state.data && (
+              <Badge variant="outline" className="border-emerald-500/40 text-[10px]">
+                {state.data.total} events recorded
+              </Badge>
+            )}
           </div>
         </div>
       </Card>
 
-      {s.audit.length === 0 ? (
-        <EmptyState icon={ShieldCheck} title="No activity recorded yet" description="Actions you take will appear here immediately." />
-      ) : (
-        <DataTable
-          dateFilter={{ getDate: (r) => r.at.slice(0, 10) }}
-          rows={rows}
-          columns={columns}
-          getRowId={(r) => r.id}
-          initialSort={{ key: 'at', dir: 'desc' }}
-          searchPlaceholder="Search user, record or detail…"
-          toolbar={
-            <Select value={entity} onValueChange={setEntity}>
-              <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {entities.map((e) => (
-                  <SelectItem key={e} value={e} className="capitalize">
-                    {e === 'all' ? 'All record types' : e.replace('_', ' ')}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          }
-        />
-      )}
+      <AsyncPage state={state}>
+        {(d) =>
+          d.events.length === 0 && entity === 'all' ? (
+            <EmptyState
+              icon={ShieldCheck}
+              title="No activity recorded yet"
+              description="Actions you take will appear here immediately."
+            />
+          ) : (
+            <DataTable
+              dateFilter={{ getDate: (r) => r.at.slice(0, 10) }}
+              rows={d.events}
+              columns={columns}
+              getRowId={(r) => r.id}
+              initialSort={{ key: 'at', dir: 'desc' }}
+              searchPlaceholder="Search user, record or detail…"
+              emptyMessage="Nothing recorded for this record type."
+              toolbar={
+                <Select value={entity} onValueChange={setEntity}>
+                  <SelectTrigger className="w-56"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All record types</SelectItem>
+                    {d.targetTypes.map((t) => (
+                      <SelectItem key={t.value} value={t.value} className="capitalize">
+                        {t.value.replace(/[_-]/g, ' ')} ({t.count})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              }
+            />
+          )
+        }
+      </AsyncPage>
     </>
   );
 }

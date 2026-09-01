@@ -19,8 +19,8 @@ import mysql from 'mysql2';
 import type { DB } from './db-types';
 
 declare global {
-  var __finoraPool: mysql.Pool | undefined;
-  var __finoraDb: Kysely<DB> | undefined;
+  var __rekonzaPool: mysql.Pool | undefined;
+  var __rekonzaDb: Kysely<DB> | undefined;
 }
 
 function createPool(): mysql.Pool {
@@ -71,11 +71,11 @@ function createPool(): mysql.Pool {
   return pool;
 }
 
-export const pool: mysql.Pool = globalThis.__finoraPool ?? createPool();
-if (process.env.NODE_ENV !== 'production') globalThis.__finoraPool = pool;
+export const pool: mysql.Pool = globalThis.__rekonzaPool ?? createPool();
+if (process.env.NODE_ENV !== 'production') globalThis.__rekonzaPool = pool;
 
 export const db: Kysely<DB> =
-  globalThis.__finoraDb ??
+  globalThis.__rekonzaDb ??
   new Kysely<DB>({
     dialect: new MysqlDialect({ pool }),
     log:
@@ -87,7 +87,7 @@ export const db: Kysely<DB> =
           }
         : undefined,
   });
-if (process.env.NODE_ENV !== 'production') globalThis.__finoraDb = db;
+if (process.env.NODE_ENV !== 'production') globalThis.__rekonzaDb = db;
 
 export { sql };
 export type { DB } from './db-types';

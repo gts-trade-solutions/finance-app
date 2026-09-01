@@ -1,402 +1,379 @@
 'use client';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Banking workspace, following Zoho's Banking Overview: balances grouped by
-// account type, the uncategorised count as the call to action, a balance chart
-// over a chosen window, then the accounts themselves.
-// ─────────────────────────────────────────────────────────────────────────────
+// Banking overview, from the database.
+//
+// Balances come from what has actually been posted to each account's ledger
+// account, not from a stored figure on the bank account row. A cached balance
+// is a second copy of the truth, and the moment one entry is reversed the two
+// disagree with nothing to say which is right.
+//
+// Automatic feeds are absent on purpose: pulling transactions from an Indian
+// bank means an Account Aggregator, and registering as a Financial Information
+// User requires being regulated by the RBI, SEBI, IRDAI or PFRDA — which
+// accounting software is not. Statement import is the honest route.
 
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import {
-  ArrowRight, Banknote, ChevronDown, CreditCard, FileClock, FileSpreadsheet,
-  Landmark, MoreHorizontal, Plus, ScrollText, Split, TrendingUp,
-  Wallet, ArrowLeftRight,
+  ArrowLeftRight, ArrowRight, Banknote, CreditCard, FileClock, FileSpreadsheet,
+  Landmark, Plus, ScrollText, Wallet,
 } from 'lucide-react';
-import {
-  Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis,
-} from 'recharts';
+import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Combobox } from '@/components/ui/combobox';
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
-  DropdownMenuSeparator, DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
+} from '@/components/ui/dialog';
 import { PageHeader } from '@/components/shared/page-header';
 import { Money } from '@/components/shared/money';
-import { AddBankAccountDialog } from '@/components/forms/add-bank-account';
-import { useAppStore } from '@/lib/store';
+import { EmptyState } from '@/components/shared/empty-state';
+import { AsyncPage, LoadingRows, Refreshing } from '@/components/shared/async-state';
+import { Field, MoneyInput } from '@/components/shared/form-bits';
 import { usePermission } from '@/lib/store/hooks';
-import { cashPosition, today } from '@/lib/selectors';
-import { axisProps, axisRupee, rupeeFormatter, tooltipStyle } from '@/components/charts/chart-bits';
-import { cn } from '@/lib/utils';
-import type { BankAccount } from '@/lib/types';
+import { today } from '@/lib/selectors';
+import { formatINRCompact } from '@/lib/money';
+import { api } from '@/lib/api/client';
+import { useApi, useApiAction } from '@/lib/api/use-api';
 
-const ICONS: Record<BankAccount['kind'], typeof Landmark> = {
-  bank: Landmark,
-  card: CreditCard,
-  cash: Wallet,
-  wallet: Wallet,
-  clearing: Banknote,
+interface BankAccountRow {
+  id: string;
+  kind: string;
+  name: string;
+  bankName: string | null;
+  accountLast4: string | null;
+  ifsc: string | null;
+  isPrimary: boolean;
+  feedConnected: boolean;
+  balancePaise: number;
+  unmatchedCount: number;
+}
+
+interface TxnRow {
+  id: string;
+  date: string;
+  narration: string;
+  reference: string | null;
+  depositPaise: number;
+  withdrawalPaise: number;
+  status: string;
+  bankAccountId: string;
+  bankName: string;
+}
+
+const TILES: { kinds: string[]; label: string; icon: typeof Landmark; hint: string }[] = [
+  { kinds: ['bank'], label: 'Bank balance', icon: Landmark, hint: 'Current accounts' },
+  { kinds: ['card'], label: 'Card balance', icon: CreditCard, hint: 'Owed on cards' },
+  { kinds: ['cash', 'wallet'], label: 'Cash in hand', icon: Wallet, hint: 'Petty cash and wallets' },
+  { kinds: ['clearing'], label: 'Payment clearing', icon: Banknote, hint: 'Collected, not yet banked' },
+];
+
+const SHORTCUTS = [
+  { href: '/banking/imports', icon: FileSpreadsheet, label: 'Import statement', hint: 'Upload a CSV from your bank' },
+  { href: '/banking/rules', icon: ScrollText, label: 'Bank rules', hint: 'Auto-categorise repeating lines' },
+  { href: '/banking/transfers', icon: ArrowLeftRight, label: 'Transfers', hint: 'Move money between own accounts' },
+  { href: '/banking/cheques', icon: FileClock, label: 'Cheques & PDC', hint: 'In hand and post-dated' },
+];
+
+const BLANK = {
+  kind: 'bank' as 'bank' | 'card' | 'cash' | 'wallet',
+  name: '',
+  bankName: '',
+  accountLast4: '',
+  ifsc: '',
+  openingBalance: 0,
 };
 
-/** The four balance tiles Zoho shows, each summing one kind of account. */
-const TILES: { kind: BankAccount['kind'][]; label: string; icon: typeof Landmark }[] = [
-  { kind: ['bank'], label: 'Bank Balance', icon: Landmark },
-  { kind: ['card'], label: 'Card Balance', icon: CreditCard },
-  { kind: ['cash', 'wallet'], label: 'Cash In Hand', icon: Wallet },
-  { kind: ['clearing'], label: 'Payment Clearing', icon: Banknote },
-];
-
-const RANGES = [
-  { value: '30', label: 'Last 30 days' },
-  { value: '60', label: 'Last 60 days' },
-  { value: '90', label: 'Last 90 days' },
-  { value: '365', label: 'This financial year' },
-];
-
-const TOOLS = [
-  { href: '/banking/imports', icon: FileSpreadsheet, label: 'Import Statement', hint: 'Upload a CSV or pull the feed' },
-  { href: '/banking/rules', icon: ScrollText, label: 'Bank Rules', hint: 'Auto-categorise repeating lines' },
-  { href: '/banking/transfers', icon: ArrowLeftRight, label: 'Transfers', hint: 'Move money between own accounts' },
-  { href: '/banking/cheques', icon: FileClock, label: 'Cheques & PDC', hint: 'Cheques in hand and post-dated' },
-];
-
 export default function BankingPage() {
-  const s = useAppStore();
   const canCreate = usePermission('banking', 'create');
-  const [addOpen, setAddOpen] = useState(false);
-  const [accountFilter, setAccountFilter] = useState('all');
-  const [days, setDays] = useState('30');
-  const [showChart, setShowChart] = useState(true);
+  const [open, setOpen] = useState(false);
+  const [f, setF] = useState(BLANK);
 
-  const positions = cashPosition(s);
-  const balanceOf = (id: string) => positions.find((p) => p.accountId === id)?.balance ?? 0;
-
-  const visibleAccounts = useMemo(
-    () => (accountFilter === 'all' ? s.bankAccounts : s.bankAccounts.filter((b) => b.id === accountFilter)),
-    [s.bankAccounts, accountFilter],
+  const accounts = useApi<{ accounts: BankAccountRow[] }>(
+    () => api.get('/api/banking/accounts'),
+    [],
+  );
+  const unmatched = useApi<{ transactions: TxnRow[]; summary: { unmatched: number } }>(
+    () => api.get('/api/banking/transactions', { status: 'unmatched', limit: 8 }),
+    [],
   );
 
-  const uncategorised = s.bankTxns.filter(
-    (t) => t.status === 'unmatched' && (accountFilter === 'all' || t.bankAccountId === accountFilter),
+  const create = useApiAction((input: unknown) =>
+    api.post<{ id: string }>('/api/banking/accounts', input),
   );
 
-  /** Daily closing balance per account kind across the chosen window. */
-  const series = useMemo(() => {
-    const n = Number(days);
-    const end = new Date(today());
-    const ids = new Map(s.bankAccounts.map((b) => [b.ledgerAccountId, b.kind]));
+  const totals = useMemo(() => {
+    const rows = accounts.data?.accounts ?? [];
+    return TILES.map((t) => ({
+      ...t,
+      value: rows.filter((a) => t.kinds.includes(a.kind)).reduce((sum, a) => sum + a.balancePaise, 0),
+      count: rows.filter((a) => t.kinds.includes(a.kind)).length,
+    }));
+  }, [accounts.data]);
 
-    // Opening position before the window, then walk forward day by day.
-    const running: Record<string, number> = { bank: 0, card: 0, cash: 0, clearing: 0 };
-    const start = new Date(end);
-    start.setDate(start.getDate() - n);
-    const startIso = start.toISOString().slice(0, 10);
-
-    for (const e of s.entries) {
-      if (e.date >= startIso) continue;
-      for (const l of e.lines) {
-        const kind = ids.get(l.accountId);
-        if (!kind) continue;
-        const key = kind === 'wallet' ? 'cash' : kind;
-        running[key] = (running[key] ?? 0) + l.debit - l.credit;
-      }
+  const save = async () => {
+    if (!f.name.trim()) {
+      toast.error('Give the account a name.');
+      return;
     }
-
-    const byDate = new Map<string, typeof s.entries>();
-    for (const e of s.entries) {
-      if (e.date < startIso || e.date > today()) continue;
-      byDate.set(e.date, [...(byDate.get(e.date) ?? []), e]);
+    const created = await create.run({
+      kind: f.kind,
+      name: f.name.trim(),
+      bankName: f.bankName || undefined,
+      accountLast4: f.accountLast4 || undefined,
+      ifsc: f.ifsc || undefined,
+      openingBalancePaise: f.openingBalance || undefined,
+      openingDate: f.openingBalance ? today() : undefined,
+    });
+    if (!created) {
+      toast.error(create.error ?? 'Could not add the account.');
+      return;
     }
-
-    const out: { date: string; bank: number; card: number; cash: number; clearing: number }[] = [];
-    // A point every few days keeps a 90-day chart readable.
-    const step = n > 90 ? 7 : n > 45 ? 3 : 1;
-    for (let i = 0; i <= n; i++) {
-      const d = new Date(start);
-      d.setDate(d.getDate() + i);
-      const iso = d.toISOString().slice(0, 10);
-      for (const e of byDate.get(iso) ?? []) {
-        for (const l of e.lines) {
-          const kind = ids.get(l.accountId);
-          if (!kind) continue;
-          const key = kind === 'wallet' ? 'cash' : kind;
-          running[key] = (running[key] ?? 0) + l.debit - l.credit;
-        }
-      }
-      if (i % step === 0 || i === n) {
-        out.push({
-          date: d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }),
-          bank: running.bank / 100,
-          card: running.card / 100,
-          cash: running.cash / 100,
-          clearing: running.clearing / 100,
-        });
-      }
-    }
-    return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [s.entries, s.bankAccounts, days]);
+    toast.success(`${f.name} added`, {
+      description: 'A matching ledger account was created, so the books can see it.',
+    });
+    setOpen(false);
+    setF(BLANK);
+    await accounts.refetch();
+  };
 
   return (
     <>
       <PageHeader
-        title="Banking Overview"
-        description="Every account, feed and reconciliation in one place. Balances are computed from the ledger, never stored."
+        title="Banking"
+        description="Balances are what the books say, not a stored figure — every one is the sum of what has been posted to that account."
         actions={
           <>
-            <Button variant="outline" size="sm" asChild className="gap-1.5">
-              <Link href="/banking/imports">
-                <FileSpreadsheet className="size-4" /> Import Statement
-              </Link>
-            </Button>
+            <Refreshing active={accounts.refreshing} />
             {canCreate && (
-              <Button size="sm" onClick={() => setAddOpen(true)} className="gap-1.5">
-                <Plus className="size-4" /> Add Bank or Credit Card
-              </Button>
+              <Dialog open={open} onOpenChange={setOpen}>
+                <DialogTrigger asChild>
+                  <Button size="sm" className="gap-1.5">
+                    <Plus className="size-4" /> Add bank or credit card
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-lg">
+                  <DialogHeader>
+                    <DialogTitle>Add an account</DialogTitle>
+                    <DialogDescription>
+                      A matching ledger account is created alongside it. The two are always a pair — an
+                      account the books cannot see is money nobody can reconcile.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <Field label="Type" required>
+                      <Combobox
+                        options={[
+                          { value: 'bank', label: 'Bank account' },
+                          { value: 'card', label: 'Credit card' },
+                          { value: 'cash', label: 'Cash in hand' },
+                          { value: 'wallet', label: 'Wallet' },
+                        ]}
+                        value={f.kind}
+                        onChange={(v) => setF({ ...f, kind: v as typeof f.kind })}
+                        showAvatar={false}
+                      />
+                    </Field>
+                    <Field label="Name" required>
+                      <Input
+                        value={f.name}
+                        onChange={(e) => setF({ ...f, name: e.target.value })}
+                        placeholder="HDFC Bank – Current"
+                      />
+                    </Field>
+                    {f.kind !== 'cash' && (
+                      <>
+                        <Field label="Bank">
+                          <Input
+                            value={f.bankName}
+                            onChange={(e) => setF({ ...f, bankName: e.target.value })}
+                            placeholder="HDFC Bank"
+                          />
+                        </Field>
+                        <Field label="Last 4 digits">
+                          <Input
+                            value={f.accountLast4}
+                            onChange={(e) =>
+                              setF({ ...f, accountLast4: e.target.value.replace(/\D/g, '').slice(0, 4) })
+                            }
+                            placeholder="4412"
+                            inputMode="numeric"
+                          />
+                        </Field>
+                      </>
+                    )}
+                    {f.kind === 'bank' && (
+                      <Field label="IFSC" className="sm:col-span-2">
+                        <Input
+                          value={f.ifsc}
+                          onChange={(e) => setF({ ...f, ifsc: e.target.value.toUpperCase().slice(0, 11) })}
+                          placeholder="HDFC0000123"
+                          className="font-mono"
+                        />
+                      </Field>
+                    )}
+                    <Field
+                      label="Opening balance"
+                      className="sm:col-span-2"
+                      hint="Posted against Opening Balance Equity — it was earned before the books began, so it is not income"
+                    >
+                      <MoneyInput
+                        valuePaise={f.openingBalance}
+                        onChangePaise={(p) => setF({ ...f, openingBalance: p })}
+                      />
+                    </Field>
+                  </div>
+                  {create.error && <p className="text-sm text-destructive">{create.error}</p>}
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+                    <Button onClick={save} disabled={create.busy}>
+                      {create.busy ? 'Adding…' : 'Add account'}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
             )}
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                aria-label="Banking tools"
-                className="grid size-9 place-items-center rounded-md border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-              >
-                <MoreHorizontal className="size-4" />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-64">
-                <DropdownMenuLabel>Banking tools</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {TOOLS.map((t) => (
-                  <DropdownMenuItem key={t.href} asChild>
-                    <Link href={t.href}>
-                      <t.icon className="mr-2 size-4" />
-                      <span className="flex-1">{t.label}</span>
-                    </Link>
-                  </DropdownMenuItem>
-                ))}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem asChild>
-                  <Link href="/banking/reconcile">
-                    <Split className="mr-2 size-4" />
-                    <span className="flex-1">Reconcile</span>
-                  </Link>
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
           </>
         }
       />
 
-      <Card className="p-5">
-        {/* Scope + window */}
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <Combobox
-            options={[
-              { value: 'all', label: 'All Accounts' },
-              ...s.bankAccounts.map((b) => ({
-                value: b.id,
-                label: b.name,
-                sublabel: b.bankName ?? b.kind,
-              })),
-            ]}
-            value={accountFilter}
-            onChange={setAccountFilter}
-            showAvatar={false}
-            searchPlaceholder="Search accounts"
-            className="w-56"
-          />
-          <Combobox
-            options={RANGES}
-            value={days}
-            onChange={setDays}
-            showAvatar={false}
-            searchPlaceholder="Range"
-            className="w-44"
-          />
-        </div>
-
-        {/* Balance tiles by account type */}
-        <div className="mt-5 flex flex-wrap items-start gap-x-8 gap-y-5 border-y py-5">
-          {TILES.map((tile) => {
-            const accts = s.bankAccounts.filter((b) => tile.kind.includes(b.kind));
-            if (accts.length === 0) return null;
-            const total = accts.reduce((t, a) => t + balanceOf(a.id), 0);
-            return (
-              <div key={tile.label} className="flex items-center gap-3">
-                <div className="grid size-10 shrink-0 place-items-center rounded-md bg-accent">
-                  <tile.icon className="size-4 text-muted-foreground" />
-                </div>
-                <div>
-                  <p className="micro-label">{tile.label}</p>
-                  <Money value={total} className="mt-0.5 block text-lg font-semibold" />
-                </div>
-              </div>
-            );
-          })}
-
-          <Link href="/banking/reconcile" className="ml-auto flex items-center gap-3 group">
-            <span
-              className={cn(
-                'grid h-10 min-w-10 place-items-center rounded-md px-2 text-base font-semibold tabular',
-                uncategorised.length
-                  ? 'bg-destructive/10 text-destructive'
-                  : 'bg-success/10 text-success',
-              )}
-            >
-              {uncategorised.length}
-            </span>
-            <span>
-              <span className="block text-sm font-medium">Uncategorised Transactions</span>
-              <span className="flex items-center gap-1 text-xs text-primary group-hover:underline">
-                Categorise now <ArrowRight className="size-3" />
-              </span>
-            </span>
-          </Link>
-        </div>
-
-        {/* Balance chart */}
-        <div className="mt-4">
-          <button
-            type="button"
-            onClick={() => setShowChart((v) => !v)}
-            className="flex items-center gap-1.5 text-[13px] font-medium text-primary"
-          >
-            <TrendingUp className="size-3.5" />
-            {showChart ? 'Hide Chart' : 'Show Chart'}
-            <ChevronDown className={cn('size-3.5 transition-transform', showChart && 'rotate-180')} />
-          </button>
-
-          {showChart && (
-            <ResponsiveContainer width="100%" height={230} className="mt-3">
-              <AreaChart data={series} margin={{ left: -8, right: 8, top: 6 }}>
-                <defs>
-                  <linearGradient id="gBank" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="var(--chart-1)" stopOpacity={0.28} />
-                    <stop offset="100%" stopColor="var(--chart-1)" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                <XAxis dataKey="date" {...axisProps} minTickGap={24} />
-                <YAxis tickFormatter={axisRupee} {...axisProps} width={64} />
-                <Tooltip formatter={rupeeFormatter} contentStyle={tooltipStyle} />
-                <Area type="monotone" dataKey="bank" name="Bank Balance" stroke="var(--chart-1)" fill="url(#gBank)" strokeWidth={2} />
-                <Area type="monotone" dataKey="cash" name="Cash In Hand" stroke="var(--chart-3)" fill="none" strokeWidth={1.5} />
-                <Area type="monotone" dataKey="card" name="Card Balance" stroke="var(--chart-5)" fill="none" strokeWidth={1.5} />
-              </AreaChart>
-            </ResponsiveContainer>
-          )}
-        </div>
-      </Card>
-
-      {/* Accounts */}
-      <section className="space-y-3">
-        <h2 className="micro-label">Accounts</h2>
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {visibleAccounts.map((acct) => {
-            const Icon = ICONS[acct.kind];
-            const unmatched = s.bankTxns.filter(
-              (t) => t.bankAccountId === acct.id && t.status === 'unmatched',
-            ).length;
-            const ledgerAccount = s.accounts.find((a) => a.id === acct.ledgerAccountId);
-            return (
-              <Card key={acct.id} className="accent-bar p-5">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <Icon className="size-4 shrink-0 text-muted-foreground" />
-                      <p className="truncate font-medium">{acct.name}</p>
-                      {acct.isPrimary && (
-                        <Badge variant="secondary" className="shrink-0 text-[9px]">Primary</Badge>
-                      )}
+      <AsyncPage state={accounts} loading={<LoadingRows rows={5} />}>
+        {(data) =>
+          data.accounts.length === 0 ? (
+            <EmptyState
+              icon={Landmark}
+              title="No accounts yet"
+              description="Add the bank accounts and cards the business actually uses."
+            />
+          ) : (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                {totals.map((t) => (
+                  <Card key={t.label} className="p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="micro-label">{t.label}</p>
+                        <p className="mt-1.5 tabular text-2xl font-semibold">
+                          {formatINRCompact(t.value)}
+                        </p>
+                        <p className="mt-0.5 text-xs text-muted-foreground">
+                          {t.count} account{t.count === 1 ? '' : 's'} · {t.hint}
+                        </p>
+                      </div>
+                      <t.icon className="size-4 shrink-0 text-muted-foreground" />
                     </div>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {acct.bankName ? `${acct.bankName} · ` : ''}
-                      {acct.accountLast4 ? `•••• ${acct.accountLast4}` : 'No account number'}
-                    </p>
-                    <p className="mt-0.5 text-[11px] text-muted-foreground">
-                      {ledgerAccount?.code} {ledgerAccount?.name}
-                    </p>
-                  </div>
-                  {acct.feedConnected && (
-                    <Badge variant="outline" className="shrink-0 text-[10px]">Feed live</Badge>
-                  )}
+                  </Card>
+                ))}
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                {SHORTCUTS.map((sc) => (
+                  <Link key={sc.href} href={sc.href}>
+                    <Card className="flex h-full items-start gap-3 p-4 transition-colors hover:border-primary/40 hover:bg-accent/40">
+                      <sc.icon className="mt-0.5 size-4 shrink-0 text-primary" />
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">{sc.label}</p>
+                        <p className="mt-0.5 text-xs text-muted-foreground">{sc.hint}</p>
+                      </div>
+                    </Card>
+                  </Link>
+                ))}
+              </div>
+
+              <section className="space-y-3">
+                <h2 className="micro-label">Accounts</h2>
+                <div className="grid gap-3 lg:grid-cols-2">
+                  {data.accounts.map((a) => (
+                    <Card key={a.id} className="accent-bar p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="font-medium">{a.name}</p>
+                            {a.isPrimary && <Badge variant="secondary" className="text-[9px]">Primary</Badge>}
+                            <Badge variant="outline" className="text-[9px] capitalize">{a.kind}</Badge>
+                          </div>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {a.bankName ?? 'Held in house'}
+                            {a.accountLast4 && ` · ••••${a.accountLast4}`}
+                            {a.ifsc && ` · ${a.ifsc}`}
+                          </p>
+                        </div>
+                        <div className="shrink-0 text-right">
+                          <Money value={a.balancePaise} className="text-lg font-semibold" />
+                          <p className="mt-0.5 text-[11px] text-muted-foreground">
+                            {a.kind === 'card' ? 'owed' : 'available'}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 flex items-center justify-between gap-3 border-t pt-3">
+                        <span className="text-xs text-muted-foreground">
+                          {a.unmatchedCount > 0
+                            ? `${a.unmatchedCount} statement line${a.unmatchedCount === 1 ? '' : 's'} to reconcile`
+                            : 'Nothing waiting to be reconciled'}
+                        </span>
+                        <Button variant="ghost" size="xs" asChild>
+                          <Link href={`/banking/reconcile?account=${a.id}`}>
+                            Reconcile <ArrowRight className="ml-1 size-3" />
+                          </Link>
+                        </Button>
+                      </div>
+                    </Card>
+                  ))}
                 </div>
+              </section>
 
-                <div className="mt-4 flex items-end justify-between border-t pt-4">
-                  <div>
-                    <p className="micro-label">{acct.kind === 'card' ? 'Outstanding' : 'Balance'}</p>
-                    <Money value={balanceOf(acct.id)} className="mt-1 block text-xl font-semibold" />
-                  </div>
-                  {unmatched > 0 && (
-                    <Button variant="outline" size="sm" asChild>
-                      <Link href="/banking/reconcile">{unmatched} to match</Link>
-                    </Button>
-                  )}
+              <section className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="micro-label">Waiting to be categorised</h2>
+                  <Button variant="ghost" size="sm" asChild>
+                    <Link href="/banking/reconcile">
+                      Reconcile all <ArrowRight className="ml-1 size-3.5" />
+                    </Link>
+                  </Button>
                 </div>
+                {(unmatched.data?.transactions ?? []).length === 0 ? (
+                  <Card className="p-6 text-center text-sm text-muted-foreground">
+                    Every statement line has been accounted for.
+                  </Card>
+                ) : (
+                  <Card className="overflow-hidden p-0">
+                    <div className="divide-y">
+                      {(unmatched.data?.transactions ?? []).map((t) => (
+                        <div key={t.id} className="flex items-center gap-4 p-3.5">
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm">{t.narration}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {new Date(t.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
+                              {' · '}{t.bankName}
+                            </p>
+                          </div>
+                          <Money
+                            value={t.depositPaise || t.withdrawalPaise}
+                            className={t.depositPaise ? 'text-emerald-600 dark:text-emerald-400' : ''}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+                )}
+              </section>
+
+              <Card className="flex items-start gap-3 border-primary/30 bg-primary/5 p-4">
+                <Landmark className="mt-0.5 size-4 shrink-0 text-primary" />
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  Automatic bank feeds need a licensed Account Aggregator, and registering as a Financial
+                  Information User requires being regulated by the RBI, SEBI, IRDAI or PFRDA — which
+                  accounting software is not. Importing a statement is the supported route, and re-importing
+                  an overlapping one is safe: lines already present are skipped rather than doubled.
+                </p>
               </Card>
-            );
-          })}
-        </div>
-      </section>
-
-      {/* Uncategorised queue */}
-      {uncategorised.length > 0 && (
-        <section className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="micro-label">Uncategorised transactions</h2>
-            <Link href="/banking/reconcile" className="flex items-center gap-1 text-xs text-primary hover:underline">
-              Reconcile all <ArrowRight className="size-3" />
-            </Link>
-          </div>
-          <Card className="overflow-hidden p-0">
-            <table className="w-full text-sm">
-              <tbody>
-                {uncategorised.slice(0, 6).map((t) => {
-                  const acct = s.bankAccounts.find((b) => b.id === t.bankAccountId);
-                  return (
-                    <tr key={t.id} className="border-b last:border-0">
-                      <td className="px-4 py-3 text-xs text-muted-foreground tabular">
-                        {new Date(t.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
-                      </td>
-                      <td className="px-4 py-3">
-                        <p className="truncate font-medium">{t.narration}</p>
-                        <p className="text-xs text-muted-foreground">{acct?.name}</p>
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <Money
-                          value={t.direction === 'in' ? t.amountPaise : -t.amountPaise}
-                          colored
-                          className="font-medium"
-                        />
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </Card>
-        </section>
-      )}
-
-      {/* Tools */}
-      <section className="space-y-3">
-        <h2 className="micro-label">Tools</h2>
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {TOOLS.map((t) => (
-            <Link key={t.href} href={t.href}>
-              <Card className="h-full p-4 transition-colors hover:border-primary/40">
-                <t.icon className="size-4 text-muted-foreground" />
-                <p className="mt-2.5 text-sm font-medium">{t.label}</p>
-                <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{t.hint}</p>
-              </Card>
-            </Link>
-          ))}
-        </div>
-      </section>
-
-      <AddBankAccountDialog open={addOpen} onOpenChange={setAddOpen} />
+            </>
+          )
+        }
+      </AsyncPage>
     </>
   );
 }

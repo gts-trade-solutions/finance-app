@@ -10,6 +10,8 @@ const ListQuery = z.object({
   from: z.string().optional(),
   to: z.string().optional(),
   status: z.string().optional(),
+  /** Issued and not yet fully settled — what a payment screen can be applied to. */
+  open: z.coerce.boolean().optional(),
   vendorId: z.string().optional(),
   search: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(500).default(200),
@@ -28,6 +30,13 @@ export const GET = route(
     if (q.from) base = base.where('bills.bill_date', '>=', q.from);
     if (q.to) base = base.where('bills.bill_date', '<=', q.to);
     if (q.status && q.status !== 'all') base = base.where('bills.status', '=', q.status as never);
+    if (q.open) {
+      // A draft was never issued and a void one was cancelled, so neither can
+      // be paid. Everything else with a balance is fair game.
+      base = base
+        .where('bills.status', 'not in', ['draft', 'void'])
+        .where((eb) => eb(eb.ref('bills.total'), '>', eb.ref('bills.amount_paid')));
+    }
     if (q.vendorId) base = base.where('bills.vendor_id', '=', Number(q.vendorId));
     if (q.search) {
       const term = `%${q.search}%`;

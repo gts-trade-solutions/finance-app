@@ -45,7 +45,7 @@ async function call(
   };
 }
 
-async function signIn(email: string, password = 'Finora@2026'): Promise<string> {
+async function signIn(email: string, password = 'Rekonza@2026'): Promise<string> {
   const res = await call('/api/auth/login', {
     method: 'POST',
     body: JSON.stringify({ email, password }),
@@ -59,6 +59,27 @@ let admin = '';
 let viewer = '';
 let sales = '';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// The ids these tests act on, discovered rather than assumed.
+//
+// They used to be written in as '1', '2', '16'. That held only while the demo
+// was the first thing in the database and the seeder reset every AUTO_INCREMENT
+// to one. It no longer is: real organisations share these tables, so --fresh
+// deletes the demo's rows by org_id and the next seed starts from wherever the
+// counters happen to be. Ids are therefore looked up by the property each test
+// actually depends on — a Tamil Nadu branch, a Karnataka customer, a 28% item —
+// which is what the test meant all along.
+// ─────────────────────────────────────────────────────────────────────────────
+const ids = {
+  branch: '',        // Chennai — Tamil Nadu, state 33
+  customerIntra: '', // registered, also in Tamil Nadu
+  customerInter: '', // registered, in Karnataka
+  item28: '',        // a 28% item, so the arithmetic below stays fixed
+  vendor: '',        // registered, for bills
+  bankAccount: '',   // a real bank, not cash or a card
+  expenseAccount: '',// an ordinary expense head, not a control account
+};
+
 test('the API is up and the database is reachable', async () => {
   const res = await call('/api/health');
   assert.equal(res.status, 200);
@@ -69,13 +90,50 @@ test('the API is up and the database is reachable', async () => {
 test('signs in and issues an httpOnly session cookie', async () => {
   const res = await call('/api/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ email: 'arun@raceautospares.in', password: 'Finora@2026' }),
+    body: JSON.stringify({ email: 'arun@raceautospares.in', password: 'Rekonza@2026' }),
   });
   assert.equal(res.status, 200);
   assert.equal(res.body.user.role, 'admin');
   admin = res.cookie!;
   viewer = await signIn('deepa@raceautospares.in');
   sales = await signIn('vikram@raceautospares.in');
+});
+
+test('resolves the ids the rest of the suite acts on', async () => {
+  const m = await call('/api/masters', { cookie: admin });
+  assert.equal(m.status, 200, JSON.stringify(m.body));
+
+  const branch = m.body.branches.find((b: any) => b.stateCode === '33');
+  assert.ok(branch, 'the demo book has a Tamil Nadu registration');
+  ids.branch = branch.id;
+
+  const customers = m.body.contacts.filter(
+    (c: any) => (c.kind === 'customer' || c.kind === 'both') && c.gstTreatment === 'registered',
+  );
+  // Same state as the branch, so the supply is intra-state and splits.
+  ids.customerIntra = customers.find((c: any) => c.stateCode === '33')?.id;
+  // A different state, so the same goods attract IGST instead.
+  ids.customerInter = customers.find((c: any) => c.stateCode === '29')?.id;
+  assert.ok(ids.customerIntra && ids.customerInter, 'customers on both sides of a border');
+
+  // The tax figures asserted below are worked from a 28% rate.
+  ids.item28 = m.body.items.find((i: any) => i.gstRatePct === 28)?.id;
+  assert.ok(ids.item28, 'a 28% item');
+
+  ids.vendor = m.body.contacts.find(
+    (c: any) => (c.kind === 'vendor' || c.kind === 'both') && c.gstTreatment === 'registered',
+  )?.id;
+  assert.ok(ids.vendor, 'a registered vendor');
+
+  ids.bankAccount = m.body.bankAccounts.find((b: any) => b.kind === 'bank')?.id;
+  assert.ok(ids.bankAccount, 'a bank account');
+
+  // An ordinary overhead. Posting a test expense to Cost of Goods Sold would
+  // work but would be a lie about what the expense was.
+  ids.expenseAccount = m.body.accounts.find(
+    (a: any) => a.type === 'expense' && !a.isSystem && a.code >= '6000',
+  )?.id;
+  assert.ok(ids.expenseAccount, 'an expense account');
 });
 
 test('a wrong password and an unknown email are indistinguishable', async () => {
@@ -101,7 +159,7 @@ test('rejects an unauthenticated request', async () => {
 });
 
 test('rejects a forged session cookie', async () => {
-  const res = await call('/api/auth/me', { cookie: 'finora_session=made-up-token-value' });
+  const res = await call('/api/auth/me', { cookie: 'rekonza_session=made-up-token-value' });
   assert.equal(res.status, 401);
 });
 
@@ -113,8 +171,8 @@ test('a viewer may read but not create — enforced on the server', async () => 
     cookie: viewer,
     method: 'POST',
     body: JSON.stringify({
-      branchId: '1', customerId: '1', date: '2026-08-07', dueDate: '2026-09-06',
-      lines: [{ itemId: '1', qty: 1, ratePaise: 100 }],
+      branchId: ids.branch, customerId: ids.customerIntra, date: '2026-08-07', dueDate: '2026-09-06',
+      lines: [{ itemId: ids.item28, qty: 1, ratePaise: 100 }],
     }),
   });
   assert.equal(write.status, 403, 'a viewer cannot create');
@@ -126,9 +184,9 @@ test('a sales user may create an invoice but not touch the accountant module', a
     cookie: sales,
     method: 'POST',
     body: JSON.stringify({
-      branchId: '1', customerId: '1', date: '2026-08-07', dueDate: '2026-09-06',
+      branchId: ids.branch, customerId: ids.customerIntra, date: '2026-08-07', dueDate: '2026-09-06',
       status: 'draft',
-      lines: [{ itemId: '1', qty: 1, ratePaise: 145000 }],
+      lines: [{ itemId: ids.item28, qty: 1, ratePaise: 145000 }],
     }),
   });
   assert.equal(res.status, 200, JSON.stringify(res.body));
@@ -142,8 +200,8 @@ test('validates the request body and names the offending field', async () => {
     cookie: admin,
     method: 'POST',
     body: JSON.stringify({
-      branchId: '1', customerId: '1', date: 'not-a-date', dueDate: '2026-09-06',
-      lines: [{ itemId: '1', qty: 1, ratePaise: 100 }],
+      branchId: ids.branch, customerId: ids.customerIntra, date: 'not-a-date', dueDate: '2026-09-06',
+      lines: [{ itemId: ids.item28, qty: 1, ratePaise: 100 }],
     }),
   });
   assert.equal(res.status, 400);
@@ -156,7 +214,7 @@ test('refuses an invoice with no lines', async () => {
     cookie: admin,
     method: 'POST',
     body: JSON.stringify({
-      branchId: '1', customerId: '1', date: '2026-08-07', dueDate: '2026-09-06', lines: [],
+      branchId: ids.branch, customerId: ids.customerIntra, date: '2026-08-07', dueDate: '2026-09-06', lines: [],
     }),
   });
   assert.equal(res.status, 400);
@@ -167,7 +225,7 @@ test('refuses an HSN code that is not on the approved list', async () => {
     cookie: admin,
     method: 'POST',
     body: JSON.stringify({
-      branchId: '1', customerId: '1', date: '2026-08-07', dueDate: '2026-09-06',
+      branchId: ids.branch, customerId: ids.customerIntra, date: '2026-08-07', dueDate: '2026-09-06',
       lines: [{ description: 'Something', hsnSac: '1234', qty: 1, ratePaise: 10000, gstRatePct: 18 }],
     }),
   });
@@ -181,8 +239,8 @@ test('resolves GST from the two states and posts a balanced entry', async () => 
     cookie: admin,
     method: 'POST',
     body: JSON.stringify({
-      branchId: '1', customerId: '1', date: '2026-08-07', dueDate: '2026-09-06',
-      status: 'approved', lines: [{ itemId: '1', qty: 10, ratePaise: 145000 }],
+      branchId: ids.branch, customerId: ids.customerIntra, date: '2026-08-07', dueDate: '2026-09-06',
+      status: 'approved', lines: [{ itemId: ids.item28, qty: 10, ratePaise: 145000 }],
     }),
   });
   assert.equal(intra.status, 200, JSON.stringify(intra.body));
@@ -209,8 +267,8 @@ test('resolves GST from the two states and posts a balanced entry', async () => 
     cookie: admin,
     method: 'POST',
     body: JSON.stringify({
-      branchId: '1', customerId: '2', date: '2026-08-07', dueDate: '2026-09-06',
-      status: 'approved', lines: [{ itemId: '1', qty: 10, ratePaise: 145000 }],
+      branchId: ids.branch, customerId: ids.customerInter, date: '2026-08-07', dueDate: '2026-09-06',
+      status: 'approved', lines: [{ itemId: ids.item28, qty: 10, ratePaise: 145000 }],
     }),
   });
   const interDetail = await call(`/api/invoices/${inter.body.id}`, { cookie: admin });
@@ -228,8 +286,8 @@ test('invoice numbers are unique and sequential within a branch', async () => {
       cookie: admin,
       method: 'POST',
       body: JSON.stringify({
-        branchId: '1', customerId: '1', date: '2026-08-07', dueDate: '2026-09-06',
-        status: 'draft', lines: [{ itemId: '1', qty: 1, ratePaise: 145000 }],
+        branchId: ids.branch, customerId: ids.customerIntra, date: '2026-08-07', dueDate: '2026-09-06',
+        status: 'draft', lines: [{ itemId: ids.item28, qty: 1, ratePaise: 145000 }],
       }),
     });
     numbers.push(res.body.number);
@@ -249,8 +307,8 @@ test('concurrent creates never collide on a number', async () => {
         cookie: admin,
         method: 'POST',
         body: JSON.stringify({
-          branchId: '1', customerId: '1', date: '2026-08-07', dueDate: '2026-09-06',
-          status: 'draft', lines: [{ itemId: '1', qty: 1, ratePaise: 100000 }],
+          branchId: ids.branch, customerId: ids.customerIntra, date: '2026-08-07', dueDate: '2026-09-06',
+          status: 'draft', lines: [{ itemId: ids.item28, qty: 1, ratePaise: 100000 }],
         }),
       }),
     ),
@@ -266,8 +324,8 @@ test('voiding reverses the entry and leaves the original in place', async () => 
     cookie: admin,
     method: 'POST',
     body: JSON.stringify({
-      branchId: '1', customerId: '1', date: '2026-08-07', dueDate: '2026-09-06',
-      status: 'approved', lines: [{ itemId: '1', qty: 2, ratePaise: 145000 }],
+      branchId: ids.branch, customerId: ids.customerIntra, date: '2026-08-07', dueDate: '2026-09-06',
+      status: 'approved', lines: [{ itemId: ids.item28, qty: 2, ratePaise: 145000 }],
     }),
   });
   const id = created.body.id;
@@ -325,7 +383,7 @@ test('records a bill and a payment against it through the API', async () => {
     cookie: admin,
     method: 'POST',
     body: JSON.stringify({
-      branchId: '1', vendorId: '16', vendorInvoiceNo: `API-${Date.now()}`,
+      branchId: ids.branch, vendorId: ids.vendor, vendorInvoiceNo: `API-${Date.now()}`,
       date: '2026-08-07', dueDate: '2026-09-06',
       lines: [{ description: 'Parts', qty: 10, ratePaise: 60000, gstRatePct: 18 }],
     }),
@@ -338,8 +396,8 @@ test('records a bill and a payment against it through the API', async () => {
     cookie: admin,
     method: 'POST',
     body: JSON.stringify({
-      kind: 'made', branchId: '1', contactId: '16', date: '2026-08-10',
-      mode: 'neft', amountPaise: bill.body.totalPaise, bankAccountId: '1',
+      kind: 'made', branchId: ids.branch, contactId: ids.vendor, date: '2026-08-10',
+      mode: 'neft', amountPaise: bill.body.totalPaise, bankAccountId: ids.bankAccount,
       allocations: [{ targetType: 'bill', targetId: bill.body.id, amountPaise: bill.body.totalPaise }],
     }),
   });
@@ -358,8 +416,8 @@ test('a receipt cannot be allocated against a bill', async () => {
     cookie: admin,
     method: 'POST',
     body: JSON.stringify({
-      kind: 'received', branchId: '1', contactId: '1', date: '2026-08-10',
-      mode: 'neft', amountPaise: 1000, bankAccountId: '1',
+      kind: 'received', branchId: ids.branch, contactId: ids.customerIntra, date: '2026-08-10',
+      mode: 'neft', amountPaise: 1000, bankAccountId: ids.bankAccount,
       allocations: [{ targetType: 'bill', targetId: '1', amountPaise: 1000 }],
     }),
   });
@@ -372,8 +430,8 @@ test('records an expense and posts it', async () => {
     cookie: admin,
     method: 'POST',
     body: JSON.stringify({
-      branchId: '1', date: '2026-08-07', accountId: '39',
-      paidThroughBankAccountId: '1', amountPaise: 118000, gstRatePct: 18,
+      branchId: ids.branch, date: '2026-08-07', accountId: ids.expenseAccount,
+      paidThroughBankAccountId: ids.bankAccount, amountPaise: 118000, gstRatePct: 18,
       notes: 'API test expense',
     }),
   });
@@ -391,7 +449,7 @@ test('a sales user cannot record a purchase', async () => {
     cookie: sales,
     method: 'POST',
     body: JSON.stringify({
-      branchId: '1', vendorId: '16', vendorInvoiceNo: 'NOPE-1',
+      branchId: ids.branch, vendorId: ids.vendor, vendorInvoiceNo: 'NOPE-1',
       date: '2026-08-07', dueDate: '2026-09-06',
       lines: [{ description: 'x', qty: 1, ratePaise: 1000 }],
     }),
@@ -404,7 +462,7 @@ test('the same vendor invoice number cannot be entered twice', async () => {
   // The check that stops a duplicate payment going out.
   const dup = `DUP-${Date.now()}`;
   const payload = {
-    branchId: '1', vendorId: '16', vendorInvoiceNo: dup,
+    branchId: ids.branch, vendorId: ids.vendor, vendorInvoiceNo: dup,
     date: '2026-08-07', dueDate: '2026-09-06',
     lines: [{ description: 'Parts', qty: 1, ratePaise: 50000, gstRatePct: 18 }],
   };
@@ -424,7 +482,7 @@ test('imports a bank statement and skips a re-import', async () => {
   const first = await call('/api/banking/import', {
     cookie: admin,
     method: 'POST',
-    body: JSON.stringify({ bankAccountId: '1', filename: 'api.csv', rows }),
+    body: JSON.stringify({ bankAccountId: ids.bankAccount, filename: 'api.csv', rows }),
   });
   assert.equal(first.status, 200, JSON.stringify(first.body));
   assert.equal(first.body.imported, 2);
@@ -434,7 +492,7 @@ test('imports a bank statement and skips a re-import', async () => {
   const second = await call('/api/banking/import', {
     cookie: admin,
     method: 'POST',
-    body: JSON.stringify({ bankAccountId: '1', filename: 'api.csv', rows }),
+    body: JSON.stringify({ bankAccountId: ids.bankAccount, filename: 'api.csv', rows }),
   });
   assert.equal(second.body.imported, 0);
   assert.equal(second.body.duplicates, 2);
@@ -446,7 +504,7 @@ test('categorising a bank line through the API posts an entry', async () => {
     cookie: admin,
     method: 'POST',
     body: JSON.stringify({
-      bankAccountId: '1',
+      bankAccountId: ids.bankAccount,
       filename: 'cat.csv',
       rows: [{ date: '2026-08-04', narration: `CATEGORISE ME ${stamp}`, withdrawalPaise: 4500 }],
     }),
@@ -460,7 +518,7 @@ test('categorising a bank line through the API posts an entry', async () => {
   const res = await call('/api/banking/transactions', {
     cookie: admin,
     method: 'POST',
-    body: JSON.stringify({ action: 'categorise', transactionId: line.id, accountId: '39' }),
+    body: JSON.stringify({ action: 'categorise', transactionId: line.id, accountId: ids.expenseAccount }),
   });
   assert.equal(res.status, 200, JSON.stringify(res.body));
   assert.ok(res.body.journalEntryId);

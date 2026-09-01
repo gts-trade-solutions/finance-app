@@ -19,7 +19,7 @@ import { cookies } from 'next/headers';
 import type { RoleName } from '../../types';
 import { db } from '../db';
 
-export const SESSION_COOKIE = 'finora_session';
+export const SESSION_COOKIE = 'rekonza_session';
 
 const TTL_HOURS = Number(process.env.SESSION_TTL_HOURS) || 168; // one week
 

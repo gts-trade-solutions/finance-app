@@ -13,7 +13,8 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/shared/page-header';
-import { useAppStore } from '@/lib/store';
+import { journal, type JournalResponse } from '@/lib/api/client';
+import { useApi } from '@/lib/api/use-api';
 import { cn } from '@/lib/utils';
 
 interface ReportDef {
@@ -121,10 +122,13 @@ const CATALOGUE: { group: string; blurb: string; reports: ReportDef[] }[] = [
 ];
 
 const ALL = CATALOGUE.flatMap((g) => g.reports.map((r) => ({ ...r, group: g.group })));
-const FAV_KEY = 'finora-report-favourites';
+const FAV_KEY = 'rekonza-report-favourites';
 
 export default function ReportsPage() {
-  const entryCount = useAppStore((s) => s.entries.length);
+  // Only the count is needed, so one row comes back and the summary carries the
+  // total — the gallery does not need the journal itself.
+  const ledger = useApi<JournalResponse>(() => journal.list({ limit: 1 }), []);
+  const entryCount = ledger.data?.summary.count ?? 0;
   const [query, setQuery] = useState('');
   const [favourites, setFavourites] = useState<string[]>([]);
 
@@ -190,7 +194,11 @@ export default function ReportsPage() {
     <>
       <PageHeader
         title="Reports"
-        description={`No report data is stored anywhere. Every figure below is calculated live from ${entryCount} journal entries, which is why they can never disagree with each other.`}
+        description={
+          entryCount
+            ? `No report data is stored anywhere. Every figure below is calculated live from ${entryCount} journal entries, which is why they can never disagree with each other.`
+            : 'No report data is stored anywhere. Every figure below is calculated live from the journal, which is why they can never disagree with each other.'
+        }
         actions={
           <div className="relative w-full max-w-xs">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />

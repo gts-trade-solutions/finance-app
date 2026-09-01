@@ -130,8 +130,8 @@ export function ReportShell({
       {children}
 
       <p className="no-print text-xs text-muted-foreground">
-        Derived live from {s.entries.length} journal entries. Nothing on this page is stored — change a document and
-        this report changes with it.
+        Derived live from the journal on every request. Nothing on this page is stored — change a
+        document and this report changes with it.
       </p>
     </>
   );

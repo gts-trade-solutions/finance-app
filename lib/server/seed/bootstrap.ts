@@ -14,7 +14,8 @@ import 'server-only';
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { Trx } from '../db';
-import { installChartOfAccounts, accountIds, CODE } from '../ledger/chart-of-accounts';
+import { installChartOfAccounts, accountIds, CODE, requireAccount } from '../ledger/chart-of-accounts';
+import { postEntry, type DraftLine } from '../ledger/posting';
 import { hashPassword } from '../auth/password';
 import { SEED_ORG, SEED_BRANCHES, SEED_USERS } from '../../mock/seed/org';
 import { SEED_CUSTOMERS, SEED_VENDORS } from '../../mock/seed/contacts';
@@ -36,9 +37,28 @@ export interface IdMap {
 export interface BootstrapOptions {
   /** Password given to every seeded user. Demo only. */
   demoPassword?: string;
-  /** Skip the demo masters and create only the org, branches and admin. */
+  /** Skip the demo masters and create only the org, its branch and the admin. */
   minimal?: boolean;
-  org?: { name: string; pan?: string | null; email?: string | null; phone?: string | null };
+  /**
+   * Marks the organisation as the demo book. Only the seed script sets this.
+   * Everything the app does differently for a demo — the banner, the one-click
+   * door on the sign-in page, what the seeder is allowed to wipe — hangs off
+   * this flag, so it defaults to false and a real sign-up can never set it.
+   */
+  isDemo?: boolean;
+  org?: {
+    name: string;
+    pan?: string | null;
+    email?: string | null;
+    phone?: string | null;
+    gstRegistrationType?: 'regular' | 'composition' | 'unregistered';
+  };
+  /**
+   * The first GST registration. A branch here is a registration, not an office,
+   * so a new business gets exactly one and adds more when it registers in
+   * another state. Omitted only by the demo seed, which brings its own two.
+   */
+  branch?: { name: string; stateCode: string; gstin?: string | null; address?: string | null };
   admin?: { name: string; email: string; password: string };
 }
 
@@ -49,21 +69,42 @@ export async function bootstrap(trx: Trx, options: BootstrapOptions = {}): Promi
       name: options.org?.name ?? SEED_ORG.name,
       legal_name: options.org?.name ?? SEED_ORG.name,
       pan: options.org?.pan ?? SEED_ORG.pan,
-      gst_registration_type: SEED_ORG.gstRegistrationType,
-      aato_above_5cr: SEED_ORG.aatoAbove5Cr ? 1 : 0,
+      gst_registration_type: options.org?.gstRegistrationType ?? SEED_ORG.gstRegistrationType,
+      // Aggregate turnover is not known at sign-up, and claiming a business is
+      // above the e-invoicing threshold when it is not would put mandatory
+      // banners in front of somebody who does not need them. It starts false
+      // and is set in settings.
+      aato_above_5cr: options.org ? 0 : SEED_ORG.aatoAbove5Cr ? 1 : 0,
       fiscal_year_start_month: 4,
       base_currency: 'INR',
-      address: SEED_ORG.address,
+      address: options.org ? null : SEED_ORG.address,
       email: options.org?.email ?? SEED_ORG.email,
       phone: options.org?.phone ?? SEED_ORG.phone,
       onboarded_at: new Date(),
+      is_demo: options.isDemo ? 1 : 0,
     })
     .executeTakeFirstOrThrow();
   const orgId = Number(org.insertId);
 
   // ── Branches ───────────────────────────────────────────────────────────────
+  //
+  // A sign-up brings its own single registration. Falling through to the demo's
+  // two would not merely be wrong data — their GSTINs are unique in the schema,
+  // so the second business to register would collide with the first and the
+  // whole transaction would roll back.
+  const branchSpecs = options.branch
+    ? [{
+        id: 'br_primary',
+        name: options.branch.name,
+        gstin: options.branch.gstin || null,
+        stateCode: options.branch.stateCode,
+        address: options.branch.address ?? null,
+        isPrimary: true,
+      }]
+    : SEED_BRANCHES;
+
   const branches: Record<string, number> = {};
-  for (const b of SEED_BRANCHES) {
+  for (const b of branchSpecs) {
     const row = await trx
       .insertInto('branches')
       .values({
@@ -86,7 +127,7 @@ export async function bootstrap(trx: Trx, options: BootstrapOptions = {}): Promi
   // One hash, reused across the demo users. Hashing argon2id eleven times costs
   // about half a second each; doing it once is the difference between a seed
   // that runs in two seconds and one that runs in eight.
-  const demoPassword = options.demoPassword ?? 'Finora@2026';
+  const demoPassword = options.demoPassword ?? 'Rekonza@2026';
   const sharedHash = await hashPassword(demoPassword);
 
   const users: Record<string, number> = {};
@@ -96,8 +137,8 @@ export async function bootstrap(trx: Trx, options: BootstrapOptions = {}): Promi
         name: options.admin.name,
         email: options.admin.email.toLowerCase(),
         role: 'admin' as const,
-        branchId: SEED_BRANCHES[0].id,
-        branchAccess: SEED_BRANCHES.map((b) => b.id),
+        branchId: branchSpecs[0].id,
+        branchAccess: branchSpecs.map((b) => b.id),
       }]
     : SEED_USERS;
 
@@ -131,7 +172,38 @@ export async function bootstrap(trx: Trx, options: BootstrapOptions = {}): Promi
   }
 
   if (options.minimal) {
-    return { orgId, branches, users, contacts: {}, items: {}, accounts, bankAccounts: {} };
+    // A book with nowhere to put money cannot record its first receipt, and
+    // "add a bank account before you can be paid" is a poor first five minutes.
+    // Cash in Hand is the one account every business has, it needs no details
+    // from the owner, and its ledger account is already in the chart — so it is
+    // created at zero and the real bank accounts are added in settings.
+    const cash = await trx
+      .insertInto('bank_accounts')
+      .values({
+        org_id: orgId,
+        kind: 'cash',
+        name: 'Cash in Hand',
+        bank_name: null,
+        account_last4: null,
+        ifsc: null,
+        ledger_account_id: requireAccount(accounts, CODE.CASH),
+        opening_balance: toSqlFromPaise(0),
+        opening_date: null,
+        is_primary: 1,
+        feed_connected: 0,
+        is_active: 1,
+      })
+      .executeTakeFirstOrThrow();
+
+    return {
+      orgId,
+      branches,
+      users,
+      contacts: {},
+      items: {},
+      accounts,
+      bankAccounts: { ba_cash: Number(cash.insertId) },
+    };
   }
 
   // ── HSN / SAC master ───────────────────────────────────────────────────────
@@ -257,6 +329,53 @@ export async function bootstrap(trx: Trx, options: BootstrapOptions = {}): Promi
       })
       .executeTakeFirstOrThrow();
     bankAccounts[b.key] = Number(row.insertId);
+  }
+
+  // ── Opening balances ───────────────────────────────────────────────────────
+  //
+  // A business that has been trading does not start the year with nothing in
+  // the bank. Recording the opening figure on the bank account record alone
+  // would leave it invisible to every statement: the balance sheet would show
+  // no cash, and the reconciliation screen would compare a real statement
+  // against a ledger that began at zero.
+  //
+  // So it is posted, like everything else:
+  //
+  //   Dr Bank / Cash               what was actually there on day one
+  //     Cr Opening Balance Equity  the contra, because the money came from
+  //                                somewhere before the books began
+  //
+  // Opening Balance Equity exists for exactly this. It is not real equity — it
+  // is a holding account that nets to nothing once every opening figure is in.
+  const openingLines: DraftLine[] = [];
+  let openingTotal = 0;
+  for (const b of bankSpecs) {
+    if (!b.opening) continue;
+    openingLines.push({
+      accountId: accounts[b.code],
+      debit: b.opening,
+      description: `Opening balance — ${b.name}`,
+    });
+    openingTotal += b.opening;
+  }
+
+  if (openingTotal > 0) {
+    openingLines.push({
+      accountId: requireAccount(accounts, CODE.OPENING_BALANCE_EQUITY),
+      credit: openingTotal,
+      description: 'Balances brought forward',
+    });
+
+    await postEntry(trx, {
+      orgId,
+      branchId: branches[SEED_BRANCHES[0].id],
+      date: SEED_ORG.fiscalYearStart,
+      memo: `Opening balances as at ${SEED_ORG.fiscalYearStart}`,
+      sourceType: 'opening',
+      userId: users[SEED_USERS[0].id],
+      module: 'accountant',
+      lines: openingLines,
+    });
   }
 
   return { orgId, branches, users, contacts, items, accounts, bankAccounts };

@@ -6,6 +6,7 @@
 // input credit that is sometimes blocked, reverse charge, and TDS.
 
 import test from 'node:test';
+import { sql } from 'kysely';
 import assert from 'node:assert/strict';
 import { db, type Trx } from '../../lib/server/db';
 import { installChartOfAccounts, accountIds, CODE } from '../../lib/server/ledger/chart-of-accounts';
@@ -13,6 +14,10 @@ import { verifyLedgerBalances } from '../../lib/server/ledger/posting';
 import { createBill, createExpense, voidBill } from '../../lib/server/services/purchases';
 import { receivePayment, makePayment, voidPayment } from '../../lib/server/services/payments';
 import { createInvoice } from '../../lib/server/services/sales';
+import {
+  convertPoToBill, createPurchaseOrder, createVendorCredit,
+  refundVendorCredit, voidVendorCredit,
+} from '../../lib/server/services/purchase-documents';
 import { toPaiseFromSql } from '../../lib/server/money-sql';
 
 interface Fixture {
@@ -459,6 +464,154 @@ test('the ledger still ties after a full buy-and-sell cycle', async () => {
     assert.ok(check.balanced, 'the whole book still ties');
     assert.equal(check.unbalancedEntries, 0);
     assert.equal(check.totalDebit, check.totalCredit);
+  });
+});
+
+// ── Purchase orders and vendor credits ──────────────────────────────────────
+
+test('a purchase order posts nothing — a commitment is not a payable', async () => {
+  await withFixture(async ({ trx, orgId, branchId, vendorId, itemId, acc }) => {
+    const po = await createPurchaseOrder(trx, orgId, null, {
+      branchId, vendorId, date: '2026-08-07', lines: [{ itemId, qty: 10 }],
+    });
+
+    // 10 x 600 (the purchase price, not the sale price) = 6,000 + 18%.
+    assert.equal(po.totalPaise, 708_000);
+    assert.equal(po.journalEntryId, null);
+
+    const { rows } = await sql<{ n: string }>`
+      SELECT COUNT(*) AS n FROM journal_lines
+       WHERE org_id = ${orgId} AND account_id = ${acc[CODE.AP]}
+    `.execute(trx);
+    assert.equal(Number(rows[0].n), 0, 'nothing has reached payables');
+  });
+});
+
+test("converting a purchase order needs the supplier's own invoice number", async () => {
+  await withFixture(async ({ trx, orgId, branchId, vendorId, itemId }) => {
+    const po = await createPurchaseOrder(trx, orgId, null, {
+      branchId, vendorId, date: '2026-08-01', lines: [{ itemId, qty: 5 }],
+    });
+    await assert.rejects(
+      () => convertPoToBill(trx, orgId, null, po.id, {
+        vendorInvoiceNo: '  ', date: '2026-08-07', dueDate: '2026-09-06',
+      }),
+      /invoice number is needed/,
+    );
+  });
+});
+
+test('converting a purchase order creates the payable and marks it billed', async () => {
+  await withFixture(async ({ trx, orgId, branchId, vendorId, itemId }) => {
+    const po = await createPurchaseOrder(trx, orgId, null, {
+      branchId, vendorId, date: '2026-08-01', lines: [{ itemId, qty: 10 }],
+    });
+    const bill = await convertPoToBill(trx, orgId, null, po.id, {
+      vendorInvoiceNo: 'SUP-991', date: '2026-08-07', dueDate: '2026-09-06',
+    });
+
+    assert.equal(bill.totalPaise, po.totalPaise);
+    const row = await trx.selectFrom('purchase_orders').select(['status', 'billed_amount'])
+      .where('id', '=', po.id).executeTakeFirstOrThrow();
+    assert.equal(row.status, 'billed');
+    assert.equal(toPaiseFromSql(row.billed_amount), po.totalPaise);
+  });
+});
+
+test('a vendor credit reverses the cost and gives back the input credit', async () => {
+  await withFixture(async ({ trx, orgId, branchId, vendorId, itemId }) => {
+    await createBill(trx, orgId, null, {
+      branchId, vendorId, vendorInvoiceNo: 'V-100',
+      date: '2026-08-01', dueDate: '2026-09-01',
+      lines: [{ itemId, qty: 10, ratePaise: 60_000 }],
+    });
+
+    const vc = await createVendorCredit(trx, orgId, null, {
+      branchId, vendorId, date: '2026-08-07',
+      reason: 'Short supply', amountPaise: 100_000, gstRatePct: 18,
+    });
+
+    assert.ok(vc.journalEntryId);
+    const e = await entryByCode(trx, vc.journalEntryId!);
+    assert.equal(e[CODE.AP].dr, 118_000, 'we owe them that much less');
+    assert.equal(e[CODE.PURCHASES].cr, 100_000, 'the cost comes back out');
+    assert.equal(e[CODE.ITC_CGST].cr, 9_000, 'and the credit claimed is given back');
+    assert.equal(e[CODE.ITC_SGST].cr, 9_000);
+  });
+});
+
+test('a vendor credit on a blocked purchase takes the tax out of the cost, not the credit pot', async () => {
+  await withFixture(async ({ trx, orgId, branchId, vendorId }) => {
+    const vc = await createVendorCredit(trx, orgId, null, {
+      branchId, vendorId, date: '2026-08-07',
+      reason: 'Return on a blocked expense', amountPaise: 100_000, gstRatePct: 18,
+      itcClaimed: false,
+    });
+
+    const e = await entryByCode(trx, vc.journalEntryId!);
+    assert.equal(e[CODE.ITC_CGST]?.cr ?? 0, 0, 'no credit was ever claimed to give back');
+    assert.equal(e[CODE.PURCHASES].cr, 118_000, 'the whole cost including tax reverses');
+  });
+});
+
+test('a vendor credit applied to a bill settles it', async () => {
+  await withFixture(async ({ trx, orgId, branchId, vendorId, itemId }) => {
+    const bill = await createBill(trx, orgId, null, {
+      branchId, vendorId, vendorInvoiceNo: 'V-101',
+      date: '2026-08-01', dueDate: '2026-09-01',
+      lines: [{ itemId, qty: 1, ratePaise: 100_000 }],
+    });
+
+    await createVendorCredit(trx, orgId, null, {
+      branchId, vendorId, date: '2026-08-07', reason: 'Whole lot returned',
+      againstBillId: bill.id, amountPaise: 100_000, gstRatePct: 18,
+    });
+
+    const row = await trx.selectFrom('bills').select(['status', 'total', 'amount_paid'])
+      .where('id', '=', bill.id).executeTakeFirstOrThrow();
+    assert.equal(row.status, 'paid');
+    assert.equal(toPaiseFromSql(row.amount_paid), toPaiseFromSql(row.total));
+  });
+});
+
+test('a refund on a vendor credit brings cash back in', async () => {
+  await withFixture(async ({ trx, orgId, branchId, vendorId, bankId }) => {
+    const vc = await createVendorCredit(trx, orgId, null, {
+      branchId, vendorId, date: '2026-08-07', reason: 'Cash back requested',
+      amountPaise: 100_000, gstRatePct: 18,
+    });
+
+    const refund = await refundVendorCredit(trx, orgId, null, vc.id, {
+      bankAccountId: bankId, date: '2026-08-08',
+    });
+    assert.equal(refund.refundedPaise, 118_000);
+
+    const e = await entryByCode(trx, refund.journalEntryId);
+    assert.equal(e[CODE.BANK_DEFAULT].dr, 118_000, 'the money comes in');
+    assert.equal(e[CODE.AP].cr, 118_000, 'and we no longer hold a credit');
+  });
+});
+
+test('voiding a vendor credit gives the bill its balance back', async () => {
+  await withFixture(async ({ trx, orgId, branchId, vendorId, itemId }) => {
+    const bill = await createBill(trx, orgId, null, {
+      branchId, vendorId, vendorInvoiceNo: 'V-102',
+      date: '2026-08-01', dueDate: '2026-09-01',
+      lines: [{ itemId, qty: 1, ratePaise: 100_000 }],
+    });
+    const vc = await createVendorCredit(trx, orgId, null, {
+      branchId, vendorId, date: '2026-08-07', reason: 'Raised in error',
+      againstBillId: bill.id, amountPaise: 100_000, gstRatePct: 18,
+    });
+
+    await voidVendorCredit(trx, orgId, null, vc.id, 'Wrong vendor');
+
+    const row = await trx.selectFrom('bills').select(['amount_paid'])
+      .where('id', '=', bill.id).executeTakeFirstOrThrow();
+    assert.equal(toPaiseFromSql(row.amount_paid), 0);
+
+    const check = await verifyLedgerBalances(trx, orgId);
+    assert.ok(check.balanced);
   });
 });
 

@@ -9,6 +9,10 @@
 // implies. A typo does not fail quietly — the whole return bounces. Curating
 // the list here, once, removes that entire class of filing error, at the cost
 // of an admin adding a code when the business starts selling something new.
+//
+// The list lives in the database and every invoice line is checked against it
+// on the server. Hiding the free-text box would only be a courtesy; the check
+// is what actually stops a bad code reaching a return.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useMemo, useState } from 'react';
@@ -26,12 +30,12 @@ import {
 } from '@/components/ui/dialog';
 import { PageHeader } from '@/components/shared/page-header';
 import { EmptyState } from '@/components/shared/empty-state';
+import { AsyncPage } from '@/components/shared/async-state';
 import { Field } from '@/components/shared/form-bits';
 import { ReportTable } from '@/components/shared/report-shell';
-import { useAppStore, setState } from '@/lib/store';
+import { hsnCodes, type HsnCodeRow } from '@/lib/api/client';
+import { useApi, useApiAction } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
-import { logAudit } from '@/lib/services/audit';
-import type { HsnCode } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 const KIND_OPTIONS = [
@@ -39,10 +43,7 @@ const KIND_OPTIONS = [
   { value: 'sac', label: 'SAC — services' },
 ];
 
-const RATE_OPTIONS = [0, 0.25, 3, 5, 12, 18, 28].map((r) => ({
-  value: String(r),
-  label: `${r}%`,
-}));
+const RATE_OPTIONS = [0, 0.25, 3, 5, 12, 18, 28].map((r) => ({ value: String(r), label: `${r}%` }));
 
 const UQC_OPTIONS = ['NOS', 'PCS', 'KGS', 'LTR', 'MTR', 'BOX', 'SET', 'BAG'].map((u) => ({
   value: u,
@@ -51,7 +52,7 @@ const UQC_OPTIONS = ['NOS', 'PCS', 'KGS', 'LTR', 'MTR', 'BOX', 'SET', 'BAG'].map
 
 const BLANK = {
   code: '',
-  kind: 'hsn' as HsnCode['kind'],
+  kind: 'hsn' as 'hsn' | 'sac',
   description: '',
   gstRatePct: '18',
   uqc: 'NOS',
@@ -61,7 +62,7 @@ const BLANK = {
  * HSN is 4, 6 or 8 digits. SAC is always 6 and always begins 99 — that prefix
  * is what tells the portal a line is a service rather than a good.
  */
-function validate(code: string, kind: HsnCode['kind']): string | null {
+function validate(code: string, kind: 'hsn' | 'sac'): string | null {
   if (!/^[0-9]+$/.test(code)) return 'Codes are digits only.';
   if (kind === 'sac') {
     if (code.length !== 6) return 'A SAC is exactly 6 digits.';
@@ -74,37 +75,39 @@ function validate(code: string, kind: HsnCode['kind']): string | null {
 }
 
 export default function HsnCodesPage() {
-  const codes = useAppStore((s) => s.hsnCodes);
-  const items = useAppStore((s) => s.items);
   const canEdit = usePermission('settings', 'edit');
+  const state = useApi<{ hsnCodes: HsnCodeRow[] }>(() => hsnCodes.list(), []);
 
   const [query, setQuery] = useState('');
-  const [editing, setEditing] = useState<HsnCode | null>(null);
+  const [editing, setEditing] = useState<HsnCodeRow | null>(null);
   const [open, setOpen] = useState(false);
   const [f, setF] = useState(BLANK);
 
+  const create = useApiAction(hsnCodes.create);
+  const update = useApiAction(hsnCodes.update);
+  const remove = useApiAction(hsnCodes.remove);
+  const busy = create.busy || update.busy || remove.busy;
+
+  // Memoised so the empty fallback is not a fresh array on every render, which
+  // would make the filter below recompute for no reason.
+  const codes = useMemo(() => state.data?.hsnCodes ?? [], [state.data]);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const sorted = [...codes].sort((a, b) => a.code.localeCompare(b.code));
-    if (!q) return sorted;
+    if (!q) return codes;
     // Same rule the invoice picker uses: codes match by prefix, text anywhere.
-    return sorted.filter((c) => c.code.startsWith(q) || c.description.toLowerCase().includes(q));
+    return codes.filter((c) => c.code.startsWith(q) || c.description.toLowerCase().includes(q));
   }, [codes, query]);
-
-  /** How many catalogue items lean on each code — deleting one in use is a mistake. */
-  const usage = useMemo(() => {
-    const m: Record<string, number> = {};
-    for (const i of items) m[i.hsnSac] = (m[i.hsnSac] ?? 0) + 1;
-    return m;
-  }, [items]);
 
   const startNew = () => {
     setEditing(null);
     setF(BLANK);
+    create.reset();
+    update.reset();
     setOpen(true);
   };
 
-  const startEdit = (c: HsnCode) => {
+  const startEdit = (c: HsnCodeRow) => {
     setEditing(c);
     setF({
       code: c.code,
@@ -113,73 +116,68 @@ export default function HsnCodesPage() {
       gstRatePct: String(c.gstRatePct),
       uqc: c.uqc ?? 'NOS',
     });
+    create.reset();
+    update.reset();
     setOpen(true);
   };
 
-  const save = () => {
+  const save = async () => {
     const code = f.code.trim();
     const err = validate(code, f.kind);
-    if (err) {
-      toast.error(err);
-      return;
-    }
+    if (err) { toast.error(err); return; }
     if (!f.description.trim()) {
       toast.error('Add a description so the next person knows what it covers.');
-      return;
-    }
-    if (codes.some((c) => c.code === code && c.id !== editing?.id)) {
-      toast.error(`${code} is already on the list.`);
       return;
     }
 
     const rate = Number(f.gstRatePct);
     if (editing) {
-      setState((s) => ({
-        hsnCodes: s.hsnCodes.map((c) =>
-          c.id === editing.id
-            ? { ...c, code, kind: f.kind, description: f.description.trim(), gstRatePct: rate, uqc: f.uqc }
-            : c,
-        ),
-      }));
-      logAudit('update', 'hsn_code', editing.id, code, `Updated ${f.kind.toUpperCase()} ${code}`);
-      toast.success(`${code} updated`);
-    } else {
-      const rec: HsnCode = {
-        id: `${f.kind}_${code}`,
-        code,
-        kind: f.kind,
+      // The code itself is not editable. Changing it would silently detach every
+      // item and line already carrying the old one.
+      const done = await update.run({
+        id: editing.id,
         description: f.description.trim(),
         gstRatePct: rate,
-        uqc: f.uqc,
-        isActive: true,
-      };
-      setState((s) => ({ hsnCodes: [...s.hsnCodes, rec] }));
-      logAudit('create', 'hsn_code', rec.id, code, `Added ${f.kind.toUpperCase()} ${code} at ${rate}%`);
+        uqc: f.kind === 'hsn' ? f.uqc : null,
+      });
+      if (!done) return;
+      toast.success(`${editing.code} updated`);
+    } else {
+      const done = await create.run({
+        code,
+        description: f.description.trim(),
+        gstRatePct: rate,
+        uqc: f.kind === 'hsn' ? f.uqc : null,
+      });
+      if (!done) return;
       toast.success(`${code} added`, { description: 'It is now selectable on invoice lines.' });
     }
     setOpen(false);
+    state.refetch();
   };
 
-  const toggleActive = (c: HsnCode, active: boolean) => {
-    setState((s) => ({
-      hsnCodes: s.hsnCodes.map((x) => (x.id === c.id ? { ...x, isActive: active } : x)),
-    }));
-    logAudit('update', 'hsn_code', c.id, c.code, active ? 'Re-enabled' : 'Disabled');
+  const toggleActive = async (c: HsnCodeRow, active: boolean) => {
+    const done = await update.run({ id: c.id, isActive: active });
+    if (!done) {
+      toast.error(update.error ?? `${c.code} could not be changed`);
+      return;
+    }
     toast.info(active ? `${c.code} is selectable again` : `${c.code} hidden from new documents`, {
       description: active ? undefined : 'Documents already using it are untouched.',
     });
+    state.refetch();
   };
 
-  const remove = (c: HsnCode) => {
-    if (usage[c.code]) {
-      toast.error(`${usage[c.code]} item(s) use ${c.code}`, {
-        description: 'Disable it instead — deleting would leave those items without a code.',
+  const drop = async (c: HsnCodeRow) => {
+    const done = await remove.run(c.id);
+    if (!done) {
+      toast.error(remove.error ?? `${c.code} is in use`, {
+        description: 'Turn it off instead — deleting would leave those documents without a code.',
       });
       return;
     }
-    setState((s) => ({ hsnCodes: s.hsnCodes.filter((x) => x.id !== c.id) }));
-    logAudit('void', 'hsn_code', c.id, c.code, `Removed ${c.code}`);
     toast.info(`${c.code} removed`);
+    state.refetch();
   };
 
   const goods = codes.filter((c) => c.kind === 'hsn').length;
@@ -229,89 +227,95 @@ export default function HsnCodesPage() {
         </div>
       </Card>
 
-      {filtered.length === 0 ? (
-        <EmptyState
-          icon={Boxes}
-          title={query ? `No code starts with “${query}”` : 'No codes configured'}
-          description={
-            query
-              ? 'Search matches the start of the code, or anywhere in the description.'
-              : 'Add the ten or fifteen codes your business actually sells under.'
-          }
-        />
-      ) : (
-        <Card className="overflow-hidden p-0">
-          <ReportTable>
-            <thead>
-              <tr className="border-b bg-muted/50">
-                <th className={cn(th, 'text-left')}>Code</th>
-                <th className={cn(th, 'text-left')}>Type</th>
-                <th className={cn(th, 'text-left')}>Description</th>
-                <th className={cn(th, 'text-right')}>GST</th>
-                <th className={cn(th, 'text-right')}>Items</th>
-                <th className={cn(th, 'text-center')}>Selectable</th>
-                <th className="w-20 px-4 py-2.5" />
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((c) => (
-                <tr
-                  key={c.id}
-                  className={cn('border-b last:border-0 hover:bg-accent/40', !c.isActive && 'opacity-55')}
-                >
-                  <td className="px-4 py-2 font-mono text-sm font-medium">{c.code}</td>
-                  <td className="px-4 py-2">
-                    <Badge variant="outline" className="text-[10px]">
-                      {c.kind === 'sac' ? 'SAC' : 'HSN'}
-                    </Badge>
-                  </td>
-                  <td className="px-4 py-2 text-sm text-muted-foreground">{c.description}</td>
-                  <td className="px-4 py-2 text-right text-sm tabular">{c.gstRatePct}%</td>
-                  <td className="px-4 py-2 text-right text-sm tabular text-muted-foreground">
-                    {usage[c.code] ?? 0}
-                  </td>
-                  <td className="px-4 py-2 text-center">
-                    <Switch
-                      checked={c.isActive}
-                      disabled={!canEdit}
-                      onCheckedChange={(v) => toggleActive(c, v)}
-                    />
-                  </td>
-                  <td className="px-4 py-2">
-                    {canEdit && (
-                      <div className="flex items-center justify-end gap-1">
-                        <button
-                          type="button"
-                          aria-label={`Edit ${c.code}`}
-                          onClick={() => startEdit(c)}
-                          className="grid size-7 place-items-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                        >
-                          <Pencil className="size-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          aria-label={`Delete ${c.code}`}
-                          onClick={() => remove(c)}
-                          className="grid size-7 place-items-center rounded text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
-                        >
-                          <Trash2 className="size-3.5" />
-                        </button>
-                      </div>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </ReportTable>
-        </Card>
-      )}
+      <AsyncPage state={state}>
+        {() =>
+          filtered.length === 0 ? (
+            <EmptyState
+              icon={Boxes}
+              title={query ? `No code starts with “${query}”` : 'No codes configured'}
+              description={
+                query
+                  ? 'Search matches the start of the code, or anywhere in the description.'
+                  : 'Add the ten or fifteen codes your business actually sells under.'
+              }
+            />
+          ) : (
+            <Card className="overflow-hidden p-0">
+              <ReportTable>
+                <thead>
+                  <tr className="border-b bg-muted/50">
+                    <th className={cn(th, 'text-left')}>Code</th>
+                    <th className={cn(th, 'text-left')}>Type</th>
+                    <th className={cn(th, 'text-left')}>Description</th>
+                    <th className={cn(th, 'text-right')}>GST</th>
+                    <th className={cn(th, 'text-right')}>Items</th>
+                    <th className={cn(th, 'text-right')}>Lines</th>
+                    <th className={cn(th, 'text-center')}>Selectable</th>
+                    <th className="w-20 px-4 py-2.5" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((c) => (
+                    <tr
+                      key={c.id}
+                      className={cn('border-b last:border-0 hover:bg-accent/40', !c.isActive && 'opacity-55')}
+                    >
+                      <td className="px-4 py-2 font-mono text-sm font-medium">{c.code}</td>
+                      <td className="px-4 py-2">
+                        <Badge variant="outline" className="text-[10px]">
+                          {c.kind === 'sac' ? 'SAC' : 'HSN'}
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-2 text-sm text-muted-foreground">{c.description}</td>
+                      <td className="px-4 py-2 text-right text-sm tabular">{c.gstRatePct}%</td>
+                      <td className="px-4 py-2 text-right text-sm tabular text-muted-foreground">{c.itemCount}</td>
+                      <td className="px-4 py-2 text-right text-sm tabular text-muted-foreground">{c.lineCount}</td>
+                      <td className="px-4 py-2 text-center">
+                        <Switch
+                          checked={c.isActive}
+                          disabled={!canEdit || busy}
+                          onCheckedChange={(v) => void toggleActive(c, v)}
+                        />
+                      </td>
+                      <td className="px-4 py-2">
+                        {canEdit && (
+                          <div className="flex items-center justify-end gap-1">
+                            <button
+                              type="button"
+                              aria-label={`Edit ${c.code}`}
+                              onClick={() => startEdit(c)}
+                              className="grid size-7 place-items-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                            >
+                              <Pencil className="size-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              aria-label={`Delete ${c.code}`}
+                              disabled={busy}
+                              onClick={() => void drop(c)}
+                              className="grid size-7 place-items-center rounded text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-40"
+                            >
+                              <Trash2 className="size-3.5" />
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </ReportTable>
+            </Card>
+          )
+        }
+      </AsyncPage>
 
       <Card className="flex items-start gap-3 border-primary/30 bg-primary/5 p-4">
         <Boxes className="mt-0.5 size-4 shrink-0 text-primary" />
         <p className="text-xs leading-relaxed text-muted-foreground">
           Sales users cannot type a code that is not on this list — the invoice picker offers these and nothing
-          else. Disabling a code hides it from new documents but leaves every invoice that already used it exactly
-          as filed, because a posted document must always report the code it was filed under.
+          else, and the server rejects any line that carries something different. Disabling a code hides it from
+          new documents but leaves every invoice that already used it exactly as filed, because a posted document
+          must always report the code it was filed under.
         </p>
       </Card>
 
@@ -329,24 +333,38 @@ export default function HsnCodesPage() {
               <Combobox
                 options={KIND_OPTIONS}
                 value={f.kind}
-                onChange={(v) => setF({ ...f, kind: v as HsnCode['kind'] })}
+                onChange={(v) => setF({ ...f, kind: v as 'hsn' | 'sac' })}
                 showAvatar={false}
+                disabled={!!editing}
               />
             </Field>
             <Field
               label="Code"
               required
-              hint={f.kind === 'sac' ? 'Six digits, beginning 99' : 'Four, six or eight digits'}
+              hint={
+                editing
+                  ? 'A code cannot be changed once approved — items and filed lines point at it.'
+                  : f.kind === 'sac'
+                    ? 'Six digits, beginning 99'
+                    : 'Four, six or eight digits'
+              }
+              error={create.fieldErrors.code}
             >
               <Input
                 value={f.code}
+                disabled={!!editing}
                 onChange={(e) => setF({ ...f, code: e.target.value.replace(/[^0-9]/g, '').slice(0, 8) })}
                 placeholder={f.kind === 'sac' ? '998729' : '8708'}
                 className="font-mono"
                 inputMode="numeric"
               />
             </Field>
-            <Field label="Description" required hint="What the code covers, in your own words">
+            <Field
+              label="Description"
+              required
+              hint="What the code covers, in your own words"
+              error={create.fieldErrors.description ?? update.fieldErrors.description}
+            >
               <Input
                 value={f.description}
                 onChange={(e) => setF({ ...f, description: e.target.value })}
@@ -373,10 +391,15 @@ export default function HsnCodesPage() {
                 </Field>
               )}
             </div>
+            {(create.error ?? update.error) && (
+              <p className="text-sm text-destructive">{create.error ?? update.error}</p>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button onClick={save}>{editing ? 'Save changes' : 'Add code'}</Button>
+            <Button onClick={save} disabled={busy}>
+              {busy ? 'Saving…' : editing ? 'Save changes' : 'Add code'}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

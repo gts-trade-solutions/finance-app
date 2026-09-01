@@ -1,37 +1,37 @@
 'use client';
 
-import { useMemo } from 'react';
+// Payments Received — every customer receipt in the period.
+
 import { Money } from '@/components/shared/money';
+import { Badge } from '@/components/ui/badge';
 import { downloadCsv, ReportShell, useReportRange } from '@/components/shared/report-shell';
 import { ReportGrid, gridCsv, type GridColumn } from '@/components/shared/report-grid';
-import { useAppStore } from '@/lib/store';
-import { contactName } from '@/lib/selectors';
+import { AsyncPage } from '@/components/shared/async-state';
+import { payments, type PaymentListItem, type PaymentListResponse } from '@/lib/api/client';
+import { useApi } from '@/lib/api/use-api';
 import { toRupees } from '@/lib/money';
-import { Badge } from '@/components/ui/badge';
-import type { Payment } from '@/lib/types';
+
+const short = (d: string) => new Date(d).toLocaleDateString('en-IN');
+
+const columns: GridColumn<PaymentListItem>[] = [
+  { key: 'date', header: 'Date', cell: (r) => <span className="tabular text-xs">{short(r.date)}</span>, csv: (r) => r.date },
+  { key: 'number', header: 'Payment#', cell: (r) => <span className="font-medium">{r.number}</span>, csv: (r) => r.number },
+  { key: 'party', header: 'Customer', cell: (r) => r.contactName, csv: (r) => r.contactName },
+  { key: 'mode', header: 'Mode', cell: (r) => <Badge variant="secondary" className="uppercase text-[10px]">{r.mode}</Badge>, csv: (r) => r.mode },
+  { key: 'account', header: 'Deposited To', cell: (r) => <span className="text-xs">{r.bankName}</span>, csv: (r) => r.bankName },
+  { key: 'ref', header: 'Reference', cell: (r) => <span className="text-xs text-muted-foreground">{r.reference || '—'}</span>, csv: (r) => r.reference ?? '' },
+  { key: 'tds', header: 'TDS Withheld', align: 'right', cell: (r) => <Money value={r.tdsPaise} showZero={false} />, csv: (r) => toRupees(r.tdsPaise), total: (rs) => <Money value={rs.reduce((t, r) => t + r.tdsPaise, 0)} /> },
+  { key: 'unapplied', header: 'On Account', align: 'right', cell: (r) => <Money value={r.unappliedPaise} showZero={false} />, csv: (r) => toRupees(r.unappliedPaise), total: (rs) => <Money value={rs.reduce((t, r) => t + r.unappliedPaise, 0)} /> },
+  { key: 'docs', header: 'Invoices', align: 'center', cell: (r) => <span className="tabular text-xs">{r.allocationCount}</span>, csv: (r) => r.allocationCount },
+  { key: 'amount', header: 'Amount', align: 'right', cell: (r) => <Money value={r.amountPaise} className="font-medium" />, csv: (r) => toRupees(r.amountPaise), total: (rs) => <Money value={rs.reduce((t, r) => t + r.amountPaise, 0)} /> },
+];
 
 export default function PaymentsReceivedReportPage() {
-  const s = useAppStore();
   const [range, setRange] = useReportRange();
-
-  const rows = useMemo(
-    () =>
-      s.payments
-        .filter((p) => p.kind === 'received' && p.status !== 'void' && p.date >= range.from && p.date <= range.to)
-        .sort((a, b) => b.date.localeCompare(a.date)),
-    [s.payments, range],
+  const state = useApi<PaymentListResponse>(
+    () => payments.list({ kind: 'received', from: range.from, to: range.to, limit: 500 }),
+    [range.from, range.to],
   );
-
-  const columns: GridColumn<Payment>[] = [
-    { key: 'date', header: 'Date', cell: (r) => <span className="tabular text-xs">{new Date(r.date).toLocaleDateString('en-IN')}</span>, csv: (r) => r.date },
-    { key: 'number', header: 'Payment#', cell: (r) => <span className="font-medium">{r.number}</span>, csv: (r) => r.number },
-    { key: 'customer', header: 'Customer', cell: (r) => contactName(s, r.contactId), csv: (r) => contactName(s, r.contactId) },
-    { key: 'mode', header: 'Mode', cell: (r) => <Badge variant="secondary" className="uppercase text-[10px]">{r.mode}</Badge>, csv: (r) => r.mode },
-    { key: 'ref', header: 'Reference', cell: (r) => <span className="text-xs text-muted-foreground">{r.reference || '—'}</span>, csv: (r) => r.reference },
-    { key: 'tds', header: 'TDS Withheld', align: 'right', cell: (r) => <Money value={r.tdsPaise} showZero={false} />, csv: (r) => toRupees(r.tdsPaise), total: (rs) => <Money value={rs.reduce((t, r) => t + r.tdsPaise, 0)} /> },
-    { key: 'unapplied', header: 'On Account', align: 'right', cell: (r) => <Money value={r.unappliedPaise} showZero={false} />, csv: (r) => toRupees(r.unappliedPaise), total: (rs) => <Money value={rs.reduce((t, r) => t + r.unappliedPaise, 0)} /> },
-    { key: 'amount', header: 'Amount', align: 'right', cell: (r) => <Money value={r.amountPaise} className="font-medium" />, csv: (r) => toRupees(r.amountPaise), total: (rs) => <Money value={rs.reduce((t, r) => t + r.amountPaise, 0)} /> },
-  ];
 
   return (
     <ReportShell
@@ -39,9 +39,13 @@ export default function PaymentsReceivedReportPage() {
       description="Every customer receipt in the period, including tax they withheld and any amount still sitting on account."
       range={range}
       onRangeChange={setRange}
-      onExport={() => downloadCsv('payments-received.csv', gridCsv(rows, columns))}
+      onExport={() => {
+        if (state.data) downloadCsv('payments-received.csv', gridCsv(state.data.payments, columns));
+      }}
     >
-      <ReportGrid rows={rows} columns={columns} emptyMessage="No receipts in this period." />
+      <AsyncPage state={state}>
+        {(d) => <ReportGrid rows={d.payments} columns={columns} emptyMessage="No receipts in this period." />}
+      </AsyncPage>
     </ReportShell>
   );
 }

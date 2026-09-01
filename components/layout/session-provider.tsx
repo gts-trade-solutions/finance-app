@@ -8,17 +8,16 @@
 // signed in. This component makes that call, gates the shell on it, and hands
 // the answer to migrated pages through a context.
 //
-// The seeded demo collections are still loaded underneath, because pages that
-// have not moved to the API yet read documents from them. Master data is then
-// replaced with the server's — see MastersGate — so every form offers real
-// customers and items under the ids the API expects.
+// Nothing is seeded into the store here any more. Every screen reads its
+// documents from the API, and MastersGate fills in the organisation, contacts,
+// items, accounts and bank accounts from the server a moment later — so what
+// the app shows belongs to the organisation that is actually signed in.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createContext, useContext, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { auth, ApiError, type SessionResponse } from '@/lib/api/client';
 import { useAppStore } from '@/lib/store';
-import { ensureSeeded } from '@/lib/mock/seed';
 
 export type SessionState =
   | { status: 'loading' }
@@ -56,11 +55,6 @@ export function SessionGate({
       .me()
       .then((session) => {
         if (cancelled) return;
-
-        // Pages that still read the demo store need it populated. This fills
-        // in the collections the API does not serve yet — documents, mostly —
-        // and is overwritten for masters a moment later.
-        ensureSeeded();
 
         // The session points at the server's user id, because MastersGate is
         // about to replace the store's user list with the server's. The role

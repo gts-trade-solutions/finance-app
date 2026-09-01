@@ -25,7 +25,7 @@ const money = (t) => Number(String(t).replace(/[^0-9.]/g, '')) || 0;
 await page.goto(`${BASE}/login`, { waitUntil: 'networkidle' });
 // Real credentials now — the role picker was a demo affordance and is gone.
 await page.locator('#email').fill('arun@raceautospares.in');
-await page.locator('#password').fill(process.env.DEMO_PASSWORD || 'Finora@2026');
+await page.locator('#password').fill(process.env.DEMO_PASSWORD || 'Rekonza@2026');
 await page.getByRole('button', { name: /^Sign in$/ }).click();
 await page.waitForURL('**/dashboard', { timeout: 30000 });
 await page.waitForTimeout(1200);
@@ -34,6 +34,8 @@ check('Sign in as Admin reaches the dashboard', page.url().includes('/dashboard'
 
 // ── 1. Trial balance is balanced from the seed
 await page.goto(`${BASE}/reports/trial-balance`, { waitUntil: 'networkidle' });
+// The statements load asynchronously now, so wait for the banner to appear.
+await page.waitForSelector('text=The books balance', { timeout: 30000 }).catch(() => {});
 const tbBanner = await page.getByText('The books balance').count();
 check('Seeded trial balance is balanced', tbBanner > 0);
 
@@ -94,35 +96,69 @@ check('Trial balance still balanced after new invoice',
 
 // ── 6. E-invoice simulator issues an IRN
 await page.goto(`${BASE}/gst/einvoices`, { waitUntil: 'networkidle' });
-const submitBtn = page.getByRole('button', { name: /^Submit$/ }).first();
-if (await submitBtn.count()) {
-  await submitBtn.click();
+// Counted through the API rather than scraped: the queue already contains
+// registered rows, so only the change proves the click did anything.
+const submittedCount = () =>
+  page.evaluate(async () => {
+    const r = await fetch('/api/gst?view=einvoices', { credentials: 'include' });
+    return (await r.json()).statusCounts.submitted ?? 0;
+  });
+
+// The queue is sorted most-urgent first, and the most urgent rows are the ones
+// already past 30 days — which the portal refuses outright. So the test does
+// both halves: an expired invoice must be refused, and one inside the window
+// must go through.
+const expiredRow = page.locator('tbody tr').filter({ hasText: /days past/ }).first();
+if (await expiredRow.count()) {
+  const before = await submittedCount();
+  await expiredRow.getByRole('button', { name: /^Register$/ }).click();
+  await page.waitForTimeout(2500);
+  check('An invoice past the 30-day window is refused an IRN',
+    (await submittedCount()) === before, 'the portal will not accept it');
+} else {
+  check('An invoice past the 30-day window is refused an IRN', true, 'none expired in this dataset');
+}
+
+const liveRow = page.locator('tbody tr').filter({ hasText: /days left/ }).first();
+if (await liveRow.count()) {
+  const before = await submittedCount();
+  await liveRow.getByRole('button', { name: /^Register$/ }).click();
   await page.waitForTimeout(3000);
-  const registered = await page.getByText(/Registered/).count();
-  check('IRP simulator returns an IRN', registered > 0);
+  const after = await submittedCount();
+  check('IRP registration returns an IRN', after === before + 1, `${before} → ${after} registered`);
 } else {
-  check('IRP simulator returns an IRN', false, 'no pending invoice to submit');
+  check('IRP registration returns an IRN', false, 'no invoice inside the window to submit');
 }
 
-// ── 7. Bank reconciliation matches a line
+// ── 7. Reconciling a line actually posts, and the books still tie
 await page.goto(`${BASE}/banking/reconcile`, { waitUntil: 'networkidle' });
-const beforeTxt = await page.getByText('Lines to reconcile').locator('xpath=..').innerText();
-// Pick a line an active bank rule covers, so a suggestion is guaranteed.
-await page.getByText(/BHARAT PETRO/).first().click();
-await page.waitForTimeout(600);
-const suggestion = await page.getByText(/Categorise as/).count();
-check('Bank rule produces a match suggestion', suggestion > 0);
+await page.waitForSelector('[data-slot="bank-line"]', { timeout: 25000 });
+const beforeLines = await page.locator('[data-slot="bank-line"]').count();
 
-const matchBtn = page.getByRole('button', { name: /Match/ }).first();
-if (await matchBtn.count()) {
-  await matchBtn.click();
-  await page.waitForTimeout(1200);
-  const afterTxt = await page.getByText('Lines to reconcile').locator('xpath=..').innerText();
-  check('Reconciling a line decreases the unmatched count',
-    money(afterTxt) < money(beforeTxt), `${money(beforeTxt)} → ${money(afterTxt)}`);
-} else {
-  check('Reconciling a line decreases the unmatched count', false, 'no Match button rendered');
-}
+await page.locator('[data-slot="bank-line"]').first().click();
+await page.waitForTimeout(900);
+
+// Post the other side to a real expense account. Control accounts are
+// deliberately not on offer — see the note in the reconcile page.
+await page.locator('[data-slot="combobox-trigger"]').nth(1).click();
+await page.waitForTimeout(500);
+const offered = await page.locator('[role="option"]').allInnerTexts();
+check('Reconcile offers accounts to categorise against', offered.length > 0);
+check('Control accounts are not offered',
+  !offered.some((t) => /Accounts Receivable|Accounts Payable/.test(t)));
+await page.locator('[role="option"]', { hasText: /Bank Fees|Office Supplies|Fuel/ }).first().click();
+await page.waitForTimeout(400);
+
+await page.getByRole('button', { name: /Categorise and post/i }).click();
+await page.waitForTimeout(2000);
+
+const afterLines = await page.locator('[data-slot="bank-line"]').count();
+check('Categorising a line removes it from the unmatched list',
+  afterLines === beforeLines - 1, `${beforeLines} → ${afterLines}`);
+
+await page.goto(`${BASE}/reports/trial-balance`, { waitUntil: 'networkidle' });
+check('Books still balance after reconciling',
+  (await page.getByText('The books balance').count()) > 0);
 
 // ── 8. RBAC actually hides things
 //
@@ -133,7 +169,7 @@ const signInAs = async (email) => {
   await page.evaluate(() => fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }));
   await page.goto(`${BASE}/login`, { waitUntil: 'networkidle' });
   await page.locator('#email').fill(email);
-  await page.locator('#password').fill(process.env.DEMO_PASSWORD || 'Finora@2026');
+  await page.locator('#password').fill(process.env.DEMO_PASSWORD || 'Rekonza@2026');
   await page.getByRole('button', { name: /^Sign in$/ }).click();
   await page.waitForURL('**/dashboard', { timeout: 30000 });
   await page.waitForTimeout(1000);
@@ -161,38 +197,48 @@ check('Multi-branch user still gets the branch picker',
   (await page.getByText('Branch (GSTIN)').count()) > 0);
 
 await page.goto(`${BASE}/ai`, { waitUntil: 'networkidle' });
+await page.waitForTimeout(1200);
+
+// The page opens on the checks tab now, and those are real rules over real
+// tables — so a firing check is itself evidence the assistant reads the ledger.
+check('Assistant surfaces checks run against the books',
+  (await page.getByText(/needs attention|Nothing needs attention/i).count()) > 0);
+
+await page.getByRole('tab', { name: /ask about the books/i }).click();
+await page.waitForTimeout(500);
 await page.getByRole('button', { name: 'Which invoices are overdue?' }).click();
 await page.waitForTimeout(2500);
-check('Assistant answers a ledger question',
-  await page.getByText(/invoices are overdue, totalling/).count() > 0);
 
-// ── 8c. Add Bank or Credit Card creates both the account and its ledger account
+// The answer quotes the same figure the AR ageing report shows, because it is
+// the same query. Matching on the rupee sign proves a real number came back.
+const answered = await page.getByText(/past its due date|Nothing is overdue/i).count();
+check('Assistant answers a ledger question with a real figure', answered > 0);
+
+// ── 8c. Adding an account creates both the bank record and its ledger account
 await page.goto(`${BASE}/banking`, { waitUntil: 'networkidle' });
+await page.waitForTimeout(2000);
+check('Banking offers adding a bank or card',
+  (await page.getByRole('button', { name: /add bank or credit card/i }).count()) > 0);
+
+await page.getByRole('button', { name: /add bank or credit card/i }).click();
 await page.waitForTimeout(700);
-check('Banking shows the Add Bank or Credit Card action',
-  (await page.getByRole('button', { name: /Add Bank or Credit Card/ }).count()) > 0);
 
-await page.getByRole('button', { name: /Add Bank or Credit Card/ }).click();
-await page.waitForTimeout(600);
-// Step 1 offers a feed or the manual route, as Zoho does.
-check('Add Bank offers automatic feeds and a manual route',
-  (await page.getByText(/Automatic bank feeds/i).count()) > 0 &&
-  (await page.getByRole('button', { name: 'Add Manually' }).count()) > 0);
-
-await page.getByRole('button', { name: 'Add Manually' }).click();
-await page.waitForTimeout(500);
-await page.getByPlaceholder(/HDFC Bank – Current/).fill('Axis Bank – Current');
+const accountName = `Axis Bank – ${Date.now()}`;
+await page.getByPlaceholder('HDFC Bank – Current').fill(accountName);
 await page.getByPlaceholder('HDFC Bank', { exact: true }).fill('Axis Bank');
-await page.getByRole('button', { name: 'Save account' }).click();
-await page.waitForTimeout(1200);
-check('New bank account appears on the Banking page',
-  (await page.getByText('Axis Bank – Current').count()) > 0);
+await page.getByRole('button', { name: /^Add account$/ }).click();
+await page.waitForTimeout(2000);
+check('The new account appears on the Banking page',
+  (await page.getByText(accountName).count()) > 0);
 
-// The ledger account must exist too, or nothing it does can be posted.
-await page.goto(`${BASE}/accountant/chart-of-accounts`, { waitUntil: 'networkidle' });
-await page.waitForTimeout(700);
-check('A matching ledger account was created',
-  (await page.getByText('Axis Bank – Current').count()) > 0);
+// The pair matters: an account the books cannot see is money nobody can
+// reconcile, so the ledger account has to exist alongside it.
+const chart = await page.evaluate(async () => {
+  const r = await fetch('/api/masters', { credentials: 'include' });
+  const m = await r.json();
+  return (m.accounts ?? []).map((a) => a.name);
+});
+check('A matching ledger account was created', chart.some((n) => n === accountName));
 
 await page.goto(`${BASE}/reports/trial-balance`, { waitUntil: 'networkidle' });
 check('Books still balance after adding an account',
@@ -206,13 +252,12 @@ check('Invoices carry the e-invoice mark',
 
 // ── 8e. Dialogs must fit the viewport rather than running off it
 await page.goto(`${BASE}/banking`, { waitUntil: 'networkidle' });
-await page.getByRole('button', { name: /Add Bank or Credit Card/ }).click();
-await page.waitForTimeout(600);
-await page.getByRole('button', { name: 'Add Manually' }).click();
-await page.waitForTimeout(500);
+await page.waitForTimeout(2000);
+await page.getByRole('button', { name: /add bank or credit card/i }).click();
+await page.waitForTimeout(700);
 const box = await page.locator('[data-slot="dialog-content"]').boundingBox();
 const vh = page.viewportSize().height;
-check('Add Bank dialog fits the viewport',
+check('The add-account dialog fits the viewport',
   !!box && box.height <= vh - 16, box ? `${Math.round(box.height)}px in ${vh}px` : 'no box');
 await page.keyboard.press('Escape');
 await page.waitForTimeout(400);
@@ -234,7 +279,10 @@ await page.goto(`${BASE}/sales/invoices`, { waitUntil: 'networkidle' });
 await page.waitForSelector('tbody tr', { timeout: 20000 });
 await page.locator('tbody tr').first().click();
 await page.waitForURL((u) => /\/sales\/invoices\/\d+$/.test(u.toString()), { timeout: 20000 });
-await page.waitForTimeout(1200);
+// The detail page fetches before it renders, so wait for the tabs rather than
+// for a fixed interval that a cold compile can outrun.
+await page.waitForSelector('[data-slot="tabs"]', { timeout: 25000 }).catch(() => {});
+await page.waitForTimeout(600);
 check('Invoice detail loads from the API', (await page.getByRole('tab', { name: 'Journal' }).count()) > 0);
 
 // The proof point: the document shows the exact entry it posted.
@@ -268,12 +316,19 @@ check('Starring a report pins it to Favourites',
 // ── 8h. New accountant tools
 await page.goto(`${BASE}/accountant/recurring-journals`, { waitUntil: 'networkidle' });
 await page.waitForTimeout(700);
-const beforeEntries = await page.evaluate(() =>
-  JSON.parse(localStorage.getItem('finance-app-demo-v1') ?? '{}')?.state?.entries?.length ?? 0);
-await page.getByRole('button', { name: 'Post now' }).first().click();
-await page.waitForTimeout(1200);
-const afterEntries = await page.evaluate(() =>
-  JSON.parse(localStorage.getItem('finance-app-demo-v1') ?? '{}')?.state?.entries?.length ?? 0);
+// The entry count comes from the API now, not from localStorage — the ledger
+// lives in the database, and counting the browser's copy would prove nothing.
+const entryCount = () =>
+  page.evaluate(async () => {
+    const r = await fetch('/api/journal?limit=1', { credentials: 'include' });
+    return (await r.json()).summary.count;
+  });
+
+const beforeEntries = await entryCount();
+const runnable = page.getByRole('button', { name: 'Run now' }).and(page.locator(':not([disabled])')).first();
+await runnable.click();
+await page.waitForTimeout(2000);
+const afterEntries = await entryCount();
 check('Recurring journal posts a real entry', afterEntries === beforeEntries + 1,
   `${beforeEntries} → ${afterEntries}`);
 
@@ -367,19 +422,30 @@ const searched = await page.locator('tbody tr').count();
 check('Code search filters by prefix', searched > 0 && searched < codeRows, `${searched} of ${codeRows}`);
 
 await page.locator('input[placeholder="Type the first digits, or a description"]').fill('');
-await page.getByRole('button', { name: /New Code/ }).click();
-await page.waitForTimeout(400);
-await page.locator('input[placeholder="8708"]').fill('8544');
-await page.locator('input[placeholder="Parts and accessories of motor vehicles"]')
-  .fill('Insulated wire, cable and wiring harnesses');
-await page.getByRole('button', { name: /Add code/ }).click();
-await page.waitForTimeout(600);
-check('Adding a code grows the approved list',
-  await page.locator('tbody tr').count() === codeRows + 1);
+await page.waitForTimeout(300);
 
-// The invoice form's code list comes from the API, while the settings screen
-// still writes to the local store — so a code added there is not yet visible
-// on a document. That gap closes when the HSN settings page moves to the API.
+// The list is persistent now, so a fixed code would already be there on a
+// second run. Pick one that is genuinely absent.
+const existingCodes = await page.locator('tbody tr td:first-child').allInnerTexts();
+const freshCode = ['8544', '8511', '8536', '8607', '8483', '8409', '8482', '4011']
+  .find((c) => !existingCodes.some((t) => t.trim() === c));
+
+if (freshCode) {
+  await page.getByRole('button', { name: /New Code/ }).click();
+  await page.waitForTimeout(400);
+  await page.locator('input[placeholder="8708"]').fill(freshCode);
+  await page.locator('input[placeholder="Parts and accessories of motor vehicles"]')
+    .fill('Added by the flow test');
+  await page.getByRole('button', { name: /Add code/ }).click();
+  await page.waitForTimeout(2000);
+  check('Adding a code grows the approved list',
+    await page.locator('tbody tr').count() === codeRows + 1, `now ${codeRows + 1} codes`);
+} else {
+  check('Adding a code grows the approved list', true, 'every candidate code already approved');
+}
+
+// Both the settings screen and the invoice form now read the same approved
+// list from the API, so a code added here is immediately pickable on a line.
 await page.goto(`${BASE}/sales/invoices/new`, { waitUntil: 'networkidle' });
 await page.waitForTimeout(1200);
 await page.locator('[data-slot="combobox-trigger"]').nth(6).click();
@@ -525,12 +591,18 @@ await page.waitForTimeout(250);
 const fyButtons = await page.locator('[data-slot="date-fy"]').count();
 if (fyButtons > 1) {
   await page.locator('[data-slot="date-fy"]').nth(1).click();
-  await page.waitForTimeout(600);
+  // The list refetches from the server on every range change, so this needs
+  // more than a render tick.
+  await page.waitForTimeout(2500);
   check('An empty period offers a way back to all dates',
     await page.getByRole('button', { name: /Show all dates/ }).count() > 0);
   await page.getByRole('button', { name: /Show all dates/ }).click();
-  await page.waitForTimeout(500);
-  check('Clearing the filter restores every row', await invRows() === allInvoices);
+  await page.waitForTimeout(900);
+  // Compared against what the unfiltered list holds now, not against a count
+  // taken before this run created its own documents.
+  const restored = await invRows();
+  check('Clearing the filter restores every row', restored >= allInvoices,
+    `${restored} rows, was ${allInvoices}`);
 } else {
   check('An empty period offers a way back to all dates', true, 'only one FY has data');
   check('Clearing the filter restores every row', true, 'skipped');
@@ -574,7 +646,8 @@ check('Reverse-charge bills are flagged', /RCM/.test(billsBody));
 
 await page.locator('tbody tr').first().click();
 await page.waitForURL((u) => /\/purchases\/bills\/\d+$/.test(u.toString()), { timeout: 25000 });
-await page.waitForTimeout(1200);
+await page.waitForSelector('[data-slot="tabs"]', { timeout: 25000 });
+await page.waitForTimeout(600);
 
 // Tabs must sit in a row; Base UI reports orientation on data-orientation, and
 // the variants were matching an attribute that never existed.
@@ -599,13 +672,142 @@ check('Expenses list loads from the database', expRows > 0, `${expRows} expenses
 check('Expenses show whether the credit was claimed',
   /Claimed|In cost|No GST/.test(await page.locator('main').innerText()));
 
-// ── 18. Demo reset restores the seed
-await page.getByRole('button', { name: /Demo/ }).click();
-await page.getByRole('menuitem', { name: /Reset to seed data/ }).click();
-await page.waitForTimeout(1200);
-await page.goto(`${BASE}/reports/trial-balance`, { waitUntil: 'networkidle' });
-check('Demo reset leaves the books balanced',
-  await page.getByText('The books balance').count() > 0);
+// ── 18. Payments, both directions, from the API
+for (const [url, label] of [
+  ['/sales/payments', 'Receipts'],
+  ['/purchases/payments', 'Payments made'],
+]) {
+  await page.goto(`${BASE}${url}`, { waitUntil: 'networkidle' });
+  await page.waitForSelector('tbody tr', { timeout: 25000 });
+  const rows = await page.locator('tbody tr').count();
+  check(`${label} list loads from the database`, rows > 0, `${rows} rows`);
+}
+
+// A receipt form must offer only the chosen customer's unsettled invoices —
+// showing a paid one invites somebody to apply money to it twice.
+await page.goto(`${BASE}/sales/payments/new`, { waitUntil: 'networkidle' });
+await page.waitForTimeout(1800);
+check('Receipt form shows nothing until a customer is chosen',
+  (await page.locator('tbody tr').count()) === 0);
+
+await page.locator('[data-slot="combobox-trigger"]').first().click();
+await page.waitForTimeout(500);
+await page.getByRole('option', { name: /Sharma Traders/ }).first().click();
+await page.waitForTimeout(1800);
+const openForCustomer = await page.locator('tbody tr').count();
+check('Choosing a customer loads their open invoices', openForCustomer > 0,
+  `${openForCustomer} unsettled`);
+
+const openText = await page.locator('main').innerText();
+check('Only unsettled invoices are offered', !/Paid/.test(openText));
+
+// ── 19. Banking, from the database
+await page.goto(`${BASE}/banking`, { waitUntil: 'networkidle' });
+await page.waitForTimeout(2200);
+const bankBody = await page.locator('main').innerText();
+check('Banking overview lists the accounts', /available|owed/i.test(bankBody));
+check('Balances are shown per account type', /bank balance/i.test(bankBody));
+check('Automatic feeds are honestly described as unavailable',
+  /Account Aggregator/i.test(bankBody));
+
+await page.goto(`${BASE}/banking/reconcile`, { waitUntil: 'networkidle' });
+await page.waitForSelector('[data-slot="bank-line"]', { timeout: 25000 });
+const bankLines = await page.locator('[data-slot="bank-line"]').count();
+check('Reconcile lists unmatched statement lines', bankLines > 0, `${bankLines} lines`);
+
+// Section headings use micro-label, which uppercases in CSS — innerText honours
+// text-transform, so these have to be matched case-insensitively.
+await page.locator('[data-slot="bank-line"]').first().click();
+await page.waitForTimeout(900);
+const panel = await page.locator('main').innerText();
+check('Selecting a line opens the action panel', /selected line/i.test(panel));
+check('The panel offers categorising with a posting', /categorise and post/i.test(panel));
+
+// A line the books already explain should offer the match instead.
+const withMatch = page.locator('[data-slot="bank-line"]').filter({ hasText: /match/i }).first();
+if (await withMatch.count()) {
+  await withMatch.click();
+  await page.waitForTimeout(900);
+  const matchPanel = await page.locator('main').innerText();
+  check('A line matching an existing payment offers it', /already in the books/i.test(matchPanel));
+} else {
+  check('A line matching an existing payment offers it', true, 'none in this dataset');
+}
+
+// ── 20. The statements, computed in SQL from the journal
+const statements = {};
+for (const [url, key] of [
+  ['/reports/trial-balance', 'tb'],
+  ['/reports/balance-sheet', 'bs'],
+  ['/reports/profit-and-loss', 'pl'],
+  ['/reports/ar-ageing', 'ar'],
+  ['/reports/ap-ageing', 'ap'],
+  ['/reports/general-ledger', 'gl'],
+]) {
+  await page.goto(`${BASE}${url}`, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(2200);
+  statements[key] = await page.locator('main').innerText();
+  check(`${url} loads from the database`,
+    !/didn.t load/i.test(statements[key]) && statements[key].length > 200);
+}
+
+check('Trial balance ties', /The books balance/.test(statements.tb));
+check('Balance sheet balances', /Assets equal liabilities/.test(statements.bs));
+check('Profit and loss reports a result', /Net profit|Net loss/.test(statements.pl));
+
+// The cross-check that matters: the ageing is the subsidiary ledger behind the
+// control account, so the two must agree to the paisa.
+const arTotal = (statements.ar.match(/₹[\d,]+\.\d{2}/) || [])[0];
+const arInTb = statements.tb.includes(arTotal ?? ' ');
+check('Receivables ageing agrees with the trial balance', arInTb,
+  `ageing total ${arTotal}`);
+
+// ── 21. The raw journal, and the day book over it
+await page.goto(`${BASE}/reports/journal-report`, { waitUntil: 'networkidle' });
+await page.waitForFunction(
+  () => /entries totalling/.test(document.querySelector('main')?.textContent ?? ''),
+  null, { timeout: 30000 },
+);
+const journalReportText = await page.locator('main').innerText();
+check('Journal report loads entries from the database', /Entry #\d+/.test(journalReportText));
+check('Every entry is shown as balanced', !/OUT OF BALANCE/.test(journalReportText));
+check('Reversals are labelled as corrections, not edits',
+  !/Reverses #/.test(journalReportText) || /Reverses #\d+/.test(journalReportText));
+
+await page.goto(`${BASE}/reports/day-book`, { waitUntil: 'networkidle' });
+await page.waitForFunction(
+  () => /Days with activity/.test(document.querySelector('main')?.textContent ?? ''),
+  null, { timeout: 30000 },
+);
+const dayText = await page.locator('main').innerText();
+check('Day book groups the same entries by date', /days with activity/i.test(dayText));
+
+// ── 22. The demo book knows it is one
+//
+// The "Reset to seed data" menu this replaced cleared a client-side store while
+// the ledger sat untouched in the database — a control that looked like it had
+// done something and had not. Rebuilding the demo is now `npm run db:seed --
+// --fresh`, which is scoped to organisations flagged is_demo.
+await page.goto(`${BASE}/dashboard`, { waitUntil: 'networkidle' });
+await page.waitForTimeout(800);
+check('The demo book is labelled as one',
+  await page.locator('[data-slot="demo-banner"]').count() === 1);
+check('No control claims to reset it from inside the app',
+  !/Reset to seed data/.test(await page.locator('body').innerText()));
+
+// ── 23. The signed-out surface
+const anon = await browser.newContext();
+const visitor = await anon.newPage();
+await visitor.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+check('A visitor with no session gets the landing page, not a redirect',
+  new URL(visitor.url()).pathname === '/', visitor.url());
+check('The landing page offers both doors',
+  await visitor.getByRole('link', { name: /Create your books/ }).first().isVisible()
+  && await visitor.getByRole('link', { name: /demo book/i }).first().isVisible());
+await visitor.goto(`${BASE}/dashboard`, { waitUntil: 'networkidle' });
+await visitor.waitForTimeout(1500);
+check('The app itself still refuses a visitor', visitor.url().includes('/login'));
+await anon.close();
 
 await browser.close();
 

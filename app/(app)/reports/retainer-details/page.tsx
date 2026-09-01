@@ -1,83 +1,84 @@
 'use client';
 
-// Retainer Invoice Details.
+// Retainers, and how much of each has actually been earned.
 //
-// A retainer is money taken before any work is done, so it is a *liability*,
-// not income — you owe the customer either the service or the money back. This
-// report is how you see what is still owed in that sense: collected, less what
-// has been applied against real invoices.
+// Three columns that are easy to conflate. The amount is what was billed;
+// received is what the customer has paid; earned is how much of that has since
+// been consumed by real invoices. Only the last one is income — the rest is
+// still sitting in unearned revenue as a liability.
 
-import { useMemo } from 'react';
 import { Money } from '@/components/shared/money';
-import { StatusBadge } from '@/components/shared/status-badge';
+import { Card } from '@/components/ui/card';
 import { downloadCsv, ReportShell, useReportRange } from '@/components/shared/report-shell';
 import { ReportGrid, gridCsv, type GridColumn } from '@/components/shared/report-grid';
-import { useAppStore } from '@/lib/store';
-import { contactName } from '@/lib/selectors';
+import { AsyncPage } from '@/components/shared/async-state';
+import { StatusBadge } from '@/components/shared/status-badge';
+import { salesDocuments, type SalesDocListResponse, type SalesDocRow } from '@/lib/api/client';
+import { useApi } from '@/lib/api/use-api';
 import { toRupees } from '@/lib/money';
-import type { RetainerInvoice } from '@/lib/types';
+
+const short = (d: string) => new Date(d).toLocaleDateString('en-IN');
+const held = (r: SalesDocRow) => (r.paidPaise ?? 0) - (r.appliedPaise ?? 0);
+
+const columns: GridColumn<SalesDocRow>[] = [
+  { key: 'date', header: 'Date', cell: (r) => <span className="tabular text-xs">{short(r.date)}</span>, csv: (r) => r.date },
+  { key: 'number', header: 'Retainer#', cell: (r) => <span className="font-medium">{r.number}</span>, csv: (r) => r.number },
+  { key: 'customer', header: 'Customer', cell: (r) => r.customerName, csv: (r) => r.customerName },
+  { key: 'description', header: 'For', cell: (r) => <span className="text-xs text-muted-foreground">{r.detail}</span>, csv: (r) => r.detail ?? '' },
+  { key: 'status', header: 'Status', cell: (r) => <StatusBadge status={r.status} />, csv: (r) => r.status },
+  { key: 'amount', header: 'Billed', align: 'right', cell: (r) => <Money value={r.totalPaise} />, csv: (r) => toRupees(r.totalPaise), total: (rs) => <Money value={rs.reduce((t, r) => t + r.totalPaise, 0)} /> },
+  { key: 'paid', header: 'Received', align: 'right', cell: (r) => <Money value={r.paidPaise ?? 0} showZero={false} />, csv: (r) => toRupees(r.paidPaise ?? 0), total: (rs) => <Money value={rs.reduce((t, r) => t + (r.paidPaise ?? 0), 0)} /> },
+  { key: 'applied', header: 'Earned', align: 'right', cell: (r) => <Money value={r.appliedPaise ?? 0} showZero={false} />, csv: (r) => toRupees(r.appliedPaise ?? 0), total: (rs) => <Money value={rs.reduce((t, r) => t + (r.appliedPaise ?? 0), 0)} /> },
+  { key: 'held', header: 'Still Held', align: 'right', cell: (r) => <Money value={held(r)} className="font-medium" showZero={false} />, csv: (r) => toRupees(held(r)), total: (rs) => <Money value={rs.reduce((t, r) => t + held(r), 0)} /> },
+];
 
 export default function RetainerDetailsPage() {
-  const s = useAppStore();
   const [range, setRange] = useReportRange();
-
-  const rows = useMemo(
-    () =>
-      s.retainers
-        .filter((r) => r.status !== 'draft' && r.status !== 'void' && r.date >= range.from && r.date <= range.to)
-        .sort((a, b) => b.date.localeCompare(a.date)),
-    [s.retainers, range],
+  const state = useApi<SalesDocListResponse>(
+    () => salesDocuments.list('retainer', { from: range.from, to: range.to, limit: 500 }),
+    [range.from, range.to],
   );
-
-  const unapplied = (r: RetainerInvoice) => Math.max(0, r.amountPaise - r.appliedPaise);
-
-  const columns: GridColumn<RetainerInvoice>[] = [
-    { key: 'date', header: 'Date', cell: (r) => <span className="tabular text-xs">{new Date(r.date).toLocaleDateString('en-IN')}</span>, csv: (r) => r.date },
-    { key: 'number', header: 'Retainer#', cell: (r) => <span className="font-medium">{r.number}</span>, csv: (r) => r.number },
-    { key: 'customer', header: 'Customer', cell: (r) => contactName(s, r.customerId), csv: (r) => contactName(s, r.customerId) },
-    { key: 'description', header: 'For', cell: (r) => <span className="text-xs text-muted-foreground">{r.description}</span>, csv: (r) => r.description },
-    { key: 'status', header: 'Status', cell: (r) => <StatusBadge status={r.status} />, csv: (r) => r.status },
-    {
-      key: 'amount',
-      header: 'Collected',
-      align: 'right',
-      cell: (r) => <Money value={r.amountPaise} />,
-      csv: (r) => toRupees(r.amountPaise),
-      total: (rs) => <Money value={rs.reduce((t, r) => t + r.amountPaise, 0)} />,
-    },
-    {
-      key: 'applied',
-      header: 'Applied',
-      align: 'right',
-      cell: (r) => <Money value={r.appliedPaise} showZero={false} />,
-      csv: (r) => toRupees(r.appliedPaise),
-      total: (rs) => <Money value={rs.reduce((t, r) => t + r.appliedPaise, 0)} />,
-    },
-    {
-      key: 'unapplied',
-      header: 'Still Held',
-      align: 'right',
-      cell: (r) => <Money value={unapplied(r)} showZero={false} />,
-      csv: (r) => toRupees(unapplied(r)),
-      total: (rs) => <Money value={rs.reduce((t, r) => t + unapplied(r), 0)} />,
-    },
-  ];
-
-  const held = rows.reduce((t, r) => t + unapplied(r), 0);
 
   return (
     <ReportShell
-      title="Retainer Invoice Details"
-      description="Advances taken from customers, and how much of each is still unearned."
+      title="Retainer Details"
+      description="Advances billed, what has been received, and how much of that has actually been earned."
       range={range}
       onRangeChange={setRange}
-      onExport={() => downloadCsv('retainer-details.csv', gridCsv(rows, columns))}
+      onExport={() => {
+        if (state.data) downloadCsv('retainer-details.csv', gridCsv(state.data.documents, columns));
+      }}
     >
-      <p className="text-xs text-muted-foreground">
-        <Money value={held} className="font-medium" /> is still held against future work. It sits in Unearned
-        Revenue on the balance sheet — a liability — and only becomes income when a real invoice draws it down.
-      </p>
-      <ReportGrid rows={rows} columns={columns} emptyMessage="No retainers raised in this period." />
+      <AsyncPage state={state}>
+        {(d) => {
+          const stillHeld = d.documents.reduce((t, r) => t + held(r), 0);
+          const unpaid = d.documents.reduce(
+            (t, r) => t + Math.max(0, r.totalPaise - (r.paidPaise ?? 0)),
+            0,
+          );
+          return (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Card className="p-4">
+                  <p className="micro-label">Held as unearned revenue</p>
+                  <Money value={stillHeld} className="mt-1 block text-2xl font-semibold" />
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    Money received but not yet earned — a liability, not income.
+                  </p>
+                </Card>
+                <Card className="p-4">
+                  <p className="micro-label">Billed but not received</p>
+                  <Money value={unpaid} className="mt-1 block text-2xl font-semibold" />
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    Sitting in receivables like any other unpaid invoice.
+                  </p>
+                </Card>
+              </div>
+              <ReportGrid rows={d.documents} columns={columns} emptyMessage="No retainers in this period." />
+            </>
+          );
+        }}
+      </AsyncPage>
     </ReportShell>
   );
 }
