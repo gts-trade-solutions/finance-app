@@ -15,6 +15,7 @@ import { FileMinus, Plus, Undo2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Combobox } from '@/components/ui/combobox';
+import { ContactPicker } from '@/components/forms/quick-create';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog';
@@ -32,7 +33,6 @@ import {
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { useAppStore } from '@/lib/store';
 import { usePermission } from '@/lib/store/hooks';
-import { customerOptions } from '@/lib/options';
 import { formatINR } from '@/lib/money';
 
 /** GST requires a reason on every credit note; it is reported in GSTR-1. */
@@ -52,7 +52,6 @@ const short = (d: string) => new Date(d).toLocaleDateString('en-IN');
 export default function CreditNotesPage() {
   const canCreate = usePermission('sales', 'create');
   const branchId = useAppStore((s) => s.activeBranchId);
-  const contacts = useAppStore((s) => s.contacts);
   const bankAccounts = useAppStore((s) => s.bankAccounts);
 
   const state = useApi<SalesDocListResponse>(() => salesDocuments.list('credit-note'), []);
@@ -178,13 +177,11 @@ export default function CreditNotesPage() {
                 </DialogHeader>
                 <div className="space-y-4">
                   <Field label="Customer" required>
-                    <Combobox
-                      options={customerOptions({ contacts } as never)}
+                    <ContactPicker
+                      kind="customer"
                       value={customerId}
                       onChange={(v) => { setCustomerId(v); setInvoiceId(''); }}
-                      placeholder="Select a customer"
-                      searchPlaceholder="Search customers"
-                      clearable
+                      canCreate={canCreate}
                     />
                   </Field>
                   <Field

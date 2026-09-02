@@ -14,6 +14,7 @@ import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Combobox } from '@/components/ui/combobox';
+import { ContactPicker, QuickItemDialog } from '@/components/forms/quick-create';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog';
@@ -28,7 +29,7 @@ import { purchaseDocuments, type PurchaseDocListResponse, type PurchaseDocRow } 
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { useAppStore } from '@/lib/store';
 import { usePermission } from '@/lib/store/hooks';
-import { itemOptions, vendorOptions } from '@/lib/options';
+import { itemOptions } from '@/lib/options';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const short = (d: string | null) => (d ? new Date(d).toLocaleDateString('en-IN') : '—');
@@ -43,7 +44,6 @@ export default function PurchaseOrdersPage() {
   const router = useRouter();
   const canCreate = usePermission('purchases', 'create');
   const branchId = useAppStore((s) => s.activeBranchId);
-  const contacts = useAppStore((s) => s.contacts);
   const items = useAppStore((s) => s.items);
 
   const state = useApi<PurchaseDocListResponse>(() => purchaseDocuments.list('purchase-order'), []);
@@ -51,6 +51,8 @@ export default function PurchaseOrdersPage() {
   const [open, setOpen] = useState(false);
   const [vendorId, setVendorId] = useState('');
   const [itemId, setItemId] = useState('');
+  // Non-null while the inline "New item" dialog is open.
+  const [newItemName, setNewItemName] = useState<string | null>(null);
   const [qty, setQty] = useState(1);
   const [rate, setRate] = useState(0);
   const [expected, setExpected] = useState('');
@@ -154,13 +156,11 @@ export default function PurchaseOrdersPage() {
                 </DialogHeader>
                 <div className="space-y-4">
                   <Field label="Vendor" required>
-                    <Combobox
-                      options={vendorOptions({ contacts } as never)}
+                    <ContactPicker
+                      kind="vendor"
                       value={vendorId}
                       onChange={setVendorId}
-                      placeholder="Select a vendor"
-                      searchPlaceholder="Search vendors"
-                      clearable
+                      canCreate={canCreate}
                     />
                   </Field>
                   <Field label="Item" required>
@@ -174,6 +174,8 @@ export default function PurchaseOrdersPage() {
                       placeholder="Select an item"
                       searchPlaceholder="Search items by name, SKU or HSN"
                       showAvatar={false}
+                      createLabel={canCreate ? 'New item' : undefined}
+                      onCreate={canCreate ? (q) => setNewItemName(q) : undefined}
                     />
                   </Field>
                   <div className="grid grid-cols-2 gap-4">
@@ -200,6 +202,16 @@ export default function PurchaseOrdersPage() {
                     {create.busy ? 'Saving…' : 'Raise order'}
                   </Button>
                 </DialogFooter>
+
+                {/* The item is saved to the catalogue and then priced onto this order,
+                    so its purchase price and HSN arrive exactly as a picked item's would. */}
+                <QuickItemDialog
+                  open={newItemName !== null}
+                  onOpenChange={(o) => !o && setNewItemName(null)}
+                  initialName={newItemName ?? ''}
+                  priceMode="purchase"
+                  onCreated={(item) => { setItemId(item.id); setRate(item.purchasePricePaise); }}
+                />
               </DialogContent>
             </Dialog>
           )

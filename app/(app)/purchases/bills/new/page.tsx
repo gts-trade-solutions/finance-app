@@ -16,6 +16,7 @@ import {
 import {
   LineItemsEditor, effectiveDiscountPct, newEditorLine, type EditorLine,
 } from '@/components/forms/document-lines';
+import { QuickContactDialog } from '@/components/forms/quick-create';
 import { useAppStore } from '@/lib/store';
 import { today } from '@/lib/selectors';
 import {
@@ -34,6 +35,8 @@ export default function NewBillPage() {
 
   const [branchId, setBranchId] = useState(s.activeBranchId || s.branches[0]?.id || '');
   const [vendorId, setVendorId] = useState('');
+  // Non-null while the inline "New vendor" dialog is open.
+  const [newVendorName, setNewVendorName] = useState<string | null>(null);
   const [vendorInvoiceNo, setVendorInvoiceNo] = useState('');
   const [orderNumber, setOrderNumber] = useState('');
   const [date, setDate] = useState(today());
@@ -218,8 +221,8 @@ export default function NewBillPage() {
             onChange={onVendorChange}
             placeholder="Select or add a vendor"
             searchPlaceholder="Search vendors by name or GSTIN"
-            createLabel="New Vendor"
-            onCreate={() => router.push('/purchases/vendors')}
+            createLabel="New vendor"
+            onCreate={(q) => setNewVendorName(q)}
             clearable
           />
           {vendor && (
@@ -446,6 +449,17 @@ export default function NewBillPage() {
           )}
         </div>
       </div>
+
+      {/* onVendorChange rather than a bare setState: a new vendor's payment
+          terms set the due date, and an unregistered one puts the bill on
+          reverse charge — both of which the document has to know now. */}
+      <QuickContactDialog
+        kind="vendor"
+        open={newVendorName !== null}
+        onOpenChange={(o) => !o && setNewVendorName(null)}
+        initialName={newVendorName ?? ''}
+        onCreated={onVendorChange}
+      />
     </DocumentForm>
   );
 }

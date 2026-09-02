@@ -16,6 +16,7 @@ import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Combobox } from '@/components/ui/combobox';
+import { ContactPicker } from '@/components/forms/quick-create';
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog';
@@ -217,13 +218,12 @@ export default function ExpensesPage() {
                       />
                     </Field>
                     <Field label="Vendor" hint="Optional">
-                      <Combobox
-                        options={options.vendors}
+                      <ContactPicker
+                        kind="vendor"
                         value={f.vendorId}
                         onChange={(v) => setF({ ...f, vendorId: v })}
                         placeholder="None"
-                        searchPlaceholder="Search vendors"
-                        clearable
+                        canCreate={canCreate}
                       />
                     </Field>
                     <Field

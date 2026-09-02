@@ -15,6 +15,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Combobox } from '@/components/ui/combobox';
+import { ContactPicker } from '@/components/forms/quick-create';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog';
@@ -32,7 +33,6 @@ import {
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { useAppStore } from '@/lib/store';
 import { usePermission } from '@/lib/store/hooks';
-import { vendorOptions } from '@/lib/options';
 import { formatINR } from '@/lib/money';
 
 const REASONS = [
@@ -50,7 +50,6 @@ const short = (d: string) => new Date(d).toLocaleDateString('en-IN');
 export default function VendorCreditsPage() {
   const canCreate = usePermission('purchases', 'create');
   const branchId = useAppStore((s) => s.activeBranchId);
-  const contacts = useAppStore((s) => s.contacts);
   const bankAccounts = useAppStore((s) => s.bankAccounts);
 
   const state = useApi<PurchaseDocListResponse>(() => purchaseDocuments.list('vendor-credit'), []);
@@ -179,13 +178,11 @@ export default function VendorCreditsPage() {
                 </DialogHeader>
                 <div className="space-y-4">
                   <Field label="Vendor" required>
-                    <Combobox
-                      options={vendorOptions({ contacts } as never)}
+                    <ContactPicker
+                      kind="vendor"
                       value={vendorId}
                       onChange={(v) => { setVendorId(v); setBillId(''); }}
-                      placeholder="Select a vendor"
-                      searchPlaceholder="Search vendors"
-                      clearable
+                      canCreate={canCreate}
                     />
                   </Field>
                   <Field

@@ -16,6 +16,7 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Combobox } from '@/components/ui/combobox';
+import { ContactPicker } from '@/components/forms/quick-create';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog';
@@ -33,7 +34,6 @@ import {
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { useAppStore } from '@/lib/store';
 import { usePermission } from '@/lib/store/hooks';
-import { customerOptions } from '@/lib/options';
 import { formatINR } from '@/lib/money';
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -42,7 +42,6 @@ const short = (d: string) => new Date(d).toLocaleDateString('en-IN');
 export default function RetainersPage() {
   const canCreate = usePermission('sales', 'create');
   const branchId = useAppStore((s) => s.activeBranchId);
-  const contacts = useAppStore((s) => s.contacts);
 
   const state = useApi<SalesDocListResponse>(() => salesDocuments.list('retainer'), []);
 
@@ -168,13 +167,11 @@ export default function RetainersPage() {
                 </DialogHeader>
                 <div className="space-y-4">
                   <Field label="Customer" required>
-                    <Combobox
-                      options={customerOptions({ contacts } as never)}
+                    <ContactPicker
+                      kind="customer"
                       value={customerId}
                       onChange={setCustomerId}
-                      placeholder="Select a customer"
-                      searchPlaceholder="Search customers"
-                      clearable
+                      canCreate={canCreate}
                     />
                   </Field>
                   <Field label="What it covers" required hint="Appears on the retainer and in the ledger memo">

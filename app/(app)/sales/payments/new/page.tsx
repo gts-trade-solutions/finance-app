@@ -9,13 +9,13 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Combobox } from '@/components/ui/combobox';
+import { ContactPicker } from '@/components/forms/quick-create';
 import { PageHeader } from '@/components/shared/page-header';
 import { Field, FormSection, MoneyInput, TotalRow } from '@/components/shared/form-bits';
 import { Money } from '@/components/shared/money';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { useAppStore } from '@/lib/store';
 import { customers, today } from '@/lib/selectors';
-import { customerOptions } from '@/lib/options';
 import { api, ApiError, invoices as invoiceApi, type InvoiceListResponse } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { useSession } from '@/components/layout/session-provider';
@@ -164,13 +164,10 @@ function NewPaymentInner() {
             <FormSection title="Payment details">
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field label="Customer" required>
-                  <Combobox
-                    options={customerOptions(s)}
+                  <ContactPicker
+                    kind="customer"
                     value={customerId}
                     onChange={(v) => { setCustomerId(v); setSelected({}); }}
-                    placeholder="Select a customer"
-                    searchPlaceholder="Search customers"
-                    clearable
                   />
                 </Field>
                 <Field label="Payment date" required>

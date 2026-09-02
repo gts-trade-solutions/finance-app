@@ -10,13 +10,13 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Combobox } from '@/components/ui/combobox';
+import { ContactPicker } from '@/components/forms/quick-create';
 import { PageHeader } from '@/components/shared/page-header';
 import { Field, FormSection, MoneyInput, TotalRow } from '@/components/shared/form-bits';
 import { Money } from '@/components/shared/money';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { useAppStore } from '@/lib/store';
 import { today, vendors } from '@/lib/selectors';
-import { vendorOptions } from '@/lib/options';
 import { api, ApiError, bills as billApi, type BillListResponse } from '@/lib/api/client';
 import { useApi } from '@/lib/api/use-api';
 import { useSession } from '@/components/layout/session-provider';
@@ -160,13 +160,10 @@ function PayInner() {
             <FormSection title="Payment details">
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field label="Vendor" required>
-                  <Combobox
-                    options={vendorOptions(s)}
+                  <ContactPicker
+                    kind="vendor"
                     value={vendorId}
                     onChange={(v) => { setVendorId(v); setSelected({}); }}
-                    placeholder="Select a vendor"
-                    searchPlaceholder="Search vendors"
-                    clearable
                   />
                 </Field>
                 <Field label="Payment date" required>

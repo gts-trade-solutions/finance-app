@@ -20,6 +20,7 @@ import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Combobox } from '@/components/ui/combobox';
+import { ContactPicker } from '@/components/forms/quick-create';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
@@ -33,7 +34,7 @@ import { recurringInvoices, type RecurringInvoiceRow } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { useAppStore } from '@/lib/store';
 import { usePermission } from '@/lib/store/hooks';
-import { customerOptions, itemOptions } from '@/lib/options';
+import { itemOptions } from '@/lib/options';
 import { cn } from '@/lib/utils';
 
 const FREQUENCY = [
@@ -75,7 +76,6 @@ const BLANK = {
 export default function RecurringPage() {
   const router = useRouter();
   const canCreate = usePermission('sales', 'create');
-  const contacts = useAppStore((s) => s.contacts);
   const items = useAppStore((s) => s.items);
 
   const state = useApi<{ profiles: RecurringInvoiceRow[] }>(() => recurringInvoices.list(), []);
@@ -184,13 +184,11 @@ export default function RecurringPage() {
                     />
                   </Field>
                   <Field label="Customer" required>
-                    <Combobox
-                      options={customerOptions({ contacts } as never)}
+                    <ContactPicker
+                      kind="customer"
                       value={f.customerId}
                       onChange={(v) => setF({ ...f, customerId: v })}
-                      placeholder="Select a customer"
-                      searchPlaceholder="Search customers"
-                      clearable
+                      canCreate={canCreate}
                     />
                   </Field>
                   <div className="grid grid-cols-2 gap-4">

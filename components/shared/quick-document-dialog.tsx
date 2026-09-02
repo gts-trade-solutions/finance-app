@@ -16,6 +16,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Combobox } from '@/components/ui/combobox';
+import { ContactPicker, QuickItemDialog } from '@/components/forms/quick-create';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog';
@@ -24,7 +25,7 @@ import { Money } from '@/components/shared/money';
 import { salesDocuments, type SalesDocKind } from '@/lib/api/client';
 import { useApiAction } from '@/lib/api/use-api';
 import { useAppStore } from '@/lib/store';
-import { customerOptions, itemOptions } from '@/lib/options';
+import { itemOptions } from '@/lib/options';
 
 /** yyyy-mm-dd, n days from today. */
 function inDays(n: number): string {
@@ -51,15 +52,17 @@ export function QuickDocumentDialog({
   extra?: (value: string, set: (v: string) => void) => ReactNode;
   onCreated: () => void;
 }) {
-  // Customers, items and the active branch come from the store, which is
-  // hydrated from /api/masters — the same ids the server will validate against.
+  // Items and the active branch come from the store, which is hydrated from
+  // /api/masters — the same ids the server will validate against. Customers
+  // come from ContactPicker, which reads the same store and can add one.
   const branchId = useAppStore((s) => s.activeBranchId);
-  const customers = useAppStore((s) => s.contacts);
   const items = useAppStore((s) => s.items);
 
   const [open, setOpen] = useState(false);
   const [customerId, setCustomerId] = useState('');
   const [itemId, setItemId] = useState('');
+  // Non-null while the inline "New item" dialog is open.
+  const [newItemName, setNewItemName] = useState<string | null>(null);
   const [qty, setQty] = useState(1);
   const [rate, setRate] = useState(0);
   const [gstRatePct, setGstRatePct] = useState(18);
@@ -67,10 +70,6 @@ export function QuickDocumentDialog({
 
   const create = useApiAction(salesDocuments.create);
 
-  const customerChoices = useMemo(
-    () => customerOptions({ contacts: customers } as never),
-    [customers],
-  );
   const itemChoices = useMemo(() => itemOptions({ items } as never), [items]);
 
   // Shown live so nobody is surprised by the tax on the document they just made.
@@ -146,14 +145,7 @@ export function QuickDocumentDialog({
         </DialogHeader>
         <div className="space-y-4">
           <Field label="Customer" required error={create.fieldErrors.customerId}>
-            <Combobox
-              options={customerChoices}
-              value={customerId}
-              onChange={setCustomerId}
-              placeholder="Select a customer"
-              searchPlaceholder="Search customers"
-              clearable
-            />
+            <ContactPicker kind="customer" value={customerId} onChange={setCustomerId} />
           </Field>
           <Field label="Item" required>
             <Combobox
@@ -168,6 +160,8 @@ export function QuickDocumentDialog({
               placeholder="Select an item"
               searchPlaceholder="Search items by name, SKU or HSN"
               showAvatar={false}
+              createLabel="New item"
+              onCreate={(q) => setNewItemName(q)}
             />
           </Field>
           <div className="grid grid-cols-2 gap-4">
@@ -200,6 +194,17 @@ export function QuickDocumentDialog({
             {create.busy ? 'Saving…' : buttonLabel}
           </Button>
         </DialogFooter>
+
+        <QuickItemDialog
+          open={newItemName !== null}
+          onOpenChange={(o) => !o && setNewItemName(null)}
+          initialName={newItemName ?? ''}
+          onCreated={(item) => {
+            setItemId(item.id);
+            setRate(item.salePricePaise);
+            setGstRatePct(item.gstRatePct);
+          }}
+        />
       </DialogContent>
     </Dialog>
   );

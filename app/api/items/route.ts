@@ -4,6 +4,7 @@ import { db } from '@/lib/server/db';
 import { route, body, query, asId, badRequest, conflict } from '@/lib/server/http';
 import { toPaiseFromSql, toSqlFromPaise } from '@/lib/server/money-sql';
 import { logAudit, auditMeta } from '@/lib/server/audit';
+import { CODE, accountIds } from '@/lib/server/ledger/chart-of-accounts';
 
 const ListQuery = z.object({
   kind: z.enum(['goods', 'service', 'all']).optional(),
@@ -143,11 +144,23 @@ export const POST = route(
     const input = await body(req, ItemInput);
     await checkHsn(orgId, input.hsnSac, input.kind);
 
+    // Which income and expense heads this item posts to. The posting engine
+    // falls back to Sales and Purchases when these are null, so an item without
+    // them still works — but then the columns say nothing, and an item created
+    // through the API would differ from one the seed made. Goods and services
+    // are separate income heads because the P&L is more useful when they are.
+    const acc = await accountIds(db, orgId);
+    const saleAccountId =
+      acc[input.kind === 'service' ? CODE.SERVICE_INCOME : CODE.SALES] ?? null;
+    const purchaseAccountId = acc[CODE.PURCHASES] ?? null;
+
     const inserted = await db
       .insertInto('items')
       .values({
         org_id: orgId,
         kind: input.kind,
+        sale_account_id: saleAccountId,
+        purchase_account_id: purchaseAccountId,
         name: input.name,
         sku: input.sku ?? null,
         hsn_sac: input.hsnSac ?? null,

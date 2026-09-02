@@ -19,6 +19,7 @@ import {
   LineItemsEditor, effectiveDiscountPct, newEditorLine, type EditorLine,
 } from '@/components/forms/document-lines';
 import { SupplyKindPicker } from '@/components/forms/supply-kind-picker';
+import { QuickContactDialog } from '@/components/forms/quick-create';
 import { useAppStore } from '@/lib/store';
 import { today } from '@/lib/selectors';
 import {
@@ -39,6 +40,9 @@ export default function NewInvoicePage() {
 
   const [branchId, setBranchId] = useState(s.activeBranchId || s.branches[0]?.id || '');
   const [customerId, setCustomerId] = useState('');
+  // Non-null while the inline "New customer" dialog is open; holds whatever
+  // was typed into the picker, so the dialog opens with the name already in it.
+  const [newCustomerName, setNewCustomerName] = useState<string | null>(null);
   const [number, setNumber] = useState('');
   const [orderNumber, setOrderNumber] = useState('');
   const [date, setDate] = useState(today());
@@ -267,8 +271,8 @@ export default function NewInvoicePage() {
             onChange={onCustomerChange}
             placeholder="Select or add a customer"
             searchPlaceholder="Search customers by name or GSTIN"
-            createLabel="New Customer"
-            onCreate={() => router.push('/sales/customers/new')}
+            createLabel="New customer"
+            onCreate={(q) => setNewCustomerName(q)}
             clearable
           />
           {customer && (
@@ -573,6 +577,18 @@ export default function NewInvoicePage() {
           </label>
         </div>
       </div>
+
+      {/* Creating a customer without leaving the invoice. onCustomerChange is
+          reused rather than a bare setState, so the new customer's payment
+          terms and place of supply land on the document just as they would
+          have if it had been picked from the list. */}
+      <QuickContactDialog
+        kind="customer"
+        open={newCustomerName !== null}
+        onOpenChange={(o) => !o && setNewCustomerName(null)}
+        initialName={newCustomerName ?? ''}
+        onCreated={onCustomerChange}
+      />
     </DocumentForm>
   );
 }

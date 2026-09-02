@@ -7,7 +7,7 @@
 // name, and discount can be entered as a percentage or a flat rupee amount.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Layers, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,7 +20,8 @@ import { hsnOptions, itemOptionsFor } from '@/lib/options';
 import { computeLineTax, GST_RATES } from '@/lib/tax/gst';
 import { formatINR, toRupees } from '@/lib/money';
 import { cn } from '@/lib/utils';
-import type { SupplyType } from '@/lib/types';
+import { QuickItemDialog } from './quick-create';
+import type { Item, SupplyType } from '@/lib/types';
 
 export interface EditorLine {
   key: string;
@@ -92,17 +93,25 @@ export function LineItemsEditor({
   const update = (key: string, patch: Partial<EditorLine>) =>
     onChange(lines.map((l) => (l.key === key ? { ...l, ...patch } : l)));
 
-  const pickItem = (key: string, itemId: string) => {
-    const item = s.items.find((i) => i.id === itemId);
-    if (!item) return;
+  // Which line is waiting on a newly created item, and what was typed into its
+  // picker. Held together so the item lands on the line that asked for it —
+  // the dialog is one component for the whole table, not one per row.
+  const [creating, setCreating] = useState<{ key: string; name: string } | null>(null);
+
+  /** Copy an item's own figures onto a line. Shared by picking and creating. */
+  const applyItem = (key: string, item: Item) =>
     update(key, {
-      itemId,
+      itemId: item.id,
       description: item.description ?? '',
       hsnSac: item.hsnSac,
       uqc: item.uqc,
       ratePaise: priceMode === 'sale' ? item.salePricePaise : item.purchasePricePaise,
       gstRatePct: item.gstRatePct,
     });
+
+  const pickItem = (key: string, itemId: string) => {
+    const item = s.items.find((i) => i.id === itemId);
+    if (item) applyItem(key, item);
   };
 
   const addLine = () =>
@@ -153,6 +162,8 @@ export function LineItemsEditor({
                       searchPlaceholder="Search items by name, SKU or HSN"
                       showAvatar={false}
                       className="h-8"
+                      createLabel="New item"
+                      onCreate={(q) => setCreating({ key: line.key, name: q })}
                     />
                     <textarea
                       value={line.description}
@@ -327,6 +338,21 @@ export function LineItemsEditor({
           <Layers className="size-3.5" /> Add Items in Bulk
         </Button>
       </div>
+
+      {/* One dialog for the whole table. It saves the item to the catalogue and
+          then fills the line that asked for it — so the rate, the HSN and the
+          GST rate arrive on the document exactly as they would have if the item
+          had already existed. */}
+      <QuickItemDialog
+        open={creating !== null}
+        onOpenChange={(o) => !o && setCreating(null)}
+        initialName={creating?.name ?? ''}
+        priceMode={priceMode}
+        defaultKind={supplyKind === 'service' ? 'service' : 'goods'}
+        onCreated={(item) => {
+          if (creating) applyItem(creating.key, item);
+        }}
+      />
     </div>
   );
 }

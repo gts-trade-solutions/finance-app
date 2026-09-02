@@ -18,6 +18,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Combobox } from '@/components/ui/combobox';
+import { ContactPicker } from '@/components/forms/quick-create';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
@@ -32,7 +33,6 @@ import { AsyncPage } from '@/components/shared/async-state';
 import { Field, MoneyInput } from '@/components/shared/form-bits';
 import { api } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
-import { useAppStore } from '@/lib/store';
 import { usePermission } from '@/lib/store/hooks';
 import { formatINRCompact } from '@/lib/money';
 
@@ -69,7 +69,6 @@ const BLANK = {
 
 export default function ChequesPage() {
   const canEdit = usePermission('banking', 'edit');
-  const contacts = useAppStore((s) => s.contacts);
 
   const state = useApi<ChequesResponse>(() => api.get('/api/banking/cheques'), []);
   const [open, setOpen] = useState(false);
@@ -210,19 +209,12 @@ export default function ChequesPage() {
                     />
                   </Field>
                   <Field label={f.kind === 'received' ? 'From' : 'To'} required>
-                    <Combobox
-                      options={contacts
-                        .filter((c) =>
-                          f.kind === 'received'
-                            ? c.kind === 'customer' || c.kind === 'both'
-                            : c.kind === 'vendor' || c.kind === 'both',
-                        )
-                        .map((c) => ({ value: c.id, label: c.displayName }))}
+                    <ContactPicker
+                      kind={f.kind === 'received' ? 'customer' : 'vendor'}
                       value={f.contactId}
                       onChange={(v) => setF({ ...f, contactId: v })}
                       placeholder="Select a party"
-                      searchPlaceholder="Search"
-                      clearable
+                      canCreate={canEdit}
                     />
                   </Field>
                   <div className="grid grid-cols-2 gap-4">
