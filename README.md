@@ -47,7 +47,7 @@ Open the demo book as **Admin** from the sign-in page.
 | **Accountant** | Manual journals · Chart of accounts · Opening balances · Budgets · Recurring journals · Period close · Transaction locks · Audit trail |
 | **GST & taxes** | E-invoices · E-way bills · GSTR-1 · GSTR-3B with the Section 49A set-off order · GSTR-2B reconciliation · TDS & TCS |
 | **Inventory** | Stock on hand · Adjustments · Warehouses |
-| **Reports** | 33 reports, every one derived from the journal, all exportable |
+| **Reports** | 32 reports, every one derived from the journal, all exportable |
 | **Settings** | Organisation · Numbering · HSN master · Custom fields · Automation · Integrations |
 | **Portal** | Customer-facing view at `/portal`, currently a signed-in preview |
 

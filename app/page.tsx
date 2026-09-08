@@ -62,7 +62,7 @@ const FEATURES = [
   { icon: Landmark, title: 'Banking', body: 'Statement import with duplicate detection, rules that categorise the repeats, and a reconciliation workspace.' },
   { icon: ScrollText, title: 'Accountant', body: 'Manual journals, chart of accounts, opening balances, budgets, recurring entries and per-module period locks.' },
   { icon: Truck, title: 'Compliance', body: 'E-invoice queue, e-way bills, GSTR-2B reconciliation and a TDS register that respects annual thresholds.' },
-  { icon: LineChart, title: 'Reports', body: 'Thirty-three of them, every figure computed from the journal on request — so no two can disagree.' },
+  { icon: LineChart, title: 'Reports', body: 'Thirty-two of them, every figure computed from the journal on request — so no two can disagree.' },
 ];
 
 const PROOFS = [
