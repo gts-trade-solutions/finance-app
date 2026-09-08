@@ -248,7 +248,7 @@ if os.path.exists(logo):
 para('Books. Made Smarter.', size=15, colour=GREY, align=WD_ALIGN_PARAGRAPH.CENTER, space_after=26)
 para('Project Documentation', size=27, bold=True, colour=NAVY,
      align=WD_ALIGN_PARAGRAPH.CENTER, space_after=6)
-para('Double-entry accounting, GST compliance, e-invoicing and banking\nfor Indian business',
+para('Double-entry accounting, tax compliance and banking\nfor businesses trading across borders',
      size=12, colour=GREY, align=WD_ALIGN_PARAGRAPH.CENTER, space_after=30)
 
 t = doc.add_table(rows=0, cols=2)
@@ -281,16 +281,17 @@ CONTENTS = [
     ('4', 'The data model', 'Schema by area, and why it is shaped this way'),
     ('5', 'Parties and party linking', 'Customers, vendors, and how they tie to the ledger'),
     ('6', 'Functional modules', 'Every screen, module by module'),
-    ('7', 'India tax compliance', 'GST, e-invoicing, e-way bills, TDS and MSME'),
-    ('8', 'Money and arithmetic', 'Why nothing is stored as a floating-point number'),
-    ('9', 'Security and audit', 'Authentication, roles, and the audit trail'),
-    ('10', 'Organisations and the demo book', 'Tenancy, sign-up, and how the demo is kept apart'),
-    ('11', 'Brand and public site', 'Identity, landing page and search visibility'),
-    ('12', 'Tally integration', 'Planned — design intent and mapping'),
-    ('13', 'What is not connected yet', 'An honest list of the gaps'),
-    ('14', 'Running and deploying', 'Environment, migrations, seeding'),
-    ('15', 'Testing and verification', 'What is checked, and how'),
-    ('16', 'Roadmap', 'What comes next, in order'),
+    ('7', 'Trading internationally', 'Cross-border supply, currency, and the jurisdiction layer'),
+    ('8', 'Tax compliance by jurisdiction', 'The pluggable layer, and India as the first regime'),
+    ('9', 'Money and arithmetic', 'Why nothing is stored as a floating-point number'),
+    ('10', 'Security and audit', 'Authentication, roles, and the audit trail'),
+    ('11', 'Organisations and the demo book', 'Tenancy, sign-up, and how the demo is kept apart'),
+    ('12', 'Brand and public site', 'Identity, landing page and search visibility'),
+    ('13', 'Accounting-system integrations', 'Planned — Tally first, and the pattern it sets'),
+    ('14', 'What is not connected yet', 'An honest list of the gaps'),
+    ('15', 'Running and deploying', 'Environment, migrations, seeding'),
+    ('16', 'Testing and verification', 'What is checked, and how'),
+    ('17', 'Roadmap', 'What comes next, in order'),
     ('A', 'Appendix — API endpoints', f'{FACTS["routes"]} route handlers'),
     ('B', 'Appendix — Database tables', f'{FACTS["tables"]} tables'),
     ('C', 'Appendix — Reports', f'{FACTS["reports"]} reports'),
@@ -302,21 +303,74 @@ pagebreak()
 # ═══════════════════════════════════════════════════════════════════════════
 doc.add_heading('1. What this product is', level=1)
 
-para('REKONZA AI is accounting software for Indian small and medium businesses. It keeps a '
-     'double-entry ledger in a relational database, computes GST on every transaction from the '
-     'place of supply, prepares the monthly returns, reconciles the bank, and derives every '
-     'financial statement from the journal on request.')
+para('REKONZA AI is an accounting platform for small and medium businesses. It keeps a '
+     'double-entry ledger in a relational database, computes the tax due on every transaction, '
+     'prepares the statutory returns, reconciles the bank, and derives every financial statement '
+     'from the journal on request.')
 
 para('It is one system rather than a billing tool with an accounting add-on. Raising an invoice '
-     'moves the journal entry, the GST liability, the receivable, the customer balance and every '
+     'moves the journal entry, the tax liability, the receivable, the customer balance and every '
      'report that reads them at the same instant and inside the same database transaction. There '
      'is no overnight posting run, and no second copy of a figure to fall out of step.')
 
-doc.add_heading('Who it is for', level=2)
-bullet('Trading and service businesses registered under GST, filing GSTR-1 and GSTR-3B monthly '
-       'or quarterly.')
-bullet('Businesses operating in more than one state, where each state registration is a separate '
-       'GSTIN with its own invoice number series.')
+doc.add_heading('1.1  A jurisdiction-neutral core', level=2)
+
+para('Accounting itself does not vary by country. Double entry, the chart of accounts, parties, '
+     'documents, ageing, bank reconciliation, the audit trail and the financial statements do not '
+     'change when a business crosses a border. Tax does, and so do the statutory returns that '
+     'report it.')
+
+para('The system is built along that seam. Everything in the first column below is shared by every '
+     'business the platform serves, wherever it trades. Everything in the second is supplied by a '
+     'jurisdiction module, so adding a country means writing one of those rather than reaching '
+     'into the ledger.')
+
+table(
+    ['Shared by every jurisdiction', 'Supplied per jurisdiction'],
+    [
+        ('Double-entry ledger and posting engine', 'Which taxes apply, and at what rate'),
+        ('Chart of accounts and account types', 'How a supply is classified for tax'),
+        ('Parties, items, documents and their workflows', 'Registration numbers and their validation'),
+        ('Payments, allocation and bank reconciliation', 'Statutory return formats and filing'),
+        ('Trial balance, P&L, balance sheet, cash flow, ageing', 'Withholding rules and thresholds'),
+        ('Audit trail, roles, period locks, numbering', 'Statutory record-keeping obligations'),
+    ],
+    widths=[3.1, 3.1], font=8.5,
+)
+
+doc.add_heading('1.2  Where it stands today', level=2)
+
+table(
+    ['Capability', 'Status'],
+    [
+        ('Accounting core, banking, reporting, audit', 'Complete, and jurisdiction-neutral'),
+        ('Cross-border sales — exports, zero-rating, special economic zones',
+         'Working today; see section 7'),
+        ('India — GST, e-invoicing, transport documents, withholding tax, small-supplier rules',
+         'The first jurisdiction, fully implemented; see section 8'),
+        ('Multi-currency with exchange rates',
+         'Roadmap. The base-currency field exists; per-document rates do not'),
+        ('Further tax jurisdictions', 'Roadmap. The layer they plug into is built'),
+    ],
+    widths=[3.6, 2.6], font=8.5,
+)
+
+callout(
+    'How to read this document',
+    'Sections 2 to 6 and 9 to 12 describe the platform and apply to a business anywhere. Section 7 '
+    'covers trading across borders. Section 8 covers tax, and is written against India because '
+    'India is the jurisdiction implemented today — read it as the worked example of what a '
+    'jurisdiction module contains, not as the boundary of the product.',
+    'EAF2FF',
+)
+
+doc.add_heading('1.3  Who it is for', level=2)
+bullet('Trading and service businesses that need real books rather than an invoice generator — '
+       'ones whose figures will be read by an auditor, a lender or a buyer.')
+bullet('Businesses selling across borders, where the same goods are taxed one way at home, '
+       'another way into a neighbouring jurisdiction, and zero-rated on export.')
+bullet('Businesses holding more than one tax registration, where each registration keeps its own '
+       'document number series and files its own return.')
 bullet('Owners and accountants who need the books to stand up to an audit, not merely to produce '
        'an invoice.')
 
@@ -350,9 +404,10 @@ para('Every document posts a balanced journal entry or it does not post at all. 
 doc.add_heading('2.2  Nothing is ever edited', level=2)
 para('A posted entry is permanent. Correcting one writes a reversing entry, and both stay visible '
      'with the correction linked to the original. Rule 11(g) of the Companies (Accounts) Rules '
-     'requires accounting software used by Indian companies to keep an audit trail that cannot be '
-     'disabled, retained for eight years — so the audit module has an insert path and no update or '
-     'delete path at all.')
+     'requires accounting software used by companies in India to keep an audit trail that cannot '
+     'be disabled, retained for eight years, and comparable obligations exist in most '
+     'jurisdictions. The audit module therefore has an insert path and no update or delete path at '
+     'all, everywhere — rather than a switch that turns it on for the countries that demand it.')
 
 doc.add_heading('2.3  Reports are derived, never stored', level=2)
 para('The trial balance, profit and loss, balance sheet, general ledger and ageing are all computed '
@@ -385,7 +440,7 @@ table(
         ('Language', 'TypeScript, strict mode',
          'The domain has many near-identical shapes; the compiler catches the mix-ups'),
         ('Database', 'MySQL 8, READ COMMITTED',
-         'Mature, widely hosted in India, and strong enough on constraints to enforce the model'),
+         'Mature, hosted in every region, and strong enough on constraints to enforce the model'),
         ('Query layer', 'Kysely (typed SQL builder)',
          'Types from the schema without an ORM hiding the SQL the reports depend on'),
         ('Styling', 'Tailwind CSS v4, shadcn/ui on Base UI',
@@ -528,6 +583,10 @@ para('A party is a customer, a vendor, or both. Everything the system knows abou
      'a party balance answerable at any date rather than only today.')
 
 doc.add_heading('5.1  One table, three roles', level=2)
+para('The columns below are named after the implemented jurisdiction, because that is what the '
+     'schema calls them. Every one of them is an instance of something a party record needs '
+     'anywhere: a tax status, a registration number, a place of establishment, a withholding '
+     'rule, and a payment obligation the law attaches to a class of supplier.')
 para('Parties are held in contacts, with a kind of customer, vendor or both. A single record can '
      'be both — the same firm may buy from you and supply to you — and when it is, its receivable '
      'and its payable stay on opposite sides of the ledger rather than being netted. Netting them '
@@ -648,6 +707,11 @@ doc.add_heading('6. Functional modules', level=1)
 para(f'{FACTS["pages"]} screens across nine modules. Each is listed with what it does and the '
      'accounting behind it where that is not obvious.')
 
+para('Eight of the nine are the same for a business anywhere. The ninth — the tax and '
+     'compliance module — is the jurisdiction module made visible: its screens are named after '
+     'the returns and documents the implemented jurisdiction requires, and a second '
+     'jurisdiction would add its own alongside them rather than change any of the others.')
+
 MODULES = [
     ('Sales', [
         ('Customers', 'Party master with GST treatment, credit limit, terms and full transaction '
@@ -753,16 +817,130 @@ for module, screens in MODULES:
 
 # ═══════════════════════════════════════════════════════════════════════════
 pagebreak()
-doc.add_heading('7. India tax compliance', level=1)
+doc.add_heading('7. Trading internationally', level=1)
 
-doc.add_heading('7.1  GST resolution', level=2)
-para('The engine answers one question first: what kind of supply is this? The supplier branch '
-     'state, the place of supply and the customer’s GST treatment decide it, and everything '
+para('A business that sells beyond its own borders is taxed three different ways on the same '
+     'goods: one rate at home, another into a neighbouring jurisdiction under the same tax system, '
+     'and nothing at all on a genuine export. Getting that wrong is not a rounding error — it is '
+     'either tax charged that should not have been, or tax not charged that will be demanded later '
+     'with interest.')
+
+doc.add_heading('7.1  What is working today', level=2)
+
+para('Cross-border sales are handled end to end. The supply type is resolved from where the seller '
+     'is registered, where the goods or services are supplied, and what kind of party the customer '
+     'is — and everything downstream follows from that one answer.')
+
+table(
+    ['Situation', 'Treatment', 'Effect on the books'],
+    [
+        ('Customer in the same tax jurisdiction as the selling registration',
+         'Domestic supply', 'Tax split between the two domestic components'),
+        ('Customer in a different jurisdiction under the same tax system',
+         'Interstate supply', 'A single combined tax at the full rate'),
+        ('Overseas customer, exemption undertaking held',
+         'Export, zero-rated', 'No tax charged; the supply is still reported'),
+        ('Overseas customer, no undertaking',
+         'Export with tax', 'Tax charged and reclaimable as a refund'),
+        ('Special economic zone unit or developer',
+         'Treated as an export', 'Zero-rated, reported separately'),
+        ('Overseas supplier, reverse charge applies',
+         'Buyer accounts for the tax', 'Liability and credit posted together'),
+    ],
+    widths=[2.3, 1.5, 2.4], font=8.5,
+)
+
+para('The party record carries the treatment, so it is applied consistently rather than being '
+     'decided per invoice. An overseas customer never has domestic tax charged to it by accident, '
+     'and a zero-rated export still appears in the return — omitting it is as much a filing error '
+     'as charging the wrong rate.')
+
+doc.add_heading('7.2  Multiple registrations', level=2)
+
+para('A business trading in several jurisdictions usually holds a separate tax registration in '
+     'each, and those registrations are not interchangeable: each files its own return and each '
+     'numbers its own documents. The system models a registration rather than an office, which is '
+     'what makes the numbering, the supply-type resolution and the per-registration return fall '
+     'out naturally instead of needing special cases.')
+
+bullet('Each registration keeps its own document series, restarting at one each financial year.')
+bullet('A user may be granted access to one registration or several; a document can only be '
+       'raised under one they hold.')
+bullet('Returns, ageing and the statements can be read for one registration or for the business '
+       'as a whole.')
+
+doc.add_heading('7.3  Currency', level=2)
+
+para('The organisation has a base currency, and the ledger is kept in it. Every amount in the '
+     'database, on every report and in every total is that one currency, which is what allows the '
+     'trial balance to be summed at all — a ledger holding mixed currencies without conversion '
+     'does not balance in any of them.')
+
+callout(
+    'Multi-currency is on the roadmap, and is not built',
+    'Invoicing a customer in a currency other than the base one requires an exchange rate on the '
+    'document, a realised gain or loss when it is settled at a different rate, and a revaluation '
+    'of open balances at period end. The base-currency field exists; none of that machinery does. '
+    'A business exporting today invoices in its base currency, which is common practice but not '
+    'universal. Section 17 places this first on the roadmap.',
+    'FFF6E5',
+)
+
+doc.add_heading('7.4  Adding a jurisdiction', level=2)
+
+para('The work of supporting a new country is contained. What has to be written is a tax module '
+     'answering a fixed set of questions; what does not have to be touched is the ledger, the '
+     'documents, the reports or the audit trail.')
+
+table(
+    ['A jurisdiction module supplies', 'Example from the implemented one'],
+    [
+        ('The taxes that exist and their components',
+         'India: a central and a state component domestically, a single integrated tax across '
+         'state lines'),
+        ('How a supply is classified',
+         'By the seller’s registration, the place of supply and the customer’s status'),
+        ('The registration number format and its validation',
+         'A 15-character identifier with an embedded jurisdiction code and a check digit'),
+        ('The product classification scheme',
+         'Tariff codes for goods and service codes for services, from an approved list'),
+        ('Which input tax may be recovered, and which is blocked',
+         'Blocked categories become part of the cost rather than an asset'),
+        ('Withholding rules and their thresholds',
+         'Section-based withholding measured against an annual limit per supplier'),
+        ('The statutory returns and their formats',
+         'Two monthly returns and a supplier-matching statement'),
+        ('Statutory deadlines that carry a penalty',
+         'A 30-day reporting window, and a 45-day payment obligation to small suppliers'),
+    ],
+    widths=[2.4, 3.8], font=8.5,
+)
+
+para('The candidates most often asked for are value added tax regimes — the Gulf states, the '
+     'United Kingdom, the European Union — and sales tax in the United States. The first group '
+     'maps closely onto what is already built, because the structure of the questions is the same. '
+     'United States sales tax differs more, being levied by thousands of local authorities rather '
+     'than nationally, and would need a rate service behind it.')
+
+pagebreak()
+doc.add_heading('8. Tax compliance by jurisdiction', level=1)
+
+callout(
+    'India is the implemented jurisdiction',
+    'This section describes the tax module that exists today. It is deliberately specific, because '
+    'a jurisdiction module is specific by nature — the value of reading it is seeing the depth a '
+    'module goes to, which is the standard any further jurisdiction is held to.',
+    'EAF2FF',
+)
+
+doc.add_heading('8.1  Supply resolution', level=2)
+para('The engine answers one question first: what kind of supply is this? The seller’s '
+     'registration, the place of supply and the customer’s tax status decide it, and everything '
      'else follows.')
 table(
     ['Situation', 'Result'],
     [
-        ('Branch state equals place of supply', 'Intra-state — CGST + SGST, half each'),
+        ('Registration state equals place of supply', 'Intra-state — CGST + SGST, half each'),
         ('Different states', 'Inter-state — a single IGST at the full rate'),
         ('Overseas customer, LUT held', 'Export — zero-rated, no tax charged'),
         ('Overseas customer, no LUT', 'Export with tax, refundable'),
@@ -773,18 +951,18 @@ table(
     ],
     widths=[2.6, 3.6], font=8.5,
 )
-para('GSTINs are validated on format and on the mod-36 check digit, not merely on length. The same '
-     'engine is used by the invoice form, the API and the return preparation, so the figure on the '
-     'screen and the figure in the return cannot disagree.')
+para('Registration numbers are validated on format and on the mod-36 check digit, not merely on '
+     'length. The same engine is used by the invoice form, the API and the return preparation, so '
+     'the figure on the screen and the figure in the return cannot disagree.')
 
-doc.add_heading('7.2  Input tax credit', level=2)
+doc.add_heading('8.2  Input tax credit', level=2)
 para('Credit is tracked per line, not per bill. Section 17(5) blocks it on motor vehicles, food '
      'and beverages, club memberships, works contracts for immovable property and personal '
      'consumption — and where it is blocked the tax becomes part of the cost rather than an asset. '
      'Reverse-charge purchases post both sides: the liability to pay the tax, and the credit for '
      'having paid it.')
 
-doc.add_heading('7.3  Returns', level=2)
+doc.add_heading('8.3  Returns', level=2)
 bullet('GSTR-1 is prepared section by section, with the HSN summary that Table 12 requires, and '
        'exported as portal JSON.')
 bullet('GSTR-3B applies the set-off order Section 49A prescribes: integrated credit is used '
@@ -793,7 +971,7 @@ bullet('GSTR-2B reconciliation compares the purchase register against what suppl
        'four buckets, because credit claimed on an invoice a supplier never filed is credit that '
        'will be reversed with interest.')
 
-doc.add_heading('7.4  E-invoicing and e-way bills', level=2)
+doc.add_heading('8.4  E-invoicing and e-way bills', level=2)
 para('A B2B invoice above the turnover threshold is not legally valid without an IRN, and the '
      'reporting window is 30 days from the invoice date — after which the portal refuses it and '
      'the invoice must be cancelled and reissued. The queue is therefore ordered by urgency and '
@@ -802,7 +980,7 @@ para('An e-way bill is required for a consignment of goods worth more than ₹50
      'Validity is one day per 200 km with a minimum of one day, counted from generation. Services '
      'never need one, because nothing travels.')
 
-doc.add_heading('7.5  TDS and the MSME rule', level=2)
+doc.add_heading('8.5  Withholding tax and the small-supplier rule', level=2)
 para('TDS thresholds are annual, so the system accumulates taxable billing per vendor across the '
      'financial year and begins withholding when the threshold is crossed — at the rate the '
      'vendor’s PAN status earns, which is materially higher without one. Section 194C, for '
@@ -814,16 +992,20 @@ para('Section 43B(h) disallows an expense entirely if a registered micro or smal
 
 # ═══════════════════════════════════════════════════════════════════════════
 pagebreak()
-doc.add_heading('8. Money and arithmetic', level=1)
+doc.add_heading('9. Money and arithmetic', level=1)
 
 para('Amounts are stored as DECIMAL(19,4) in MySQL and handled as integer paise everywhere else. '
      'Rates and quantities use DECIMAL(19,6). Conversion happens at exactly two points — reading '
      'from the database and writing to it — and between them the arithmetic is on integers and '
      'strings.')
 
-para('Rounding is half-up at the paisa, and the invoice total is rounded to the nearest rupee with '
-     'the difference posted to a rounding account, which is what the printed invoice has to show. '
-     'Display uses the Indian digit grouping, so ₹12,34,567.00 rather than ₹1,234,567.00.')
+para('Rounding is half-up at the minor unit. Where a jurisdiction requires the document total to '
+     'be rounded to a whole major unit — as India does — the difference is posted to a rounding '
+     'account rather than absorbed, because the printed invoice has to show it.')
+
+para('Number formatting follows the locale rather than a fixed pattern. The same amount reads as '
+     '₹12,34,567.00 under Indian grouping and 1,234,567.00 under the grouping used almost '
+     'everywhere else; the stored value is identical, and only the presentation differs.')
 
 callout(
     'Why this is not over-engineering',
@@ -836,9 +1018,9 @@ callout(
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
-doc.add_heading('9. Security and audit', level=1)
+doc.add_heading('10. Security and audit', level=1)
 
-doc.add_heading('9.1  Authentication', level=2)
+doc.add_heading('10.1  Authentication', level=2)
 bullet('Passwords are hashed with argon2id at the OWASP minimum — 19 MiB of memory, two '
        'iterations, one lane. The cost is encoded in the hash, so raising it later keeps old '
        'hashes verifying.')
@@ -851,7 +1033,7 @@ bullet('An account locks for fifteen minutes after eight consecutive failures. A
        'an unknown email burns the same amount of time as a real one, so the form cannot be used '
        'to enumerate addresses.')
 
-doc.add_heading('9.2  Roles', level=2)
+doc.add_heading('10.2  Roles', level=2)
 table(
     ['Role', 'May do'],
     [
@@ -867,7 +1049,7 @@ para('One permission matrix is shared by the interface and the API. The interfac
      'decide what to render; the route handler uses it to decide whether to answer. Keeping one '
      'copy means the two cannot drift apart about what a role may do.')
 
-doc.add_heading('9.3  The audit trail', level=2)
+doc.add_heading('10.3  The audit trail', level=2)
 para('Every create, change, approval, void, sign-in, import and export is recorded with the actor, '
      'the time to the millisecond, the target, the IP address and the user agent. The module has '
      'an insert path and no update or delete path anywhere in the codebase, and there is no '
@@ -875,9 +1057,9 @@ para('Every create, change, approval, void, sign-in, import and export is record
 
 # ═══════════════════════════════════════════════════════════════════════════
 pagebreak()
-doc.add_heading('10. Organisations and the demo book', level=1)
+doc.add_heading('11. Organisations and the demo book', level=1)
 
-doc.add_heading('10.1  Sign-up', level=2)
+doc.add_heading('11.1  Sign-up', level=2)
 para('Anyone can create an organisation from the public site. It is created together with its '
      'first GST registration and its owner inside a single transaction, and the owner is signed in '
      'immediately.')
@@ -891,7 +1073,7 @@ para('If a GSTIN is given it is checked against its own check digit and against 
      'that business ever raises. A business with no GSTIN is recorded as unregistered rather than '
      'being refused, since plenty trade below the registration threshold.')
 
-doc.add_heading('10.2  The demo book', level=2)
+doc.add_heading('11.2  The demo book', level=2)
 para('The demo organisation is a real row carrying an is_demo flag, and that flag is the whole '
      'mechanism:')
 bullet('The one-click door on the sign-in page can only ever open onto an organisation with it '
@@ -906,9 +1088,9 @@ para('Nothing that comes through the sign-up form can set the flag. It defaults 
      'the safe direction for a default to fail in.')
 
 # ═══════════════════════════════════════════════════════════════════════════
-doc.add_heading('11. Brand and public site', level=1)
+doc.add_heading('12. Brand and public site', level=1)
 
-doc.add_heading('11.1  Identity', level=2)
+doc.add_heading('12.1  Identity', level=2)
 para('One module holds the name, the tagline and the artwork, so they cannot drift apart between '
      'the sidebar, the sign-in screen, the landing page and the page metadata. Every image is '
      'derived from one master file by a script, including the dark-theme variants — which are made '
@@ -927,7 +1109,7 @@ table(
     widths=[1.4, 4.8], font=9,
 )
 
-doc.add_heading('11.2  The public site', level=2)
+doc.add_heading('12.2  The public site', level=2)
 para('The landing page is a static server component with no session read, so it renders '
      'immediately for a visitor and for a crawler. It carries the product claims the code can '
      'stand behind, a real screenshot of the application in both themes, and a plain statement of '
@@ -940,7 +1122,20 @@ para('Search visibility is complete: canonical URLs, an Open Graph card, a Twitt
 
 # ═══════════════════════════════════════════════════════════════════════════
 pagebreak()
-doc.add_heading('12. Tally integration', level=1)
+doc.add_heading('13. Accounting-system integrations', level=1)
+
+para('Very few businesses replace their accounting system in one step. Most run a new one '
+     'alongside the incumbent for a year, and their accountant or auditor keeps working in '
+     'whatever they already know. An integration that hands over a period cleanly is therefore '
+     'not a convenience — it is what makes adoption possible at all.')
+
+para('Each market has a different incumbent: Tally across India, QuickBooks and Xero across the '
+     'English-speaking markets, DATEV in Germany, and others besides. They differ in their '
+     'wire formats and in how they are reached, but the problem is the same one every time — '
+     'map our parties, accounts and vouchers onto theirs, transfer a closed period, and prove '
+     'the two ledgers agree afterwards. Tally is described here in full because it is the '
+     'first to be built and because it is the hardest of them: it is desktop software, which '
+     'the others are not. The rules in 13.4 are written to outlast it.')
 
 callout(
     'Status: planned, not built',
@@ -950,14 +1145,15 @@ callout(
     'FFF6E5',
 )
 
-doc.add_heading('12.1  Why it matters', level=2)
-para('Tally is where most Indian accountants and auditors already work. A business running '
-     'REKONZA AI day to day will still be asked for a Tally company by its chartered accountant at '
-     'year end, and re-keying a year of vouchers is both expensive and a source of differences '
-     'nobody can explain. The integration exists to make that hand-off a transfer rather than a '
+doc.add_heading('13.1  Why Tally comes first', level=2)
+para('Tally is where most accountants and auditors in the Indian market already work, and India '
+     'is the jurisdiction the product implements today. A business running REKONZA AI day to day '
+     'will still be asked for a Tally company by its chartered accountant at year end, and '
+     're-keying a year of vouchers is both expensive and a source of differences nobody can '
+     'explain. The integration exists to make that hand-off a transfer rather than a '
      'transcription.')
 
-doc.add_heading('12.2  Shape of the integration', level=2)
+doc.add_heading('13.2  Shape of the integration', level=2)
 para('Tally Prime is desktop software. It exposes an XML request-response interface over HTTP on '
      'the local machine — port 9000 by default — which is reachable from the same network but not '
      'from a hosted application. The integration therefore needs a small local agent installed '
@@ -971,7 +1167,7 @@ mono(
     '  status per record ◀──      reports success/failure   ◀──     voucher GUID'
 )
 
-doc.add_heading('12.3  What maps to what', level=2)
+doc.add_heading('13.3  What maps to what', level=2)
 para('The mapping is direct because both systems are double-entry underneath. The one real '
      'difference is that Tally models a party as a ledger account under a group, where this system '
      'holds the party in a master table and posts to a single control account with the party on '
@@ -981,8 +1177,8 @@ table(
     ['REKONZA AI', 'Tally', 'Notes'],
     [
         ('Organisation', 'Company', 'One company per organisation and financial year'),
-        ('Branch (GSTIN)', 'Godown or cost centre', 'Tally keeps one GSTIN per company; multiple '
-                                                    'registrations need one company each'),
+        ('Tax registration', 'Godown or cost centre', 'Tally keeps one registration per company, '
+                                                     'so several need one company each'),
         ('Contact, kind = customer', 'Ledger under Sundry Debtors',
          'GSTIN, state and registration type carried across'),
         ('Contact, kind = vendor', 'Ledger under Sundry Creditors',
@@ -1002,7 +1198,7 @@ table(
     widths=[1.7, 1.7, 2.8], font=8.5,
 )
 
-doc.add_heading('12.4  Rules the integration must hold to', level=2)
+doc.add_heading('13.4  Rules the integration must hold to', level=2)
 
 rich([('One direction at a time. ', True),
       ('The first release pushes from REKONZA AI into Tally and does not read back. Two systems '
@@ -1033,7 +1229,7 @@ rich([('The export is reconciled, not assumed. ', True),
        'with ours, account by account. An integration that reports success without proving the two '
        'ledgers agree is an integration that hides its own failures.')])
 
-doc.add_heading('12.5  Delivery plan', level=2)
+doc.add_heading('13.5  Delivery plan', level=2)
 table(
     ['Phase', 'Scope'],
     [
@@ -1051,7 +1247,7 @@ table(
 
 # ═══════════════════════════════════════════════════════════════════════════
 pagebreak()
-doc.add_heading('13. What is not connected yet', level=1)
+doc.add_heading('14. What is not connected yet', level=1)
 
 para('Stated plainly, because the application itself says so where a user would go looking for '
      'these, rather than showing a green badge over nothing.')
@@ -1077,17 +1273,23 @@ table(
         ('User and branch management UI', 'Not built',
          'The model, roles and permissions exist and are enforced; the administration screens are '
          'not written. Users are created by the sign-up flow or directly.'),
-        ('Tally integration', 'Planned', 'See section 12'),
-        ('Payroll, manufacturing, fixed-asset depreciation, multi-currency, consolidation',
+        ('Multi-currency invoicing', 'Not built',
+         'Per-document exchange rates, realised gain and loss on settlement, and revaluation of '
+         'open balances at period end. The base-currency field exists; the machinery does not.'),
+        ('Tax jurisdictions beyond India', 'Not built',
+         'One module per jurisdiction, against the interface set out in section 7.4. The layer '
+         'they plug into is built and in use.'),
+        ('Accounting-system integrations', 'Planned', 'See section 13'),
+        ('Payroll, manufacturing, fixed-asset depreciation, multi-entity consolidation',
          'Out of scope', 'Deliberately excluded from this phase'),
     ],
     widths=[1.6, 1.0, 3.6], font=8.5,
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
-doc.add_heading('14. Running and deploying', level=1)
+doc.add_heading('15. Running and deploying', level=1)
 
-doc.add_heading('14.1  Environment', level=2)
+doc.add_heading('15.1  Environment', level=2)
 table(
     ['Variable', 'Purpose'],
     [
@@ -1101,7 +1303,7 @@ table(
     widths=[2.4, 3.8], font=8.5,
 )
 
-doc.add_heading('14.2  Commands', level=2)
+doc.add_heading('15.2  Commands', level=2)
 mono(
     'npm install\n'
     'cp .env.example .env.local        # then fill it in\n'
@@ -1115,13 +1317,13 @@ mono(
     'npm run brand:assets              # regenerate every logo and icon'
 )
 
-doc.add_heading('14.3  Migrations', level=2)
+doc.add_heading('15.3  Migrations', level=2)
 para('Migrations are plain SQL files numbered by hand and applied in order. Each is checksummed '
      'when applied, and a file edited afterwards is refused rather than silently skipped — which '
      'is what stops two environments believing they are on the same schema when they are not.')
 
 # ═══════════════════════════════════════════════════════════════════════════
-doc.add_heading('15. Testing and verification', level=1)
+doc.add_heading('16. Testing and verification', level=1)
 
 table(
     ['Suite', 'Command', 'Covers'],
@@ -1154,23 +1356,33 @@ bullet('Ageing ties to its control account — at every date tested, not only to
 bullet('Every posted entry is individually balanced.')
 
 # ═══════════════════════════════════════════════════════════════════════════
-doc.add_heading('16. Roadmap', level=1)
+doc.add_heading('17. Roadmap', level=1)
+para('Ordered by what unblocks the most, not by what is easiest. The first two items are what '
+     'stand between the product and customers outside its first market.')
+
 table(
     ['Priority', 'Item', 'Why it is next'],
     [
-        ('1', 'GSP contract for e-invoicing and e-way bills',
-         'The only compliance gap that affects a legal obligation'),
-        ('2', 'Tally export (phase 1)',
-         'Removes the year-end re-keying that every customer will otherwise face'),
-        ('3', 'User and branch management screens',
-         'The model and enforcement exist; only the administration UI is missing'),
-        ('4', 'Mail transport',
-         'Unblocks sending invoices, dunning, and the tokenised customer portal'),
-        ('5', 'Rule 46 print template',
-         'The printed invoice must carry every particular the rule requires'),
-        ('6', 'Payment gateway',
+        ('1', 'Multi-currency',
+         'Exchange rates per document, realised gain and loss, period-end revaluation. Until '
+         'this exists an exporter must invoice in its own currency, which many customers will '
+         'not accept.'),
+        ('2', 'A second tax jurisdiction (value added tax)',
+         'Proves the jurisdiction layer against a regime it was not written for, which is the '
+         'only way to find out where the seam actually is'),
+        ('3', 'Statutory-filing provider contract for the implemented jurisdiction',
+         'The only compliance gap that touches a legal obligation today'),
+        ('4', 'Accounting-system export (phase 1)',
+         'Removes the year-end re-keying that every customer otherwise faces'),
+        ('5', 'User and registration management screens',
+         'The model and its enforcement exist; only the administration interface is missing'),
+        ('6', 'Mail transport',
+         'Unblocks sending invoices, payment reminders, and the tokenised customer portal'),
+        ('7', 'Statutory print template per jurisdiction',
+         'A printed invoice must carry every particular its jurisdiction requires'),
+        ('8', 'Payment collection',
          'Turns the portal from a statement into a collection channel'),
-        ('7', 'Tally bridge agent (phases 2–3)', 'Automates what phase 1 does by hand'),
+        ('9', 'Bridge agent (phases 2–3)', 'Automates what phase 1 does by hand'),
     ],
     widths=[0.7, 2.1, 3.4], font=9,
 )
