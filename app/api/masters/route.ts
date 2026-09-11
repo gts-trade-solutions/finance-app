@@ -48,7 +48,7 @@ export const GET = route(
         .execute(),
       db
         .selectFrom('branches')
-        .select(['id', 'name', 'gstin', 'state_code', 'address', 'is_primary'])
+        .select(['id', 'name', 'gstin', 'state_code', 'address', 'city', 'pincode', 'is_primary'])
         .where('org_id', '=', orgId)
         .where('is_active', '=', 1)
         .orderBy('is_primary', 'desc')
@@ -176,6 +176,8 @@ export const GET = route(
         gstin: b.gstin,
         stateCode: b.state_code,
         address: b.address,
+        city: b.city,
+        pincode: b.pincode,
         isPrimary: !!b.is_primary,
       })),
       users: users.map((u) => ({

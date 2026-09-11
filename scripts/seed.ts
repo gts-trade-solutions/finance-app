@@ -38,6 +38,12 @@ const DATA_TABLES = [
   'stock_adjustments', 'warehouses',
   'journal_lines', 'journal_entries', 'number_series', 'sequences', 'transaction_locks',
   'custom_field_values', 'custom_fields', 'approval_rules', 'workflow_rules',
+  // Portal connections and their call history. The sealed credentials and
+  // session tokens hang off a connection rather than carrying org_id, so they
+  // are cleared separately below — the same exception `user_branches` is.
+  'integration_calls', 'integration_connections',
+  // Reports reference their dataset, so they go first.
+  'analytics_reports', 'analytics_datasets',
   'api_tokens', 'jobs', 'files', 'settings', 'audit_log',
   'items', 'hsn_codes', 'contacts', 'accounts',
   'sessions', 'users', 'branches',
@@ -72,6 +78,21 @@ async function main() {
       await sql
         .raw(`DELETE FROM user_branches WHERE user_id IN (SELECT id FROM users WHERE org_id IN (${idList}))`)
         .execute(db);
+
+      // Sealed portal credentials and their session tokens. Keyed on the
+      // connection, not the organisation, so they need the subquery — and they
+      // have to go before the connections they hang off. Left behind, they are
+      // ciphertext nothing can open, pointing at a registration that no longer
+      // exists: harmless, but exactly the kind of debris that later reads as a
+      // security question nobody can answer.
+      for (const t of ['integration_credentials', 'integration_sessions']) {
+        await sql
+          .raw(
+            `DELETE FROM \`${t}\` WHERE connection_id IN ` +
+              `(SELECT id FROM integration_connections WHERE org_id IN (${idList}))`,
+          )
+          .execute(db);
+      }
 
       for (const t of DATA_TABLES) {
         await sql.raw(`DELETE FROM \`${t}\` WHERE org_id IN (${idList})`).execute(db);

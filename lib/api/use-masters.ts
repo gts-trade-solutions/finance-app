@@ -57,7 +57,8 @@ interface MastersResponse {
   }[];
   branches: {
     id: string; name: string; gstin: string | null; stateCode: string;
-    address: string | null; isPrimary: boolean;
+    address: string | null; city: string | null; pincode: string | null;
+    isPrimary: boolean;
   }[];
   users: {
     id: string; name: string; email: string; role: string;
@@ -182,6 +183,8 @@ export function useMasters(): {
             gstin: b.gstin ?? '',
             stateCode: b.stateCode,
             address: b.address ?? '',
+            city: b.city ?? '',
+            pincode: b.pincode ?? '',
             isPrimary: b.isPrimary,
           })),
 

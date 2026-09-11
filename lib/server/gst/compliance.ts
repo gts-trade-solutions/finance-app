@@ -12,10 +12,9 @@ import 'server-only';
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { sql } from 'kysely';
-import type { Executor, Trx } from '../db';
+import type { Executor } from '../db';
 import type { Paise } from '../../types';
 import { toPaiseFromSql } from '../money-sql';
-import { badRequest, conflict, notFound } from '../http';
 
 // ── e-invoices ───────────────────────────────────────────────────────────────
 
@@ -96,91 +95,6 @@ export async function einvoiceQueue(
     })),
     counts: byStatus,
   };
-}
-
-/**
- * Register an invoice with the Invoice Registration Portal.
- *
- * The IRP call itself is not wired up — that needs a GSP contract and
- * production credentials, which are a commercial arrangement rather than code.
- * What *is* real is everything around it: the eligibility rules, the 30-day
- * window, the attempt count, and the fact that a registered invoice can no
- * longer be quietly edited. The IRN generated here is deterministic and clearly
- * marked so nothing can mistake it for one the government issued.
- */
-export async function submitEinvoice(
-  trx: Trx,
-  orgId: number,
-  invoiceId: number,
-): Promise<{ irn: string; ackNo: string; status: string }> {
-  const row = await trx
-    .selectFrom('einvoices as e')
-    .innerJoin('invoices as i', 'i.id', 'e.invoice_id')
-    .innerJoin('contacts as c', 'c.id', 'i.customer_id')
-    .innerJoin('branches as b', 'b.id', 'i.branch_id')
-    .select([
-      'e.id', 'e.status', 'e.attempts', 'i.number', 'i.invoice_date', 'i.status as invoice_status',
-      'c.gstin as customer_gstin', 'b.gstin as branch_gstin',
-    ])
-    .where('e.invoice_id', '=', invoiceId)
-    .where('e.org_id', '=', orgId)
-    .executeTakeFirst();
-  if (!row) throw notFound('That invoice has no e-invoice record.');
-
-  if (row.status === 'submitted') throw conflict(`${row.number} already has an IRN.`);
-  if (row.status === 'cancelled') throw conflict(`${row.number} was cancelled and cannot be registered.`);
-  if (row.invoice_status === 'draft') throw badRequest('A draft invoice cannot be registered — issue it first.');
-  if (row.invoice_status === 'void') throw badRequest('A void invoice cannot be registered.');
-  if (!row.branch_gstin) throw badRequest('This branch has no GSTIN, so it cannot raise e-invoices.');
-  if (!row.customer_gstin) {
-    throw badRequest(
-      `${row.number} has no customer GSTIN. Only B2B supplies are registered — add the GSTIN or mark the ` +
-        'customer unregistered.',
-    );
-  }
-
-  const age = Math.floor(
-    (Date.now() - new Date(String(row.invoice_date).slice(0, 10)).getTime()) / 86_400_000,
-  );
-  if (age > 30) {
-    await trx
-      .updateTable('einvoices')
-      .set({
-        status: 'failed',
-        attempts: row.attempts + 1,
-        error_code: '2150',
-        error_message:
-          `The 30-day registration window closed ${age - 30} day(s) ago. The portal will no longer accept ` +
-          'this invoice, so it cannot be made valid — issue a credit note and re-invoice.',
-      })
-      .where('id', '=', row.id)
-      .execute();
-    throw conflict(
-      `${row.number} is ${age} days old. The IRP only accepts invoices within 30 days of their date.`,
-    );
-  }
-
-  // A stand-in for the portal's response, derived from the invoice so it is
-  // stable across retries. Prefixed so it can never be mistaken for a real IRN.
-  const irn = `DEMO${String(orgId).padStart(4, '0')}${String(invoiceId).padStart(8, '0')}`
-    .padEnd(64, '0');
-  const ackNo = `1${String(invoiceId).padStart(13, '0')}`;
-
-  await trx
-    .updateTable('einvoices')
-    .set({
-      status: 'submitted',
-      irn,
-      ack_no: ackNo,
-      ack_date: new Date(),
-      attempts: row.attempts + 1,
-      error_code: null,
-      error_message: null,
-    })
-    .where('id', '=', row.id)
-    .execute();
-
-  return { irn, ackNo, status: 'submitted' };
 }
 
 // ── GSTR-2B reconciliation ───────────────────────────────────────────────────

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { sql } from 'kysely';
 import { db } from '@/lib/server/db';
 import { route, body, asId, badRequest } from '@/lib/server/http';
+import { isValidGstin } from '@/lib/tax/gst';
 import { logAudit, auditMeta } from '@/lib/server/audit';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -24,7 +25,10 @@ export const GET = route(
         .executeTakeFirst(),
       db
         .selectFrom('branches')
-        .select(['id', 'name', 'gstin', 'state_code', 'address', 'is_primary', 'is_active'])
+        .select([
+          'id', 'name', 'gstin', 'state_code', 'address', 'city', 'pincode',
+          'is_primary', 'is_active',
+        ])
         .where('org_id', '=', orgId)
         .orderBy('is_primary', 'desc')
         .execute(),
@@ -77,6 +81,10 @@ export const GET = route(
         gstin: b.gstin,
         stateCode: b.state_code,
         address: b.address,
+        // Both are mandatory on every e-invoice and e-way bill, as their own
+        // fields. Until they are filled in, nothing can be registered.
+        city: b.city,
+        pincode: b.pincode,
         isPrimary: !!b.is_primary,
         isActive: !!b.is_active,
       })),
@@ -158,6 +166,109 @@ export const PATCH = route(
     });
 
     return { id: asId(orgId), name: input.name };
+  },
+  { permission: { module: 'settings', action: 'edit' } },
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A branch's own details.
+//
+// Separate from the organisation profile because a branch *is* a GST
+// registration, and the two things that were never collected here — the city
+// and the PIN code — are mandatory on every e-invoice and every e-way bill,
+// as their own fields. Nothing can be registered with the portals until they
+// are filled in, and the pre-flight check has no way to fix that for the user.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const BranchInput = z.object({
+  branchId: z.union([z.string(), z.number()]),
+  name: z.string().trim().min(1, 'The registration needs a name.').max(150),
+  // Editable on purpose. A sign-up types its GSTIN once, and until now a typo
+  // could not be corrected anywhere in the app — which matters more than
+  // usual, because a wrong GSTIN fails at the portal rather than on screen.
+  gstin: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .regex(
+      /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/,
+      'A GSTIN is 15 characters: two state digits, a PAN, an entity digit, Z, and a check digit.',
+    )
+    .nullish()
+    .or(z.literal('').transform(() => null)),
+  address: z.string().trim().max(500).nullish().or(z.literal('').transform(() => null)),
+  city: z.string().trim().max(60).nullish().or(z.literal('').transform(() => null)),
+  pincode: z
+    .string()
+    .trim()
+    .regex(/^[1-9]\d{5}$/, 'A PIN code is six digits and cannot start with 0.')
+    .nullish()
+    .or(z.literal('').transform(() => null)),
+});
+
+export const PUT = route(
+  async ({ orgId, user, req }) => {
+    const input = await body(req, BranchInput);
+    const branchId = Number(input.branchId);
+
+    const existing = await db
+      .selectFrom('branches')
+      .select(['id', 'name', 'gstin', 'state_code'])
+      .where('id', '=', branchId)
+      .where('org_id', '=', orgId)
+      .executeTakeFirst();
+    if (!existing) throw badRequest('That registration does not belong to this organisation.');
+
+    // The first two digits of a GSTIN *are* the state, and the state is not
+    // editable here — every number series and every posted document was
+    // written under it. So a GSTIN from a different state is a typo, and the
+    // portal would reject it anyway.
+    if (input.gstin && input.gstin.slice(0, 2) !== existing.state_code) {
+      throw badRequest(
+        `That GSTIN begins ${input.gstin.slice(0, 2)}, but this registration is in state ` +
+          `${existing.state_code}. A registration cannot be moved between states — add a new one instead.`,
+      );
+    }
+    if (input.gstin && !isValidGstin(input.gstin)) {
+      throw badRequest(`${input.gstin} fails its checksum, so it is mistyped somewhere.`);
+    }
+
+    await db
+      .updateTable('branches')
+      .set({
+        name: input.name,
+        gstin: input.gstin ?? null,
+        address: input.address ?? null,
+        city: input.city ?? null,
+        pincode: input.pincode ?? null,
+      })
+      .where('id', '=', branchId)
+      .where('org_id', '=', orgId)
+      .execute();
+
+    // Worth its own audit line rather than folding into the org update: a
+    // changed GSTIN invalidates the portal credentials stored against it, and
+    // "when did this GSTIN change" is the first question when that surfaces.
+    const gstinChanged = (existing.gstin ?? null) !== (input.gstin ?? null);
+    await logAudit({
+      orgId, actorUserId: user.userId, actorName: user.name, action: 'update',
+      targetType: 'branch', targetId: branchId, targetLabel: input.name,
+      detail: gstinChanged
+        ? `GSTIN changed from ${existing.gstin ?? 'none'} to ${input.gstin ?? 'none'}`
+        : 'Updated the registration details',
+      ...auditMeta(req),
+    });
+
+    return {
+      id: asId(branchId),
+      gstinChanged,
+      // Said back to the caller so the UI can warn rather than let somebody
+      // discover it on their next submission.
+      note: gstinChanged
+        ? 'Any portal credentials stored for this registration were issued for the old GSTIN and will ' +
+          'have to be entered again.'
+        : null,
+    };
   },
   { permission: { module: 'settings', action: 'edit' } },
 );

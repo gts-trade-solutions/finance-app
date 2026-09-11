@@ -28,12 +28,16 @@ const MATRIX: Record<RoleName, Record<string, Action[]>> = {
     reports: ['view'],
     settings: ['view'],
     ai: ['view', 'create'],
+    // Analytics works on copies, never the ledger, so building reports is
+    // open to anyone who can see the figures they are built from.
+    analytics: ['view', 'create', 'edit', 'void'],
   },
   sales: {
     sales: ['view', 'create', 'edit'],
     reports: ['view'],
     inventory: ['view'],
     ai: ['view'],
+    analytics: ['view', 'create', 'edit'],
   },
   staff: {
     sales: ['view', 'create'],
@@ -50,6 +54,8 @@ const MATRIX: Record<RoleName, Record<string, Action[]>> = {
     reports: ['view'],
     inventory: ['view'],
     ai: ['view'],
+    // Auditors and stakeholders read the board pack; they do not edit it.
+    analytics: ['view'],
   },
 };
 

@@ -49,6 +49,8 @@ const ROUTES = [
   '/reports/retainer-details', '/reports/sales-order-details',
   '/reports/estimate-details', '/reports/time-to-get-paid',
   '/reports/refund-history',
+  // Analytics
+  '/analytics', '/analytics/new',
   // Depth
   '/ai', '/settings', '/settings/hsn-codes', '/portal',
   // The signed-out surface. Visited last, and while signed in, which is fine:

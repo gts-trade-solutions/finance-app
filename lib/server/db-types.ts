@@ -38,6 +38,38 @@ export interface Accounts {
   updated_at: Generated<Date>;
 }
 
+export interface AnalyticsDatasets {
+  column_count: number;
+  columns_json: Json;
+  created_at: Generated<Date>;
+  created_by_user_id: number | null;
+  data_json: string;
+  description: string | null;
+  id: Generated<number>;
+  name: string;
+  org_id: number;
+  refreshed_at: Date | null;
+  row_count: number;
+  size_bytes: number;
+  source: "books" | "paste" | "sample" | "upload";
+  source_name: string | null;
+  updated_at: Generated<Date>;
+}
+
+export interface AnalyticsReports {
+  created_at: Generated<Date>;
+  created_by_user_id: number | null;
+  dataset_id: number;
+  description: string | null;
+  filters_json: Json | null;
+  id: Generated<number>;
+  layout_json: Json;
+  name: string;
+  org_id: number;
+  updated_at: Generated<Date>;
+  visibility: Generated<"org" | "private">;
+}
+
 export interface ApiTokens {
   created_at: Generated<Date>;
   created_by_user_id: number | null;
@@ -217,6 +249,7 @@ export interface Bills {
 
 export interface Branches {
   address: string | null;
+  city: string | null;
   created_at: Generated<Date>;
   gstin: string | null;
   id: Generated<number>;
@@ -224,6 +257,7 @@ export interface Branches {
   is_primary: Generated<number>;
   name: string;
   org_id: number;
+  pincode: string | null;
   state_code: string;
   updated_at: Generated<Date>;
 }
@@ -274,6 +308,8 @@ export interface Cheques {
 
 export interface Contacts {
   billing_address: string | null;
+  billing_city: string | null;
+  billing_pincode: string | null;
   created_at: Generated<Date>;
   credit_limit: Decimal | null;
   display_name: string;
@@ -293,6 +329,8 @@ export interface Contacts {
   payment_terms: string | null;
   phone: string | null;
   shipping_address: string | null;
+  shipping_city: string | null;
+  shipping_pincode: string | null;
   state_code: string;
   tds_applicable: Generated<number>;
   tds_section: string | null;
@@ -397,6 +435,8 @@ export interface Einvoices {
   invoice_id: number;
   irn: string | null;
   org_id: number;
+  provider: string | null;
+  signed_invoice: string | null;
   signed_qr_payload: string | null;
   status: Generated<"cancelled" | "failed" | "not_applicable" | "pending" | "submitted">;
   updated_at: Generated<Date>;
@@ -454,12 +494,16 @@ export interface EwayBills {
   distance_km: number | null;
   error_message: string | null;
   eway_bill_no: string | null;
+  extended_count: Generated<number>;
   from_pincode: string | null;
   generated_at: Date | null;
   id: Generated<number>;
   invoice_id: number | null;
   org_id: number;
+  part_b_at: Date | null;
+  provider: string | null;
   status: Generated<"cancelled" | "expired" | "generated" | "pending">;
+  sub_supply_type: Generated<string>;
   to_pincode: string | null;
   transport_mode: Generated<"air" | "rail" | "road" | "ship">;
   transporter_id: string | null;
@@ -541,6 +585,63 @@ export interface HsnCodes {
   org_id: number;
   updated_at: Generated<Date>;
   uqc: string | null;
+}
+
+export interface IntegrationCalls {
+  connection_id: number | null;
+  created_at: Generated<Date>;
+  duration_ms: Generated<number>;
+  error_code: string | null;
+  error_message: string | null;
+  http_status: number | null;
+  id: Generated<number>;
+  operation: string;
+  org_id: number;
+  outcome: "error" | "ok" | "rejected" | "timeout";
+  portal: "einvoice" | "ewaybill" | "returns";
+  provider: string;
+  reference_id: number | null;
+  reference_type: string | null;
+  request_digest: string | null;
+  request_json: Json | null;
+  response_json: Json | null;
+}
+
+export interface IntegrationConnections {
+  branch_id: number;
+  config: Json | null;
+  created_at: Generated<Date>;
+  created_by_user_id: number | null;
+  gstin: string | null;
+  id: Generated<number>;
+  last_error: string | null;
+  last_verified_at: Date | null;
+  org_id: number;
+  portal: "einvoice" | "ewaybill" | "returns";
+  provider: Generated<string>;
+  status: Generated<"configured" | "disabled" | "failed" | "not_configured" | "verified">;
+  updated_at: Generated<Date>;
+}
+
+export interface IntegrationCredentials {
+  auth_tag: Buffer;
+  ciphertext: Buffer;
+  connection_id: number;
+  created_at: Generated<Date>;
+  iv: Buffer;
+  key_version: Generated<number>;
+  rotated_at: Date | null;
+  updated_at: Generated<Date>;
+}
+
+export interface IntegrationSessions {
+  auth_tag: Buffer;
+  ciphertext: Buffer;
+  connection_id: number;
+  created_at: Generated<Date>;
+  expires_at: Date;
+  iv: Buffer;
+  key_version: Generated<number>;
 }
 
 export interface InvoiceLines {
@@ -1014,6 +1115,8 @@ export interface WorkflowRules {
 
 export interface DB {
   accounts: Accounts;
+  analytics_datasets: AnalyticsDatasets;
+  analytics_reports: AnalyticsReports;
   api_tokens: ApiTokens;
   approval_rules: ApprovalRules;
   audit_log: AuditLog;
@@ -1042,6 +1145,10 @@ export interface DB {
   files: Files;
   gstr2b_entries: Gstr2bEntries;
   hsn_codes: HsnCodes;
+  integration_calls: IntegrationCalls;
+  integration_connections: IntegrationConnections;
+  integration_credentials: IntegrationCredentials;
+  integration_sessions: IntegrationSessions;
   invoice_lines: InvoiceLines;
   invoices: Invoices;
   items: Items;

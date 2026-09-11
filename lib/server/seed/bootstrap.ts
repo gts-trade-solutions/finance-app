@@ -58,7 +58,11 @@ export interface BootstrapOptions {
    * so a new business gets exactly one and adds more when it registers in
    * another state. Omitted only by the demo seed, which brings its own two.
    */
-  branch?: { name: string; stateCode: string; gstin?: string | null; address?: string | null };
+  branch?: {
+    name: string; stateCode: string; gstin?: string | null; address?: string | null;
+    /** Both required by the GST portals, on every document, for both parties. */
+    city?: string | null; pincode?: string | null;
+  };
   admin?: { name: string; email: string; password: string };
 }
 
@@ -99,6 +103,8 @@ export async function bootstrap(trx: Trx, options: BootstrapOptions = {}): Promi
         gstin: options.branch.gstin || null,
         stateCode: options.branch.stateCode,
         address: options.branch.address ?? null,
+        city: options.branch.city ?? null,
+        pincode: options.branch.pincode ?? null,
         isPrimary: true,
       }]
     : SEED_BRANCHES;
@@ -113,6 +119,10 @@ export async function bootstrap(trx: Trx, options: BootstrapOptions = {}): Promi
         gstin: b.gstin,
         state_code: b.stateCode,
         address: b.address,
+        // Separate columns, not parsed out of the address line: the e-invoice
+        // and e-way bill schemas both demand them as their own fields.
+        city: b.city ?? null,
+        pincode: b.pincode ?? null,
         is_primary: b.isPrimary ? 1 : 0,
         is_active: 1,
       })
@@ -241,7 +251,14 @@ export async function bootstrap(trx: Trx, options: BootstrapOptions = {}): Promi
         email: c.email || null,
         phone: c.phone || null,
         billing_address: formatAddress(c.billingAddress),
+        // The seed has always carried these inside the address object and
+        // `formatAddress` flattened them into one string, losing them. The GST
+        // portals want them back out again, so they are stored as they came.
+        billing_city: c.billingAddress?.city ?? null,
+        billing_pincode: c.billingAddress?.pincode ?? null,
         shipping_address: c.shippingAddress ? formatAddress(c.shippingAddress) : null,
+        shipping_city: c.shippingAddress?.city ?? null,
+        shipping_pincode: c.shippingAddress?.pincode ?? null,
         payment_terms: c.paymentTermsDays ? `net_${c.paymentTermsDays}` : null,
         credit_limit: c.creditLimit != null ? toSqlFromPaise(c.creditLimit) : null,
         opening_balance: toSqlFromPaise(c.openingBalance ?? 0),

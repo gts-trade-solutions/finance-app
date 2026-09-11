@@ -3,7 +3,7 @@ import {
   FileText, Landmark, LayoutDashboard, type LucideIcon, Package, Receipt,
   ReceiptIndianRupee, Repeat, ScrollText, Settings, ShieldCheck, ShoppingCart,
   Truck, Users, Wallet, FileCheck2, HandCoins, ClipboardList, CalendarClock,
-  FileMinus, Building, AlertTriangle, Split, Lock,
+  FileMinus, Building, AlertTriangle, Split, Lock, ChartColumnBig,
 } from 'lucide-react';
 
 export interface NavItem {
@@ -115,6 +115,7 @@ export const TOP_LEVEL: NavItem[] = [
 
 export const BOTTOM_LEVEL: NavItem[] = [
   { label: 'Reports', href: '/reports', icon: BarChart3, module: 'reports' },
+  { label: 'Analytics', href: '/analytics', icon: ChartColumnBig, module: 'analytics' },
   { label: 'AI Assistant', href: '/ai', icon: Bot, module: 'ai' },
   { label: 'Settings', href: '/settings', icon: Settings, module: 'settings' },
 ];

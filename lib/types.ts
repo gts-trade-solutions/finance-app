@@ -34,6 +34,11 @@ export interface Branch {
   gstin: string;
   stateCode: string; // '33' TN, '29' KA …
   address: string;
+  // Both are mandatory in the e-invoice and e-way bill schemas, on every
+  // document, and as their own fields — the portals will not dig them out of
+  // an address line.
+  city: string;
+  pincode: string;
   isPrimary: boolean;
 }
 

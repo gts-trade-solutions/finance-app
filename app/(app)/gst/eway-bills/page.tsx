@@ -6,9 +6,10 @@
 // not move, so they never need one — which is why this list is filtered to
 // goods consignments above the threshold rather than to every invoice.
 //
-// Validity is one day per 200 km, minimum one day, counted from generation.
-// An expired bill on a lorry that is still in transit is a detention risk, so
-// the expiry is shown rather than buried.
+// Validity is one day per 200 km, minimum one day, counted from when Part B —
+// the vehicle — is entered, and running to midnight of the last day. An
+// expired bill on a lorry that is still in transit is a detention risk, so the
+// expiry is shown rather than buried.
 
 import { useState } from 'react';
 import { Loader2, Truck } from 'lucide-react';
@@ -31,6 +32,7 @@ import { gst, type EwayBillRow } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { formatINRCompact } from '@/lib/money';
+import { cn } from '@/lib/utils';
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -47,13 +49,21 @@ export default function EwayBillsPage() {
 
   const rows = state.data?.ewayBills ?? [];
   const generated = rows.filter((r) => r.status === 'generated');
-  const needed = rows.filter((r) => r.status === 'not_generated');
+  // Listed and *required* are different things. Every goods document over
+  // ₹50,000 is listed, but a state may set a higher intra-state threshold, so
+  // some of those rows need nothing. Counting them as outstanding would put a
+  // permanent warning tile in front of somebody with nothing to do.
+  const needed = rows.filter((r) => r.status === 'not_generated' && r.required);
   const expired = generated.filter((r) => r.validUntil && r.validUntil < today());
+  const blocked = rows.filter((r) => r.blockers.length > 0);
 
   const submit = async () => {
     if (!target) return;
     const done = await generate.run({
-      invoiceId: target.invoiceId,
+      // A challan carries no invoice id, so the row says which it is.
+      ...(target.docKind === 'invoice'
+        ? { invoiceId: target.docId }
+        : { challanId: target.docId }),
       vehicleNo: vehicleNo || null,
       transporterName: transporter || null,
       distanceKm: distance,
@@ -62,8 +72,12 @@ export default function EwayBillsPage() {
       toast.error(generate.error ?? 'The e-way bill was not generated');
       return;
     }
+    const days = Math.max(1, Math.ceil(distance / 200));
     toast.success(`E-way bill ${done.ewayBillNo} generated`, {
-      description: `Valid ${done.validDays} day(s) — one per 200 km.`,
+      description:
+        `Valid ${days} day${days === 1 ? '' : 's'} — one per 200 km — until ` +
+        `${done.validUntil.slice(0, 16)}.` +
+        (done.live ? '' : ' Nothing was filed with any portal: no GSP is connected.'),
     });
     setTarget(null);
     setVehicleNo('');
@@ -77,16 +91,42 @@ export default function EwayBillsPage() {
       cell: (r) =>
         r.ewayBillNo ? (
           <span className="font-mono font-medium">{r.ewayBillNo}</span>
-        ) : (
+        ) : r.required ? (
           <Badge variant="outline" className="border-amber-500/40 text-[10px]">Needed</Badge>
+        ) : (
+          // Listed because it is over ₹50,000, but under this state's own
+          // limit. Saying "Needed" here contradicted the column beside it.
+          <span className="text-xs text-muted-foreground">—</span>
         ),
     },
     {
-      key: 'invoice', header: 'Invoice', sortValue: (r) => r.number,
+      key: 'invoice', header: 'Document', sortValue: (r) => r.number,
       cell: (r) => (
-        <div>
-          <p className="font-medium">{r.number}</p>
+        // The reason sits under the document rather than in a column of its
+        // own. As a separate column it pushed the Generate button off the edge
+        // of an ordinary laptop screen — the one action this page exists for.
+        // The cells are nowrap, right for figures and wrong for a sentence,
+        // hence the override.
+        <div className="w-[18rem] whitespace-normal">
+          <div className="flex items-center gap-1.5">
+            <p className="font-medium">{r.number}</p>
+            {/* A challan is the case people miss — worth saying so on the row. */}
+            {r.docKind === 'challan' && (
+              <Badge variant="outline" className="text-[9px]">Challan</Badge>
+            )}
+          </div>
           <p className="text-xs text-muted-foreground">{r.customerName}</p>
+          <p
+            className={cn(
+              'mt-1 text-xs leading-snug',
+              r.required ? 'text-amber-700 dark:text-amber-300' : 'text-muted-foreground',
+            )}
+          >
+            {r.requirementReason}
+          </p>
+          {r.blockers.map((b) => (
+            <p key={b} className="mt-1 text-xs leading-snug text-destructive">{b}</p>
+          ))}
         </div>
       ),
     },
@@ -128,6 +168,11 @@ export default function EwayBillsPage() {
         r.status === 'not_generated' && canGenerate ? (
           <Button
             size="xs"
+            // Blocked means the portal will refuse it — a document past 180
+            // days can never carry a bill, so offering the button would be
+            // offering something that cannot work.
+            disabled={r.blockers.length > 0}
+            variant={r.required ? 'default' : 'outline'}
             onClick={(e) => {
               e.stopPropagation();
               setTarget(r);
@@ -144,7 +189,11 @@ export default function EwayBillsPage() {
     <>
       <PageHeader
         title="E-way bills"
-        description="Goods worth more than ₹50,000 cannot move without one. Services never need one, because nothing travels."
+        description={
+          'Goods over ₹50,000 cannot move without one — and some states set a higher limit inside their ' +
+          'own borders. Delivery challans are listed too: sending material out for job work is not a sale, ' +
+          'but the lorry still has to be declared, and between states it needs a bill at any value.'
+        }
       />
 
       <AsyncPage state={state}>
@@ -165,10 +214,14 @@ export default function EwayBillsPage() {
                 tone="positive"
               />
               <StatTile
-                label="Expired"
-                value={String(expired.length)}
-                sub="Still in transit is a detention risk"
-                tone={expired.length ? 'danger' : 'default'}
+                label={blocked.length ? 'Past 180 days' : 'Expired'}
+                value={String(blocked.length || expired.length)}
+                sub={
+                  blocked.length
+                    ? 'Too old to ever carry a bill'
+                    : 'Still in transit is a detention risk'
+                }
+                tone={blocked.length || expired.length ? 'danger' : 'default'}
               />
             </div>
 
@@ -182,7 +235,9 @@ export default function EwayBillsPage() {
               <DataTable
                 rows={d.ewayBills}
                 columns={columns}
-                getRowId={(r) => r.invoiceId}
+                // Invoice ids and challan ids are separate sequences, so the
+                // kind has to be part of the key or two rows can collide.
+                getRowId={(r) => `${r.docKind}:${r.docId}`}
                 initialSort={{ key: 'date', dir: 'desc' }}
                 searchPlaceholder="Search invoice, customer or vehicle…"
               />
@@ -196,13 +251,14 @@ export default function EwayBillsPage() {
           <DialogHeader>
             <DialogTitle>Generate e-way bill for {target?.number}</DialogTitle>
             <DialogDescription>
-              Validity is one day per 200 km, minimum one day, counted from now. Getting the distance wrong is the
-              usual reason a bill expires with the lorry still on the road.
+              A vehicle number is Part B, and validity only starts counting once it is entered — one day per
+              200 km, running to midnight of the last day. Getting the distance wrong is the usual reason a
+              bill expires with the lorry still on the road.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
-              <Field label="Vehicle number">
+              <Field label="Vehicle number" required hint="Part B — the bill authorises nothing without it">
                 <Input
                   value={vehicleNo}
                   onChange={(e) => setVehicleNo(e.target.value.toUpperCase())}

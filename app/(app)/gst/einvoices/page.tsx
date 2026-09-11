@@ -58,10 +58,21 @@ export default function EInvoicesPage() {
     const done = await submit.run(r.invoiceId);
     setBusy(null);
     if (!done) {
-      toast.error('The portal rejected it', { description: submit.error ?? undefined });
+      // Most refusals now come from our own pre-flight check rather than the
+      // portal, and they name the field — so the message is worth showing in
+      // full rather than summarising it away.
+      toast.error(`${r.number} was not registered`, { description: submit.error ?? undefined });
       return;
     }
-    toast.success(`IRN generated for ${r.number}`);
+    toast.success(`IRN generated for ${r.number}`, {
+      description: [
+        done.live ? null : 'Nothing was filed with any portal: no GSP is connected.',
+        done.ewayBillNo ? `E-way bill ${done.ewayBillNo} was issued with it.` : null,
+        ...done.warnings,
+      ]
+        .filter(Boolean)
+        .join(' ') || undefined,
+    });
     state.refetch();
   };
 

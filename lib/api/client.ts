@@ -122,6 +122,9 @@ export interface SessionResponse {
     gstin: string | null;
     stateCode: string;
     address: string | null;
+    /** Both required on every e-invoice and e-way bill, as their own fields. */
+    city: string | null;
+    pincode: string | null;
     isPrimary: boolean;
   }[];
 }
@@ -901,7 +904,15 @@ export interface EinvoiceRow {
 
 export interface EwayBillRow {
   id: string | null;
-  invoiceId: string;
+  /**
+   * Goods move on two kinds of document, and only one of them is a sale. A
+   * challan covers job work, branch transfers and goods out on approval — no
+   * invoice, no revenue, and still a lorry that has to be declared.
+   */
+  docKind: 'invoice' | 'challan';
+  docId: string;
+  /** Null on a challan row. Use `docKind` and `docId` to address the document. */
+  invoiceId: string | null;
   number: string;
   date: string;
   customerName: string;
@@ -913,6 +924,43 @@ export interface EwayBillRow {
   transporterName: string | null;
   distanceKm: number | null;
   validUntil: string | null;
+  /**
+   * Whether a bill is actually required, after the state's own threshold and
+   * the no-threshold cases. A row can be listed and not required.
+   */
+  required: boolean;
+  requirementReason: string;
+  /** Reasons one cannot be generated even though it is needed. */
+  blockers: string[];
+}
+
+export interface EwayBillCheckResponse {
+  label: string;
+  assessment: {
+    required: boolean;
+    reason: string;
+    thresholdPaise: number | null;
+    blockers: string[];
+    warnings: string[];
+  };
+  missing: string[];
+  existingNo: string | null;
+  provider: string;
+  live: boolean;
+}
+
+export interface EinvoicePreviewResponse {
+  invoiceId: string;
+  number: string;
+  payload: unknown;
+  preflight: {
+    ok: boolean;
+    errors: { field: string; message: string; severity: string }[];
+    warnings: { field: string; message: string; severity: string }[];
+  };
+  provider: string;
+  live: boolean;
+  connected: boolean;
 }
 
 export interface ItcMatchRow {
@@ -961,15 +1009,49 @@ export const gst = {
       { view: 'itc', period },
     ),
   tds: (from?: string, to?: string) => api.get<TdsResponse>('/api/gst', { view: 'tds', from, to }),
-  submitEinvoice: (invoiceId: string) =>
-    api.post<{ irn: string; ackNo: string; status: string }>('/api/gst', {
-      action: 'submit-einvoice', invoiceId,
+  /** Build and check an invoice without submitting it — costs no attempt. */
+  einvoicePreview: (invoiceId: string) =>
+    api.get<EinvoicePreviewResponse>('/api/gst', { view: 'einvoice-preview', invoiceId }),
+  ewayCheck: (doc: { docKind: 'invoice' | 'challan'; docId: string }) =>
+    api.get<EwayBillCheckResponse>('/api/gst', {
+      view: 'eway-check',
+      invoiceId: doc.docKind === 'invoice' ? doc.docId : undefined,
+      challanId: doc.docKind === 'challan' ? doc.docId : undefined,
     }),
-  generateEwayBill: (input: unknown) =>
-    api.post<{ ewayBillNo: string; status: string; validUntil?: string; validDays?: number }>(
-      '/api/gst',
-      { action: 'generate-eway-bill', ...(input as object) },
-    ),
+  submitEinvoice: (invoiceId: string) =>
+    api.post<{
+      irn: string;
+      ackNo: string;
+      status: string;
+      provider: string;
+      /** False when nothing was actually filed with any portal. */
+      live: boolean;
+      warnings: string[];
+      /** Set when the portal issued an e-way bill from the same call. */
+      ewayBillNo: string | null;
+    }>('/api/gst', { action: 'submit-einvoice', invoiceId }),
+  generateEwayBill: (input: {
+    /** Exactly one of these. A challan moves goods just as an invoice does. */
+    invoiceId?: string;
+    challanId?: string;
+    vehicleNo?: string | null;
+    transporterId?: string | null;
+    transporterName?: string | null;
+    transportDocNo?: string | null;
+    transportDocDate?: string | null;
+    distanceKm?: number | null;
+    transportMode?: 'road' | 'rail' | 'air' | 'ship';
+    isOverDimensional?: boolean;
+  }) =>
+    api.post<{
+      ewayBillNo: string;
+      status: string;
+      /** yyyy-mm-dd HH:mm:ss. Runs to midnight of the last day. */
+      validUntil: string;
+      provider: string;
+      live: boolean;
+      assessment: { required: boolean; reason: string };
+    }>('/api/gst', { action: 'generate-eway-bill', ...input }),
 };
 
 // ── Recurring invoices ───────────────────────────────────────────────────────

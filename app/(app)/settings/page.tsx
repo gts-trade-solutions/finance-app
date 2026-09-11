@@ -19,6 +19,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { PageHeader } from '@/components/shared/page-header';
 import { Field } from '@/components/shared/form-bits';
 import { AsyncPage } from '@/components/shared/async-state';
+import { BranchDialog, type EditableBranch } from '@/components/settings/branch-dialog';
+import { IntegrationsPanel } from '@/components/settings/integrations-panel';
 import { api } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { useAppStore } from '@/lib/store';
@@ -34,7 +36,10 @@ interface SettingsResponse {
   };
   branches: {
     id: string; name: string; gstin: string | null; stateCode: string;
-    address: string | null; isPrimary: boolean; isActive: boolean;
+    address: string | null;
+    /** Both mandatory on every e-invoice and e-way bill, as their own fields. */
+    city: string | null; pincode: string | null;
+    isPrimary: boolean; isActive: boolean;
   }[];
   users: {
     id: string; name: string; email: string; role: string;
@@ -58,11 +63,6 @@ const ROLE_MATRIX = [
  * that lies about what is connected is worse than one that admits the gap.
  */
 const NOT_BUILT = [
-  {
-    name: 'GST Suvidha Provider',
-    desc: 'E-invoice IRNs, e-way bills and GSTR-2B downloads run through a licensed GSP.',
-    why: 'Needs a GSP contract and production credentials. The rules around it are implemented; the call is not.',
-  },
   {
     name: 'Account Aggregator bank feeds',
     desc: 'Daily transaction sync straight from your banks.',
@@ -101,6 +101,7 @@ export default function SettingsPage() {
   const state = useApi<SettingsResponse>(() => api.get('/api/settings'), []);
 
   const [form, setForm] = useState({ name: '', legalName: '', pan: '', email: '', phone: '', address: '' });
+  const [editingBranch, setEditingBranch] = useState<EditableBranch | null>(null);
   const save = useApiAction((input: unknown) => api.patch<{ id: string }>('/api/settings', input));
 
   useEffect(() => {
@@ -147,7 +148,7 @@ export default function SettingsPage() {
               <TabsTrigger value="org">Organisation</TabsTrigger>
               <TabsTrigger value="users">Users &amp; roles</TabsTrigger>
               <TabsTrigger value="numbering">Numbering</TabsTrigger>
-              <TabsTrigger value="integrations">Not built yet</TabsTrigger>
+              <TabsTrigger value="integrations">Integrations</TabsTrigger>
             </TabsList>
 
             {/* Organisation */}
@@ -232,26 +233,54 @@ export default function SettingsPage() {
               <Card className="p-5">
                 <h3 className="mb-3 text-sm font-semibold">Branches &amp; GST registrations</h3>
                 <div className="space-y-2">
-                  {d.branches.map((b) => (
-                    <div key={b.id} className="flex flex-wrap items-center gap-3 rounded-md border p-3">
-                      <Building2 className="size-4 shrink-0 text-muted-foreground" />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <p className="font-medium">{b.name}</p>
-                          {b.isPrimary && <Badge variant="secondary" className="text-[9px]">Primary</Badge>}
+                  {d.branches.map((b) => {
+                    // Named individually, because these are exactly the fields
+                    // that stop an invoice being registered — and a user can
+                    // act on "no PIN code" in a way they cannot act on a
+                    // rejection code from the portal.
+                    const missing = [
+                      !b.gstin ? 'GSTIN' : null,
+                      !b.city ? 'city' : null,
+                      !b.pincode ? 'PIN code' : null,
+                    ].filter(Boolean) as string[];
+
+                    return (
+                      <div key={b.id} className="flex flex-wrap items-center gap-3 rounded-md border p-3">
+                        <Building2 className="size-4 shrink-0 text-muted-foreground" />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="font-medium">{b.name}</p>
+                            {b.isPrimary && <Badge variant="secondary" className="text-[9px]">Primary</Badge>}
+                          </div>
+                          <p className="mt-0.5 text-xs text-muted-foreground">
+                            {[b.address, b.city, b.pincode].filter(Boolean).join(', ') ||
+                              stateName(b.stateCode)}
+                          </p>
+                          {missing.length > 0 && (
+                            <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+                              No {missing.join(', no ')} — the GST portals require {missing.length === 1 ? 'it' : 'all of them'} on
+                              every document, so nothing can be registered until {missing.length === 1 ? 'it is' : 'they are'} filled in.
+                            </p>
+                          )}
                         </div>
-                        <p className="mt-0.5 text-xs text-muted-foreground">
-                          {b.address ?? stateName(b.stateCode)}
-                        </p>
+                        <Badge variant="outline" className="font-mono text-[10px]">{b.gstin ?? 'No GSTIN'}</Badge>
+                        {canEdit && (
+                          <Button
+                            size="xs"
+                            variant={missing.length > 0 ? 'default' : 'outline'}
+                            onClick={() => setEditingBranch(b)}
+                          >
+                            Edit
+                          </Button>
+                        )}
                       </div>
-                      <Badge variant="outline" className="font-mono text-[10px]">{b.gstin ?? 'No GSTIN'}</Badge>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
                 <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
                   Each state you operate in needs its own GST registration, and each registration keeps its own
                   invoice number series. That&apos;s why branches sit at the heart of the app rather than being an
-                  afterthought.
+                  afterthought — and why portal credentials are per registration, not per business.
                 </p>
               </Card>
 
@@ -397,14 +426,19 @@ export default function SettingsPage() {
 
             {/* Honest gaps */}
             <TabsContent value="integrations" className="mt-4 space-y-3">
-              <Card className="flex items-start gap-3 border-amber-500/30 bg-amber-500/5 p-4">
-                <Plug className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
-                <p className="text-xs leading-relaxed text-muted-foreground">
-                  Everything below has a screen in the app but no working connection behind it. They are listed here
-                  rather than shown as switches that quietly save nothing — a settings page that claims to be
-                  connected when it is not is worse than one that admits the gap.
+              {/* The GST portals now have a real connection flow, so they are
+                  no longer in the "not built" list below — the credentials a
+                  customer creates on the portal are stored here. */}
+              <IntegrationsPanel canEdit={canEdit} />
+
+              <div className="pt-4">
+                <h3 className="text-sm font-semibold">Still not connected</h3>
+                <p className="mt-1 max-w-prose text-xs leading-relaxed text-muted-foreground">
+                  Everything below has a screen in the app but nothing behind it. Listed rather than shown as
+                  switches that quietly save nothing — a settings page that claims to be connected when it is
+                  not is worse than one that admits the gap.
                 </p>
-              </Card>
+              </div>
 
               {NOT_BUILT.map((i) => (
                 <Card key={i.name} className="flex flex-wrap items-start gap-3 p-4">
@@ -425,6 +459,15 @@ export default function SettingsPage() {
           </Tabs>
         )}
       </AsyncPage>
+
+      <BranchDialog
+        branch={editingBranch}
+        onOpenChange={(v) => !v && setEditingBranch(null)}
+        onSaved={() => {
+          void state.refetch();
+          setEditingBranch(null);
+        }}
+      />
     </>
   );
 }
