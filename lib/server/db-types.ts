@@ -38,6 +38,100 @@ export interface Accounts {
   updated_at: Generated<Date>;
 }
 
+export interface AiConversations {
+  created_at: Generated<Date>;
+  id: Generated<number>;
+  message_count: Generated<number>;
+  org_id: number;
+  session_key: string | null;
+  title: string;
+  updated_at: Generated<Date>;
+  user_id: number;
+}
+
+export interface AiCreditBuckets {
+  created_at: Generated<Date>;
+  expires_at: Date | null;
+  grant_key: string;
+  granted_mc: number;
+  id: Generated<number>;
+  note: string | null;
+  org_id: number;
+  payment_id: number | null;
+  remaining_mc: number;
+  source: "adjustment" | "demo" | "plan" | "topup" | "trial";
+  subscription_id: number | null;
+}
+
+export interface AiCreditLedger {
+  balance_after_mc: number;
+  bucket_id: number | null;
+  created_at: Generated<Date>;
+  delta_mc: number;
+  id: Generated<number>;
+  kind: "adjustment" | "expiry" | "grant" | "refund" | "usage";
+  note: string | null;
+  org_id: number;
+  usage_id: number | null;
+  user_id: number | null;
+}
+
+export interface AiMessages {
+  charged_mc: Generated<number>;
+  content: string;
+  conversation_id: number;
+  created_at: Generated<Date>;
+  followups_json: Json | null;
+  id: Generated<number>;
+  org_id: number;
+  role: "assistant" | "user";
+  sources_json: Json | null;
+  status: Generated<"complete" | "error" | "stopped">;
+  usage_id: number | null;
+}
+
+export interface AiSettings {
+  consent_at: Date | null;
+  consent_by_user_id: number | null;
+  enabled: Generated<number>;
+  org_id: number;
+  trial_granted_at: Date | null;
+  updated_at: Generated<Date>;
+  updated_by_user_id: number | null;
+  user_monthly_cap_mc: number | null;
+}
+
+export interface AiUsage {
+  cached_tokens: Generated<number>;
+  charged_mc: Generated<number>;
+  conversation_id: number | null;
+  cost_micro_usd: Generated<number>;
+  created_at: Generated<Date>;
+  duration_ms: number | null;
+  error_code: string | null;
+  estimated: Generated<number>;
+  hold_mc: number;
+  id: Generated<number>;
+  input_tokens: Generated<number>;
+  model: string;
+  model_calls: Generated<number>;
+  org_id: number;
+  outcome: "abandoned" | "answered" | "error" | "stopped" | null;
+  output_tokens: Generated<number>;
+  provider: string;
+  reasoning_tokens: Generated<number>;
+  settled_at: Date | null;
+  status: Generated<"failed" | "held" | "settled">;
+  tool_calls: Generated<number>;
+  user_id: number;
+}
+
+export interface AiWallets {
+  held_mc: Generated<number>;
+  org_id: number;
+  updated_at: Generated<Date>;
+}
+
 export interface AnalyticsDatasets {
   column_count: number;
   columns_json: Json;
@@ -190,6 +284,101 @@ export interface BankTransfers {
   reference: string | null;
   to_bank_account_id: number;
   transfer_date: ColumnType<string, string, string>;
+}
+
+export interface BillingCounters {
+  name: string;
+  next_value: Generated<number>;
+  updated_at: Generated<Date>;
+}
+
+export interface BillingInvoices {
+  buyer_json: Json;
+  cgst_paise: Generated<number>;
+  created_at: Generated<Date>;
+  id: Generated<number>;
+  igst_paise: Generated<number>;
+  invoice_date: ColumnType<string, string, string>;
+  is_tax_invoice: Generated<number>;
+  lines_json: Json;
+  number: string;
+  org_id: number;
+  payment_id: number;
+  place_of_supply: string | null;
+  seller_json: Json;
+  sgst_paise: Generated<number>;
+  taxable_paise: number;
+  total_paise: number;
+}
+
+export interface BillingPayments {
+  amount_paise: number;
+  created_at: Generated<Date>;
+  created_by_user_id: number | null;
+  credits: Generated<number>;
+  description: string;
+  failure_reason: string | null;
+  gst_paise: number;
+  id: Generated<number>;
+  kind: "subscription" | "topup";
+  method: string | null;
+  org_id: number;
+  pack_code: string | null;
+  paid_at: Date | null;
+  period_end: Date | null;
+  period_start: Date | null;
+  provider: "razorpay" | "standin";
+  provider_order_id: string | null;
+  provider_payment_id: string | null;
+  refunded_paise: Generated<number>;
+  status: Generated<"created" | "failed" | "paid" | "partially_refunded" | "refunded">;
+  subscription_id: number | null;
+  taxable_paise: number;
+  updated_at: Generated<Date>;
+}
+
+export interface BillingPlanLinks {
+  amount_paise: number;
+  created_at: Generated<Date>;
+  mode: "live" | "test";
+  period: "monthly" | "yearly";
+  plan_code: string;
+  provider_plan_id: string;
+}
+
+export interface BillingSubscriptions {
+  amount_paise: number;
+  cancel_at_period_end: Generated<number>;
+  created_at: Generated<Date>;
+  created_by_user_id: number | null;
+  current_end: Date | null;
+  current_start: Date | null;
+  ended_at: Date | null;
+  id: Generated<number>;
+  org_id: number;
+  pending_plan_code: string | null;
+  period: "monthly" | "yearly";
+  plan_code: string;
+  provider: "razorpay" | "standin";
+  provider_plan_id: string | null;
+  provider_subscription_id: string | null;
+  provider_synced_at: Date | null;
+  short_url: string | null;
+  status: Generated<"active" | "authenticated" | "cancelled" | "completed" | "created" | "expired" | "halted" | "paused" | "pending">;
+  updated_at: Generated<Date>;
+}
+
+export interface BillingWebhookEvents {
+  attempts: Generated<number>;
+  error: string | null;
+  event: string;
+  id: Generated<number>;
+  org_id: number | null;
+  payload: Json;
+  processed_at: Date | null;
+  provider_event_id: string;
+  received_at: Generated<Date>;
+  status: Generated<"failed" | "ignored" | "processed" | "received">;
 }
 
 export interface BillLines {
@@ -488,7 +677,25 @@ export interface Estimates {
   updated_at: Generated<Date>;
 }
 
+export interface EwayBillEvents {
+  created_at: Generated<Date>;
+  created_by_user_id: number | null;
+  eway_bill_id: number;
+  eway_bill_no: string;
+  from_place: string | null;
+  id: Generated<number>;
+  kind: "cancelled" | "extended" | "generated" | "vehicle_changed";
+  org_id: number;
+  reason_code: string | null;
+  remark: string | null;
+  transport_mode: "air" | "rail" | "road" | "ship" | null;
+  valid_until: Date | null;
+  vehicle_no: string | null;
+}
+
 export interface EwayBills {
+  cancel_reason: string | null;
+  cancelled_at: Date | null;
   challan_id: number | null;
   created_at: Generated<Date>;
   distance_km: number | null;
@@ -1115,6 +1322,13 @@ export interface WorkflowRules {
 
 export interface DB {
   accounts: Accounts;
+  ai_conversations: AiConversations;
+  ai_credit_buckets: AiCreditBuckets;
+  ai_credit_ledger: AiCreditLedger;
+  ai_messages: AiMessages;
+  ai_settings: AiSettings;
+  ai_usage: AiUsage;
+  ai_wallets: AiWallets;
   analytics_datasets: AnalyticsDatasets;
   analytics_reports: AnalyticsReports;
   api_tokens: ApiTokens;
@@ -1126,6 +1340,12 @@ export interface DB {
   bank_transactions: BankTransactions;
   bank_transfers: BankTransfers;
   bill_lines: BillLines;
+  billing_counters: BillingCounters;
+  billing_invoices: BillingInvoices;
+  billing_payments: BillingPayments;
+  billing_plan_links: BillingPlanLinks;
+  billing_subscriptions: BillingSubscriptions;
+  billing_webhook_events: BillingWebhookEvents;
   bills: Bills;
   branches: Branches;
   budgets: Budgets;
@@ -1140,6 +1360,7 @@ export interface DB {
   einvoices: Einvoices;
   estimate_lines: EstimateLines;
   estimates: Estimates;
+  eway_bill_events: EwayBillEvents;
   eway_bills: EwayBills;
   expenses: Expenses;
   files: Files;

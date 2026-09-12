@@ -336,6 +336,25 @@ export async function voidInvoice(
     );
   }
 
+  // A standing IRN means the government holds this invoice as issued. Voiding
+  // it only here would leave the books and the portal disagreeing, so the IRN
+  // is cancelled instead — which voids the invoice with it — and once 24 hours
+  // have passed only a credit note can reverse the sale.
+  const mark = await trx
+    .selectFrom('einvoices')
+    .select('status')
+    .where('invoice_id', '=', invoiceId)
+    .where('org_id', '=', orgId)
+    .executeTakeFirst();
+  if (mark?.status === 'submitted') {
+    throw new ApiError(
+      409,
+      `Invoice ${inv.number} has a registered IRN. Cancel the e-invoice instead, which voids the invoice ` +
+        'with it (possible for 24 hours after registration), or raise a credit note.',
+      'irn_active',
+    );
+  }
+
   if (inv.journal_entry_id) {
     await reverseEntry(trx, orgId, inv.journal_entry_id, {
       memo: `Void of invoice ${inv.number}${reason ? ` — ${reason}` : ''}`,

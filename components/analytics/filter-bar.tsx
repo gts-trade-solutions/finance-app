@@ -228,7 +228,7 @@ function FilterEditor({
 function ValuesEditor({ data, col, filter, onChange }: { data: DatasetData; col: ColumnSchema; filter: Filter; onChange: (f: Filter) => void }) {
   const all = useMemo(() => distinctValues(data, col.key, 500), [data, col.key]);
   const [q, setQ] = useState('');
-  const key = (v: Cell) => (v === null ? ' ' : String(v));
+  const key = (v: Cell) => (v === null ? '\u0000' : String(v));
   const selected = new Set((filter.values ?? all.map((a) => a.value)).map(key));
   const list = q ? all.filter((a) => a.label.toLowerCase().includes(q.toLowerCase())) : all;
 

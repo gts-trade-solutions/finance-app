@@ -184,6 +184,19 @@ function simulatedNic(opts: { sekAsBase64?: boolean } = {}): Portal {
         });
       }
 
+      if (url.pathname === '/eiewb/v1.03/ewaybill') {
+        // Only for an IRN this portal issued, and only with Part B.
+        if (!issued.has(doc.Irn)) return fail('4002', 'Irn is not found');
+        assert.ok(doc.VehNo || doc.TransDocNo, 'Part B: a vehicle or a transport document');
+        assert.ok(['1', '2', '3', '4'].includes(doc.TransMode));
+        return reply({
+          Status: '1',
+          Data: aesEcbEncrypt(sek!, JSON.stringify({
+            EwbNo: 341000123456, EwbDt: '2026-09-11 16:00:00', EwbValidTill: '2026-09-12 23:59:00', Remarks: null,
+          })),
+        });
+      }
+
       return new Response('Not Found', { status: 404 });
     },
   };
@@ -198,6 +211,7 @@ function config(over: Partial<NicConfig> = {}): NicConfig {
     authPath: '/eivital/v1.04/auth',
     invoicePath: '/eicore/v1.03/Invoice',
     cancelPath: '/eicore/v1.03/Invoice/Cancel',
+    ewbPath: '/eiewb/v1.03/ewaybill',
     clientId: CLIENT_ID,
     clientSecret: CLIENT_SECRET,
     publicKey,
@@ -296,6 +310,32 @@ test('transport details come back as an e-way bill from the same call', async ()
   );
   assert.equal(r.ewbNo, '331009876543');
   assert.equal(r.ewbValidUntil, '2026-09-12 23:59:00');
+});
+
+const byIrn = (irn: string) => ({
+  irn, distanceKm: 320, mode: 'road' as const, vehicleNo: 'TN01AB1234', transporterId: null,
+  transporterName: null, transportDocNo: null, transportDocDate: null, isOverDimensional: false,
+});
+
+test('an e-way bill for an invoice already registered, from the invoice portal', async () => {
+  const portal = simulatedNic();
+  const nic = new NicEinvoiceProvider(config(), portal.fetch);
+  const c = ctx();
+  const { irn } = await nic.generateIrn(buildEinvoicePayload(invoice()), c);
+
+  const ewb = await nic.generateEwbByIrn(byIrn(irn), c);
+  assert.equal(ewb.ewbNo, '341000123456', 'a numeric EwbNo comes back as a string');
+  assert.equal(ewb.validUntil, '2026-09-12 23:59:00');
+  assert.equal(ewb.generatedAt, '2026-09-11 16:00:00');
+  assert.equal(authCalls(portal), 1, 'the same session as the registration');
+});
+
+test('an e-way bill against an IRN the portal does not hold is refused', async () => {
+  const nic = new NicEinvoiceProvider(config(), simulatedNic().fetch);
+  await assert.rejects(
+    () => nic.generateEwbByIrn(byIrn('f'.repeat(64)), ctx()),
+    (err: unknown) => err instanceof PortalRejection && err.code === '4002',
+  );
 });
 
 test('the session is reused, not a login per invoice', async () => {

@@ -110,7 +110,8 @@ export function route(handler: Handler, options: RouteOptions = {}) {
   };
 }
 
-function toResponse(err: unknown): NextResponse {
+/** An error as the JSON response a route returns. Exported for streaming routes. */
+export function toResponse(err: unknown): NextResponse {
   if (err instanceof ApiError) {
     return NextResponse.json(
       { error: err.message, code: err.code, details: err.details },

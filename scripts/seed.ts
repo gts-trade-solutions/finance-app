@@ -44,6 +44,11 @@ const DATA_TABLES = [
   'integration_calls', 'integration_connections',
   // Reports reference their dataset, so they go first.
   'analytics_reports', 'analytics_datasets',
+  // The assistant's conversations and credit wallet, and any billing records.
+  // Invoices before the payments they reference.
+  'ai_messages', 'ai_conversations', 'ai_credit_ledger', 'ai_usage', 'ai_credit_buckets',
+  'ai_wallets', 'ai_settings',
+  'billing_invoices', 'billing_payments', 'billing_subscriptions', 'billing_webhook_events',
   'api_tokens', 'jobs', 'files', 'settings', 'audit_log',
   'items', 'hsn_codes', 'contacts', 'accounts',
   'sessions', 'users', 'branches',

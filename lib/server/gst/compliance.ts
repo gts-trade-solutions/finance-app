@@ -15,6 +15,8 @@ import { sql } from 'kysely';
 import type { Executor } from '../db';
 import type { Paise } from '../../types';
 import { toPaiseFromSql } from '../money-sql';
+import { irnCancelOpenUntil } from '../../tax/einvoice';
+import { queuedRetries, type QueuedRetry } from '../jobs/queue';
 
 // ── e-invoices ───────────────────────────────────────────────────────────────
 
@@ -30,6 +32,10 @@ export interface EinvoiceRow {
   irn: string | null;
   ackNo: string | null;
   ackDate: string | null;
+  /** While the IRN can still be cancelled, when that ends (ISO); otherwise null. */
+  cancelUntil: string | null;
+  /** A retry queued after the portal did not answer. */
+  retry: QueuedRetry | null;
   errorMessage: string | null;
   attempts: number;
   /** Days left of the 30-day registration window. Negative means it has passed. */
@@ -43,15 +49,16 @@ export async function einvoiceQueue(
 ): Promise<{ rows: EinvoiceRow[]; counts: Record<string, number> }> {
   const today = new Date().toISOString().slice(0, 10);
 
+  // DATETIME columns arrive as Date objects: the pool keeps only DATE as text.
   const { rows } = await sql<{
     id: number; invoice_id: number; number: string; invoice_date: string;
     customer_name: string; gstin: string | null; total: string; status: string;
-    irn: string | null; ack_no: string | null; ack_date: string | null;
+    irn: string | null; ack_no: string | null; ack_date: Date | null; updated_at: Date;
     error_message: string | null; attempts: number; age: number;
   }>`
     SELECT e.id, e.invoice_id, i.number, i.invoice_date,
            c.display_name AS customer_name, c.gstin, i.total,
-           e.status, e.irn, e.ack_no, e.ack_date, e.error_message, e.attempts,
+           e.status, e.irn, e.ack_no, e.ack_date, e.updated_at, e.error_message, e.attempts,
            DATEDIFF(${today}, i.invoice_date) AS age
       FROM einvoices e
       JOIN invoices i ON i.id = e.invoice_id
@@ -63,6 +70,8 @@ export async function einvoiceQueue(
        i.invoice_date DESC
      LIMIT 500
   `.execute(ex);
+
+  const retries = await queuedRetries(ex, orgId, 'einvoice.register');
 
   const { rows: counts } = await sql<{ status: string; n: string }>`
     SELECT status, COUNT(*) AS n FROM einvoices WHERE org_id = ${orgId} GROUP BY status
@@ -86,7 +95,9 @@ export async function einvoiceQueue(
       status: r.status,
       irn: r.irn,
       ackNo: r.ack_no,
-      ackDate: r.ack_date ? String(r.ack_date).slice(0, 19).replace('T', ' ') : null,
+      ackDate: r.ack_date ? new Date(r.ack_date).toISOString() : null,
+      cancelUntil: r.status === 'submitted' ? irnCancelOpenUntil(r.ack_date ?? r.updated_at) : null,
+      retry: retries.get(`invoice:${r.invoice_id}`) ?? null,
       errorMessage: r.error_message,
       attempts: r.attempts,
       // An invoice must be registered within 30 days of its date. After that

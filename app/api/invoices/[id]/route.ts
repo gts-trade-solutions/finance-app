@@ -4,6 +4,9 @@ import { route, body, idParam, asId, notFound } from '@/lib/server/http';
 import { toPaiseFromSql } from '@/lib/server/money-sql';
 import { markInvoiceSent, voidInvoice } from '@/lib/server/services/sales';
 import { logAudit, auditMeta } from '@/lib/server/audit';
+import { environmentOf } from '@/lib/server/integrations/gst';
+import { irnCancelOpenUntil } from '@/lib/tax/einvoice';
+import { queuedRetries } from '@/lib/server/jobs/queue';
 
 /** One invoice with its lines, its payments, and the journal entry behind it. */
 export const GET = route(
@@ -14,6 +17,7 @@ export const GET = route(
       .selectFrom('invoices')
       .innerJoin('contacts', 'contacts.id', 'invoices.customer_id')
       .innerJoin('branches', 'branches.id', 'invoices.branch_id')
+      .innerJoin('organizations', 'organizations.id', 'invoices.org_id')
       .select([
         'invoices.id', 'invoices.number', 'invoices.invoice_date', 'invoices.due_date',
         'invoices.status', 'invoices.place_of_supply', 'invoices.supply_type',
@@ -23,10 +27,20 @@ export const GET = route(
         'invoices.total', 'invoices.amount_paid', 'invoices.order_number',
         'invoices.subject', 'invoices.payment_terms', 'invoices.notes', 'invoices.terms',
         'invoices.journal_entry_id', 'invoices.customer_id', 'invoices.branch_id',
-        'invoices.created_at',
+        'invoices.created_at', 'invoices.eway_bill_no',
         'contacts.display_name as customer_name', 'contacts.gstin as customer_gstin',
         'contacts.billing_address as customer_address',
+        // The rest is what Rule 46 asks a tax invoice to carry.
+        'contacts.legal_name as customer_legal_name', 'contacts.state_code as customer_state',
+        'contacts.billing_city as customer_city', 'contacts.billing_pincode as customer_pincode',
+        'contacts.shipping_address as ship_address', 'contacts.shipping_city as ship_city',
+        'contacts.shipping_pincode as ship_pincode', 'contacts.gst_treatment as customer_treatment',
         'branches.name as branch_name', 'branches.gstin as branch_gstin',
+        'branches.address as branch_address', 'branches.city as branch_city',
+        'branches.pincode as branch_pincode', 'branches.state_code as branch_state',
+        'organizations.name as org_name', 'organizations.legal_name as org_legal_name',
+        'organizations.pan as org_pan', 'organizations.email as org_email',
+        'organizations.phone as org_phone', 'organizations.gst_registration_type as org_registration',
       ])
       .where('invoices.id', '=', id)
       .where('invoices.org_id', '=', orgId)
@@ -34,8 +48,17 @@ export const GET = route(
 
     if (!inv) throw notFound('Invoice not found.');
 
-    const [lines, mark, payments, entry] = await Promise.all([
-      db.selectFrom('invoice_lines').selectAll().where('invoice_id', '=', id).orderBy('line_no').execute(),
+    const [lines, mark, payments, entry, ewb] = await Promise.all([
+      // A line picked from the catalogue stores the item, not its words; the
+      // item's name stands in so no document shows a line with no description.
+      db
+        .selectFrom('invoice_lines')
+        .leftJoin('items', 'items.id', 'invoice_lines.item_id')
+        .selectAll('invoice_lines')
+        .select('items.name as item_name')
+        .where('invoice_lines.invoice_id', '=', id)
+        .orderBy('invoice_lines.line_no')
+        .execute(),
       db.selectFrom('einvoices').selectAll().where('invoice_id', '=', id).executeTakeFirst(),
       db
         .selectFrom('payment_allocations')
@@ -60,7 +83,28 @@ export const GET = route(
             .orderBy('journal_lines.line_no')
             .execute()
         : Promise.resolve([]),
+      // An expired bill still names the movement the goods made, so it prints.
+      db
+        .selectFrom('eway_bills')
+        .select(['eway_bill_no', 'valid_until'])
+        .where('invoice_id', '=', id)
+        .where('org_id', '=', orgId)
+        .where('status', 'in', ['generated', 'expired'])
+        .orderBy('id', 'desc')
+        .executeTakeFirst(),
     ]);
+
+    const retry =
+      mark && (mark.status === 'pending' || mark.status === 'failed')
+        ? (await queuedRetries(db, orgId, 'einvoice.register')).get(`invoice:${id}`) ?? null
+        : null;
+
+    // A delivery address is printed only when it differs from the billing one;
+    // Rule 46 asks for it where goods go somewhere other than the recipient.
+    const shipAddress = inv.ship_address?.trim() ?? '';
+    const shipDiffers =
+      shipAddress !== '' && shipAddress.toLowerCase() !== (inv.customer_address ?? '').trim().toLowerCase();
+    const ewbNo = ewb?.eway_bill_no ?? inv.eway_bill_no;
 
     const p = toPaiseFromSql;
     return {
@@ -79,6 +123,30 @@ export const GET = route(
         address: inv.customer_address,
       },
       branch: { id: asId(inv.branch_id), name: inv.branch_name, gstin: inv.branch_gstin },
+      seller: {
+        name: inv.org_legal_name || inv.org_name,
+        tradeName: inv.org_legal_name && inv.org_legal_name !== inv.org_name ? inv.org_name : null,
+        gstin: inv.branch_gstin,
+        pan: inv.org_pan,
+        address: inv.branch_address,
+        city: inv.branch_city,
+        pincode: inv.branch_pincode,
+        stateCode: inv.branch_state,
+        email: inv.org_email,
+        phone: inv.org_phone,
+        registration: inv.org_registration,
+      },
+      buyer: {
+        name: inv.customer_legal_name || inv.customer_name,
+        gstin: inv.customer_gstin,
+        address: inv.customer_address,
+        city: inv.customer_city,
+        pincode: inv.customer_pincode,
+        stateCode: inv.customer_state,
+        treatment: inv.customer_treatment,
+      },
+      shipTo: shipDiffers ? { address: shipAddress, city: inv.ship_city, pincode: inv.ship_pincode } : null,
+      ewayBill: ewbNo ? { number: ewbNo, validUntil: ewb?.valid_until ?? null } : null,
       orderNumber: inv.order_number,
       subject: inv.subject,
       paymentTerms: inv.payment_terms,
@@ -98,7 +166,7 @@ export const GET = route(
       lines: lines.map((l) => ({
         id: asId(l.id),
         itemId: l.item_id ? asId(l.item_id) : null,
-        description: l.description,
+        description: l.description?.trim() || l.item_name || null,
         hsnSac: l.hsn_sac,
         qty: Number(l.qty),
         uqc: l.uqc,
@@ -109,10 +177,25 @@ export const GET = route(
         cgstPaise: p(l.cgst),
         sgstPaise: p(l.sgst),
         igstPaise: p(l.igst),
+        cessPaise: p(l.cess),
         totalPaise: p(l.line_total),
       })),
       einvoice: mark
-        ? { status: mark.status, irn: mark.irn, ackNo: mark.ack_no, ackDate: mark.ack_date }
+        ? {
+            status: mark.status,
+            irn: mark.irn,
+            ackNo: mark.ack_no,
+            ackDate: mark.ack_date,
+            // Printable only while the IRN stands. A cancelled one must never
+            // reach paper looking as if it were still valid.
+            signedQr: mark.status === 'submitted' ? mark.signed_qr_payload : null,
+            environment: environmentOf(mark.provider ?? 'fake'),
+            cancelledAt: mark.cancelled_at,
+            cancelUntil: mark.status === 'submitted' ? irnCancelOpenUntil(mark.ack_date ?? mark.updated_at) : null,
+            errorMessage: mark.status === 'failed' ? mark.error_message : null,
+            cancelReason: mark.cancel_reason,
+            retry,
+          }
         : { status: 'not_applicable', irn: null },
       payments: payments.map((pay) => ({
         id: asId(pay.id),

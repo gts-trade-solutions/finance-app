@@ -324,3 +324,43 @@ export function normaliseVehicleNo(input: string): string | null {
   if (v.length < 7 || v.length > 11) return null;
   return v;
 }
+
+// ── After generation ─────────────────────────────────────────────────────────
+
+/** A bill can be cancelled for this long after it is generated, and never after. */
+export const CANCEL_WINDOW_HOURS = 24;
+
+/** When a bill generated at `generatedAt` stops being cancellable. Null without a generation time. */
+export function ewbCancelDeadline(generatedAt: Date | string | null | undefined): Date | null {
+  if (!generatedAt) return null;
+  const t = new Date(generatedAt).getTime();
+  return Number.isNaN(t) ? null : new Date(t + CANCEL_WINDOW_HOURS * 3_600_000);
+}
+
+// The reasons the portal accepts, by its own codes, as NIC's e-way bill API
+// publishes them. Anything else is refused; free text belongs in the remark.
+
+export type VehicleChangeReason = '1' | '2' | '3' | '4';
+export const VEHICLE_CHANGE_REASONS: Record<VehicleChangeReason, string> = {
+  '1': 'Vehicle broke down',
+  '2': 'Transhipment',
+  '3': 'Other',
+  '4': 'First time',
+};
+
+export type EwbExtendReason = '1' | '2' | '4' | '5' | '99';
+export const EWB_EXTEND_REASONS: Record<EwbExtendReason, string> = {
+  '1': 'Natural calamity',
+  '2': 'Law and order',
+  '4': 'Transhipment',
+  '5': 'Accident',
+  '99': 'Other',
+};
+
+export type EwbCancelReason = '1' | '2' | '3' | '4';
+export const EWB_CANCEL_REASONS: Record<EwbCancelReason, string> = {
+  '1': 'Duplicate',
+  '2': 'Order cancelled',
+  '3': 'Data entry mistake',
+  '4': 'Other',
+};

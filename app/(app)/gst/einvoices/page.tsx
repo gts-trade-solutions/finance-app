@@ -8,15 +8,15 @@
 // credit note and a fresh invoice. So the days-left column is the whole point
 // of this screen.
 //
-// The IRP call itself is not wired up: that needs a GSP contract and production
-// credentials, which are a commercial arrangement rather than code. Everything
-// around it is real — the eligibility rules, the window, the attempt count —
-// and the IRN produced is prefixed DEMO so nothing can mistake it for one the
-// government issued.
+// Registration goes through whichever connection the branch has in Settings →
+// Integrations. Until one is added the built-in stand-in answers: nothing is
+// filed, and its IRNs start with DEMO so nothing can mistake them for ones the
+// government issued. A registered IRN can be cancelled for 24 hours, which
+// voids the invoice with it; after that only a credit note reverses the sale.
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Clock, FileCheck2, Info, Loader2, TriangleAlert, Zap } from 'lucide-react';
+import { Ban, Clock, FileCheck2, Info, Loader2, TriangleAlert, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -27,16 +27,24 @@ import { Money } from '@/components/shared/money';
 import { StatTile } from '@/components/shared/stat-tile';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { AsyncPage } from '@/components/shared/async-state';
+import { CancelEinvoiceDialog } from '@/components/gst/cancel-einvoice-dialog';
 import { gst, type EinvoiceRow } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { formatINRCompact } from '@/lib/money';
+import { timeLeft } from '@/lib/tax/einvoice';
 import { cn } from '@/lib/utils';
 
 interface Response {
   einvoices: EinvoiceRow[];
   statusCounts: Record<string, number>;
 }
+
+/** "14:32" in Indian time. */
+const clock = (iso: string) =>
+  new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false }).format(
+    new Date(iso),
+  );
 
 export default function EInvoicesPage() {
   const router = useRouter();
@@ -45,6 +53,7 @@ export default function EInvoicesPage() {
 
   const [busy, setBusy] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [cancelling, setCancelling] = useState<EinvoiceRow | null>(null);
   const submit = useApiAction(gst.submitEinvoice);
 
   const rows = state.data?.einvoices ?? [];
@@ -66,7 +75,7 @@ export default function EInvoicesPage() {
     }
     toast.success(`IRN generated for ${r.number}`, {
       description: [
-        done.live ? null : 'Nothing was filed with any portal: no GSP is connected.',
+        done.live ? null : 'Nothing was filed: this went to the stand-in or a sandbox, not the live portal.',
         done.ewayBillNo ? `E-way bill ${done.ewayBillNo} was issued with it.` : null,
         ...done.warnings,
       ]
@@ -112,23 +121,41 @@ export default function EInvoicesPage() {
       key: 'window', header: 'Registration window', sortValue: (r) => r.daysLeft,
       cell: (r) => {
         if (r.status === 'submitted') {
-          return <span className="font-mono text-[10px] text-muted-foreground">{r.irn?.slice(0, 20)}…</span>;
+          return (
+            <span className="block">
+              <span className="font-mono text-[10px] text-muted-foreground">{r.irn?.slice(0, 20)}…</span>
+              {r.cancelUntil && (
+                <span className="block text-[10px] text-muted-foreground">
+                  Cancellable for {timeLeft(r.cancelUntil)}
+                </span>
+              )}
+            </span>
+          );
         }
-        if (r.status === 'not_applicable') return <span className="text-xs text-muted-foreground">—</span>;
+        if (r.status === 'not_applicable' || r.status === 'cancelled') {
+          return <span className="text-xs text-muted-foreground">—</span>;
+        }
         return (
-          <Badge
-            variant="outline"
-            className={cn(
-              'text-[10px]',
-              r.daysLeft < 0
-                ? 'border-destructive/40 text-destructive'
-                : r.daysLeft <= 7
-                  ? 'border-amber-500/40 text-amber-700 dark:text-amber-300'
-                  : '',
+          <span className="block">
+            <Badge
+              variant="outline"
+              className={cn(
+                'text-[10px]',
+                r.daysLeft < 0
+                  ? 'border-destructive/40 text-destructive'
+                  : r.daysLeft <= 7
+                    ? 'border-amber-500/40 text-amber-700 dark:text-amber-300'
+                    : '',
+              )}
+            >
+              {r.daysLeft < 0 ? `${Math.abs(r.daysLeft)} days past` : `${r.daysLeft} days left`}
+            </Badge>
+            {r.retry && (
+              <span className="mt-0.5 block text-[10px] text-muted-foreground" data-slot="einvoice-retry">
+                Trying again at {clock(r.retry.at)}
+              </span>
             )}
-          >
-            {r.daysLeft < 0 ? `${Math.abs(r.daysLeft)} days past` : `${r.daysLeft} days left`}
-          </Badge>
+          </span>
         );
       },
     },
@@ -138,9 +165,10 @@ export default function EInvoicesPage() {
     },
     {
       key: 'actions', header: '', align: 'right',
-      cell: (r) =>
-        r.status === 'pending' || r.status === 'failed' ? (
-          canSubmit ? (
+      cell: (r) => {
+        if (!canSubmit) return null;
+        if (r.status === 'pending' || r.status === 'failed') {
+          return (
             <Button
               size="xs"
               className="gap-1"
@@ -150,8 +178,23 @@ export default function EInvoicesPage() {
               {busy === r.invoiceId ? <Loader2 className="size-3 animate-spin" /> : <Zap className="size-3" />}
               Register
             </Button>
-          ) : null
-        ) : null,
+          );
+        }
+        if (r.status === 'submitted' && r.cancelUntil) {
+          return (
+            <Button
+              size="xs"
+              variant="outline"
+              className="gap-1"
+              data-slot="cancel-irn"
+              onClick={(e) => { e.stopPropagation(); setCancelling(r); }}
+            >
+              <Ban className="size-3" /> Cancel IRN
+            </Button>
+          );
+        }
+        return null;
+      },
     },
   ];
 
@@ -225,16 +268,27 @@ export default function EInvoicesPage() {
             <Card className="flex items-start gap-3 p-4">
               <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
               <p className="text-xs leading-relaxed text-muted-foreground">
-                The connection to the Invoice Registration Portal is not live in this build — that needs a GSP
-                contract and production credentials. The rules around it are real: the eligibility check, the
-                30-day window, and the fact that a registered invoice can no longer be quietly edited. IRNs
-                generated here start with <span className="font-mono">DEMO</span> so they can never be mistaken for
-                government-issued ones.
+                Registrations go through the connection set for each branch in Settings → Integrations. Until one
+                is added, the built-in stand-in answers: nothing is filed, and its IRNs start with{' '}
+                <span className="font-mono">DEMO</span> so they can never be mistaken for government-issued ones. A
+                registered IRN can be cancelled for 24 hours, which also voids the invoice; after that, a credit
+                note reverses the sale.
               </p>
             </Card>
           </>
         )}
       </AsyncPage>
+
+      <CancelEinvoiceDialog
+        open={cancelling !== null}
+        onOpenChange={(open) => {
+          if (!open) setCancelling(null);
+        }}
+        invoiceId={cancelling?.invoiceId ?? ''}
+        number={cancelling?.number ?? ''}
+        cancelUntil={cancelling?.cancelUntil ?? null}
+        onCancelled={() => state.refetch()}
+      />
     </>
   );
 }

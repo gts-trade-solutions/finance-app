@@ -16,6 +16,7 @@ import 'server-only';
 
 import type { EinvoicePayload } from './einvoice-payload';
 import type { EwayBillPayload } from './eway-payload';
+import type { EwbCancelReason, EwbExtendReason, VehicleChangeReason } from '../../../tax/eway';
 
 /** Which portal a connection talks to. Mirrors the `portal` enum in the schema. */
 export type Portal = 'einvoice' | 'ewaybill' | 'returns';
@@ -180,6 +181,53 @@ export const CANCEL_REASONS: Record<CancelReasonCode, string> = {
   '4': 'Other',
 };
 
+/** A new vehicle, or transport document, for a bill already generated: Part B again. */
+export interface EwbVehicleChange {
+  ewbNo: string;
+  vehicleNo: string | null;
+  /** Where the goods are when the vehicle changes. The portal records it. */
+  fromPlace: string;
+  fromStateCode: string;
+  reason: VehicleChangeReason;
+  remark: string;
+  mode: 'road' | 'rail' | 'air' | 'ship';
+  transportDocNo: string | null;
+  /** dd/mm/yyyy, the way the portals write dates. */
+  transportDocDate: string | null;
+}
+
+/** More time for a bill whose goods have not arrived. */
+export interface EwbExtension {
+  ewbNo: string;
+  /** Null when the goods are waiting somewhere rather than on a vehicle. */
+  vehicleNo: string | null;
+  fromPlace: string;
+  fromStateCode: string;
+  fromPincode: string;
+  /** The new validity is counted from now on this, one day per 200 km. */
+  remainingDistanceKm: number;
+  reason: EwbExtendReason;
+  remark: string;
+  consignment: 'in_movement' | 'in_transit';
+  mode: 'road' | 'rail' | 'air' | 'ship';
+  isOverDimensional: boolean;
+}
+
+/** Part B for an e-way bill issued against an IRN already registered. */
+export interface EwbByIrn {
+  irn: string;
+  /** Zero asks the portal to work it out from the two PIN codes. */
+  distanceKm: number;
+  mode: 'road' | 'rail' | 'air' | 'ship';
+  vehicleNo: string | null;
+  transporterId: string | null;
+  transporterName: string | null;
+  transportDocNo: string | null;
+  /** dd/mm/yyyy, the way the portals write dates. */
+  transportDocDate: string | null;
+  isOverDimensional: boolean;
+}
+
 /**
  * Three different things, and the difference is what the user is told.
  *
@@ -218,4 +266,28 @@ export interface GstProvider {
   ): Promise<{ cancelledAt: string }>;
 
   generateEwayBill(payload: EwayBillPayload, ctx: ProviderContext): Promise<EwayBillResult>;
+
+  /**
+   * An e-way bill for an invoice that already has its IRN: the usual order,
+   * because the vehicle is often known only at dispatch. The invoice portal
+   * serves it itself, so it needs no separate e-way bill connection.
+   */
+  generateEwbByIrn(req: EwbByIrn, ctx: ProviderContext): Promise<EwayBillResult>;
+
+  /** Only while the bill is valid. A later change of lorry does not move the expiry. */
+  updateEwayVehicle(
+    change: EwbVehicleChange,
+    ctx: ProviderContext,
+  ): Promise<{ updatedAt: string; validUntil: string | null }>;
+
+  /** Only within 8 hours either side of expiry; the portal enforces it too. */
+  extendEwayBill(ext: EwbExtension, ctx: ProviderContext): Promise<{ extendedAt: string; validUntil: string }>;
+
+  /** Only within 24 hours of generation. */
+  cancelEwayBill(
+    ewbNo: string,
+    reason: EwbCancelReason,
+    remark: string,
+    ctx: ProviderContext,
+  ): Promise<{ cancelledAt: string }>;
 }

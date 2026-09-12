@@ -8,7 +8,7 @@
 // from, not a rendering of what they ought to be.
 
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useState } from 'react';
 import {
   ArrowLeft, Ban, FileText, Loader2, MoreHorizontal, Printer, Receipt, Send,
@@ -32,6 +32,8 @@ import { EInvoiceMark } from '@/components/shared/einvoice-mark';
 import { ReportTable } from '@/components/shared/report-shell';
 import { AsyncPage } from '@/components/shared/async-state';
 import { Field } from '@/components/shared/form-bits';
+import { CancelEinvoiceDialog } from '@/components/gst/cancel-einvoice-dialog';
+import { EinvoicePanel } from '@/components/gst/einvoice-panel';
 import { usePermission } from '@/lib/store/hooks';
 import { invoices as invoiceApi, type InvoiceDetail } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
@@ -42,13 +44,16 @@ const d = (s: string) =>
 
 export default function InvoiceDetailPage() {
   const params = useParams<{ id: string }>();
+  const router = useRouter();
   const canEdit = usePermission('sales', 'edit');
+  const canFileGst = usePermission('gst', 'approve');
 
   const state = useApi<InvoiceDetail>(() => invoiceApi.get(params.id), [params.id]);
 
   const send = useApiAction(invoiceApi.send);
   const voidIt = useApiAction(invoiceApi.void);
   const [voiding, setVoiding] = useState(false);
+  const [cancellingIrn, setCancellingIrn] = useState(false);
   const [reason, setReason] = useState('');
 
   return (
@@ -57,6 +62,10 @@ export default function InvoiceDetailPage() {
         const balanced =
           inv.journalLines.reduce((t, l) => t + l.debitPaise, 0) ===
           inv.journalLines.reduce((t, l) => t + l.creditPaise, 0);
+        // A registered invoice is reversed through the portal, never around it:
+        // cancel the IRN while the 24-hour window is open, a credit note after.
+        const irnLive = inv.einvoice.status === 'submitted';
+        const cancelUntil = inv.einvoice.cancelUntil ?? null;
 
         return (
           <>
@@ -68,8 +77,10 @@ export default function InvoiceDetailPage() {
                   <Button variant="outline" size="sm" asChild>
                     <Link href="/sales/invoices"><ArrowLeft className="mr-1.5 size-3.5" /> Invoices</Link>
                   </Button>
-                  <Button variant="outline" size="sm" onClick={() => window.print()} className="gap-1.5">
-                    <Printer className="size-3.5" /> Print
+                  <Button variant="outline" size="sm" asChild className="gap-1.5">
+                    <Link href={`/sales/invoices/${inv.id}/print`} data-slot="print-link">
+                      <Printer className="size-3.5" /> Print
+                    </Link>
                   </Button>
                   {canEdit && inv.status !== 'void' && (
                     <DropdownMenu>
@@ -87,9 +98,21 @@ export default function InvoiceDetailPage() {
                         >
                           <Send className="mr-2 size-4" /> Mark as sent
                         </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setVoiding(true)}>
-                          <Ban className="mr-2 size-4" /> Void invoice
-                        </DropdownMenuItem>
+                        {!irnLive && (
+                          <DropdownMenuItem onClick={() => setVoiding(true)}>
+                            <Ban className="mr-2 size-4" /> Void invoice
+                          </DropdownMenuItem>
+                        )}
+                        {irnLive && cancelUntil && canFileGst && (
+                          <DropdownMenuItem onClick={() => setCancellingIrn(true)} data-slot="cancel-einvoice-item">
+                            <Ban className="mr-2 size-4" /> Cancel e-invoice
+                          </DropdownMenuItem>
+                        )}
+                        {irnLive && !cancelUntil && (
+                          <DropdownMenuItem onClick={() => router.push('/sales/credit-notes')}>
+                            <FileText className="mr-2 size-4" /> Reverse with a credit note
+                          </DropdownMenuItem>
+                        )}
                       </DropdownMenuContent>
                     </DropdownMenu>
                   )}
@@ -110,6 +133,8 @@ export default function InvoiceDetailPage() {
                 </span>
               )}
             </div>
+
+            <EinvoicePanel inv={inv} onChanged={() => void state.refetch()} />
 
             <Tabs defaultValue="document">
               <TabsList>
@@ -351,6 +376,15 @@ export default function InvoiceDetailPage() {
                 </DialogFooter>
               </DialogContent>
             </Dialog>
+
+            <CancelEinvoiceDialog
+              open={cancellingIrn}
+              onOpenChange={setCancellingIrn}
+              invoiceId={inv.id}
+              number={inv.number}
+              cancelUntil={cancelUntil}
+              onCancelled={() => void state.refetch()}
+            />
           </>
         );
       }}

@@ -24,8 +24,9 @@ import {
   aesEncryptBase64, decryptJson, decryptSessionKey, loadPublicKey, newAppKey, sealLoginPayload,
 } from './nic-crypto';
 import {
-  PortalAuthFailed, PortalDuplicate, PortalRejection, PortalUnavailable, parsePortalTimestamp,
-  type CancelReasonCode, type EwayBillResult, type GstProvider, type IrnResult,
+  PortalAuthFailed, PortalDuplicate, PortalRejection, PortalUnavailable,
+  formatPortalTimestamp, parsePortalTimestamp,
+  type CancelReasonCode, type EwayBillResult, type EwbByIrn, type GstProvider, type IrnResult,
   type ProviderContext, type ProviderEnvironment,
 } from './provider';
 
@@ -41,6 +42,8 @@ export interface NicConfig {
   authPath: string;
   invoicePath: string;
   cancelPath: string;
+  /** An e-way bill against an IRN already registered. */
+  ewbPath: string;
   /** Issued to us at registration; a connection may carry its own instead. */
   clientId: string | null;
   clientSecret: string | null;
@@ -68,6 +71,7 @@ export function nicConfigFromEnv(env: NodeJS.ProcessEnv = process.env): NicConfi
     authPath: env.NIC_EINV_AUTH_PATH?.trim() || '/eivital/v1.04/auth',
     invoicePath: env.NIC_EINV_INVOICE_PATH?.trim() || '/eicore/v1.03/Invoice',
     cancelPath: env.NIC_EINV_CANCEL_PATH?.trim() || '/eicore/v1.03/Invoice/Cancel',
+    ewbPath: env.NIC_EINV_EWB_PATH?.trim() || '/eiewb/v1.03/ewaybill',
     clientId: env.NIC_EINV_CLIENT_ID?.trim() || null,
     clientSecret: env.NIC_EINV_CLIENT_SECRET?.trim() || null,
     publicKey,
@@ -105,6 +109,13 @@ interface NicIrnData {
   EwbNo?: number | string | null;
   EwbDt?: string | null;
   EwbValidTill?: string | null;
+}
+
+interface NicEwbData {
+  EwbNo: number | string | null;
+  EwbDt?: string | null;
+  EwbValidTill?: string | null;
+  Remarks?: string | null;
 }
 
 interface NicError {
@@ -202,6 +213,18 @@ function isTokenProblem(err: unknown): boolean {
   );
 }
 
+/** The refusal for anything only NIC's e-way bill system can do. */
+function ewbSystemOnly(): PortalRejection {
+  return new PortalRejection(
+    'not_supported',
+    "Changing an e-way bill goes through NIC's e-way bill system, which is a separate connection from the " +
+      'e-invoice one. Add it in Settings → Integrations.',
+  );
+}
+
+/** The portal's transport mode codes. */
+const TRANS_MODE = { road: '1', rail: '2', air: '3', ship: '4' } as const;
+
 export class NicEinvoiceProvider implements GstProvider {
   readonly name = 'nic_einvoice';
 
@@ -273,6 +296,37 @@ export class NicEinvoiceProvider implements GstProvider {
     return { cancelledAt: d.CancelDate };
   }
 
+  async generateEwbByIrn(req: EwbByIrn, ctx: ProviderContext): Promise<EwayBillResult> {
+    // The same field names the invoice schema uses for transport sent with an IRN.
+    const body: Record<string, unknown> = {
+      Irn: req.irn,
+      Distance: req.distanceKm,
+      TransMode: TRANS_MODE[req.mode],
+    };
+    if (req.transporterId) body.TransId = req.transporterId;
+    if (req.transporterName) body.TransName = req.transporterName;
+    if (req.transportDocNo) body.TransDocNo = req.transportDocNo;
+    if (req.transportDocDate) body.TransDocDt = req.transportDocDate;
+    if (req.vehicleNo) {
+      body.VehNo = req.vehicleNo;
+      body.VehType = req.isOverDimensional ? 'O' : 'R';
+    }
+
+    const d = await this.withSession(ctx, (s) => this.call<NicEwbData>(this.config.ewbPath, s, ctx, body));
+    if (d.EwbNo == null || d.EwbNo === '' || !d.EwbValidTill) {
+      throw new PortalRejection(
+        'no_ewb',
+        'The portal answered without an e-way bill number or validity, so nothing was issued that could ' +
+          'cover the goods.',
+      );
+    }
+    return {
+      ewbNo: String(d.EwbNo),
+      validUntil: d.EwbValidTill,
+      generatedAt: d.EwbDt ?? formatPortalTimestamp(new Date()),
+    };
+  }
+
   async generateEwayBill(): Promise<EwayBillResult> {
     // Not a gap in this adapter so much as a different system. The invoice
     // portal issues an e-way bill *with* an IRN when transport details ride
@@ -285,6 +339,21 @@ export class NicEinvoiceProvider implements GstProvider {
         'system, which is a separate connection. For an invoice, add the vehicle before registering it ' +
         'and the e-way bill is issued with the IRN.',
     );
+  }
+
+  // Changing a bill is the e-way bill system's job too, however the bill was
+  // issued: the invoice portal can issue one alongside an IRN, but not change
+  // or cancel it afterwards.
+  async updateEwayVehicle(): Promise<{ updatedAt: string; validUntil: string | null }> {
+    throw ewbSystemOnly();
+  }
+
+  async extendEwayBill(): Promise<{ extendedAt: string; validUntil: string }> {
+    throw ewbSystemOnly();
+  }
+
+  async cancelEwayBill(): Promise<{ cancelledAt: string }> {
+    throw ewbSystemOnly();
   }
 
   // ── Sessions ──────────────────────────────────────────────────────────────

@@ -111,6 +111,11 @@ export function providerServes(name: string, portal: Portal): boolean {
   return PROVIDERS[name]?.portals.includes(portal) ?? false;
 }
 
+/** The name a person knows a provider by. */
+export function providerLabel(name: string): string {
+  return PROVIDERS[name]?.label ?? name;
+}
+
 // ── Turning a portal's answer into one a person can act on ───────────────────
 
 /**
@@ -515,6 +520,9 @@ export async function runPortalCall<T>(
     throw err;
   }
 }
+
+/** `runPortalCall`'s shape, so a service can take a stand-in for it in tests. */
+export type PortalCaller = typeof runPortalCall;
 
 /** Assemble what a provider needs to act, opening credentials only if configured. */
 export async function providerContext(

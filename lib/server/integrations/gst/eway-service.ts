@@ -13,21 +13,28 @@ import 'server-only';
 
 import type { Paise } from '../../../types';
 import {
-  assessEwayBill, normaliseVehicleNo,
-  type EwayBillAssessment, type MovementReason,
+  EWB_CANCEL_REASONS, EWB_EXTEND_REASONS, VEHICLE_CHANGE_REASONS,
+  assessEwayBill, canExtend, ewbCancelDeadline, normaliseVehicleNo, validUntil as validityEnd,
+  type EwayBillAssessment, type EwbCancelReason, type EwbExtendReason, type MovementReason,
+  type VehicleChangeReason,
 } from '../../../tax/eway';
 import { db, type Executor, type Trx } from '../../db';
-import { badRequest, conflict, notFound } from '../../http';
+import { ApiError, badRequest, conflict, notFound } from '../../http';
 import { toNumberFromSql, toPaiseFromSql } from '../../money-sql';
+import { toIrpDate } from './einvoice-payload';
 import {
   buildEwayBillPayload,
   type EwayBillPayload, type EwayBillSource, type EwbDocType, type EwbLine,
   type StoredSubSupplyType,
 } from './eway-payload';
 import {
-  connectionFor, providerContext, resolveProvider, runPortalCall, toApiError,
+  connectionFor, providerContext, providerLabel, providerServes, resolveProvider, runPortalCall,
+  toApiError, type PortalCaller, type PortalConnection,
 } from './index';
-import { PortalRejection, parsePortalTimestamp } from './provider';
+import {
+  PortalRejection, PortalUnavailable, parsePortalTimestamp,
+  type EwbByIrn, type EwbExtension, type EwbVehicleChange, type GstProvider,
+} from './provider';
 
 // ── What the caller asks for ─────────────────────────────────────────────────
 
@@ -411,7 +418,9 @@ export async function generateEwayBill(
   orgId: number,
   doc: EwayBillDocument,
   transport: TransportInput,
+  opts: { call?: PortalCaller; userId?: number | null } = {},
 ): Promise<GenerateEwayBillResult> {
+  const call = opts.call ?? runPortalCall;
   const loaded = await loadDocument(trx, orgId, doc);
 
   if (loaded.status === 'generated' && loaded.existingNo) {
@@ -477,24 +486,46 @@ export async function generateEwayBill(
     },
   };
 
-  const connection = await connectionFor(trx, orgId, loaded.branchId, 'ewaybill');
-  const provider = resolveProvider(connection.providerName);
+  // An invoice whose IRN a live portal issued gets its bill from that portal,
+  // against the IRN, when no e-way bill system is connected.
+  const byIrn = doc.kind === 'invoice' ? await irnRoute(trx, orgId, doc.id, loaded.branchId) : null;
+  const connection = byIrn?.connection ?? (await connectionFor(trx, orgId, loaded.branchId, 'ewaybill'));
+  const provider = byIrn?.provider ?? resolveProvider(connection.providerName);
   const payload: EwayBillPayload = buildEwayBillPayload(source);
   const ctx = await providerContext(trx, connection);
 
   let result;
   try {
-    result = await runPortalCall(
-      {
-        orgId,
-        connection,
-        operation: 'generate_ewb',
-        referenceType: doc.kind,
-        referenceId: doc.id,
-      },
-      payload,
-      () => provider.generateEwayBill(payload, ctx),
-    );
+    if (byIrn) {
+      const req: EwbByIrn = {
+        irn: byIrn.irn,
+        distanceKm: transport.distanceKm ?? 0,
+        mode: transport.mode ?? 'road',
+        vehicleNo,
+        transporterId: transport.transporterId ?? null,
+        transporterName: transport.transporterName ?? null,
+        transportDocNo: transport.transportDocNo?.trim() || null,
+        transportDocDate: transport.transportDocDate ? toIrpDate(transport.transportDocDate) : null,
+        isOverDimensional: transport.isOverDimensional ?? false,
+      };
+      result = await call(
+        { orgId, connection, operation: 'generate_ewb_by_irn', referenceType: doc.kind, referenceId: doc.id },
+        req,
+        () => provider.generateEwbByIrn(req, ctx),
+      );
+    } else {
+      result = await call(
+        {
+          orgId,
+          connection,
+          operation: 'generate_ewb',
+          referenceType: doc.kind,
+          referenceId: doc.id,
+        },
+        payload,
+        () => provider.generateEwayBill(payload, ctx),
+      );
+    }
   } catch (err) {
     // Written through db, not trx: the throw below rolls the caller's
     // transaction back, and a failure recorded inside it would vanish with it.
@@ -522,14 +553,25 @@ export async function generateEwayBill(
     // Part B arrived with this call, so this is when the clock starts.
     part_b_at: now,
     valid_until: parsePortalTimestamp(result.validUntil),
+    // A bill generated again after a cancellation starts clean.
+    cancelled_at: null,
+    cancel_reason: null,
+    extended_count: 0,
     error_message: null,
   };
 
-  if (loaded.rowId !== null) {
-    await trx.updateTable('eway_bills').set(values).where('id', '=', loaded.rowId).execute();
+  let billId = loaded.rowId;
+  if (billId !== null) {
+    await trx.updateTable('eway_bills').set(values).where('id', '=', billId).execute();
   } else {
-    await trx.insertInto('eway_bills').values(values).execute();
+    const inserted = await trx.insertInto('eway_bills').values(values).executeTakeFirstOrThrow();
+    billId = Number(inserted.insertId);
   }
+  await recordEvent(trx, orgId, opts.userId ?? null, billId, result.ewbNo, 'generated', {
+    vehicleNo,
+    mode: values.transport_mode,
+    validUntil: values.valid_until,
+  });
 
   // Kept on the invoice too, because it has to print on the document and a
   // join to fetch one string on every invoice PDF is not worth it.
@@ -549,6 +591,45 @@ export async function generateEwayBill(
     live: provider.live,
     assessment,
   };
+}
+
+/**
+ * Whether this invoice's bill should come from the invoice portal, against its IRN.
+ *
+ * Only for an IRN a real portal issued — a stand-in IRN gets a stand-in bill
+ * the ordinary way — and only while no e-way bill system is connected: when
+ * one is, that is where bills belong. If the IRN's own connection has gone, a
+ * stand-in bill would be a pretend document against a real registration, so
+ * that is refused rather than quietly substituted.
+ */
+async function irnRoute(
+  trx: Trx,
+  orgId: number,
+  invoiceId: number,
+  branchId: number,
+): Promise<{ provider: GstProvider; connection: PortalConnection; irn: string } | null> {
+  const mark = await trx
+    .selectFrom('einvoices')
+    .select(['status', 'irn', 'provider'])
+    .where('invoice_id', '=', invoiceId)
+    .where('org_id', '=', orgId)
+    .executeTakeFirst();
+  if (mark?.status !== 'submitted' || !mark.irn || !mark.provider || mark.provider === 'fake') return null;
+
+  const ewbConnection = await connectionFor(trx, orgId, branchId, 'ewaybill');
+  if (ewbConnection.configured) return null;
+
+  const einvoice = await connectionFor(trx, orgId, branchId, 'einvoice');
+  if (einvoice.providerName !== mark.provider) {
+    throw new ApiError(
+      409,
+      `This invoice's IRN was issued through ${providerLabel(mark.provider)}, and the branch is no longer ` +
+        'connected to it, so its e-way bill cannot be issued against the IRN. Reconnect it in Settings → ' +
+        "Integrations, or connect NIC's e-way bill system.",
+      'provider_changed',
+    );
+  }
+  return { provider: resolveProvider(mark.provider), connection: einvoice, irn: mark.irn };
 }
 
 async function recordFailure(
@@ -581,4 +662,495 @@ async function recordFailure(
       error_message: message.slice(0, 1000),
     })
     .execute();
+}
+
+// ── After generation ─────────────────────────────────────────────────────────
+//
+// Three things can happen to a bill on the road, and each has a legal limit:
+//
+//   the vehicle changes     only while the bill is valid (Part B again)
+//   validity is extended    only 8 hours either side of expiry, and never past
+//                           360 days from generation
+//   the bill is cancelled   only within 24 hours of generation
+//
+// Every check that can refuse runs before the portal is asked, and each change
+// goes to the provider that issued the bill. A stand-in bill means nothing to
+// NIC, and a NIC bill must never be changed by the stand-in, which would move
+// the register and nothing else.
+
+type EwbEventKind = 'generated' | 'vehicle_changed' | 'extended' | 'cancelled';
+type Mode = 'road' | 'rail' | 'air' | 'ship';
+
+async function recordEvent(
+  trx: Trx,
+  orgId: number,
+  userId: number | null,
+  billId: number,
+  ewbNo: string,
+  kind: EwbEventKind,
+  e: {
+    vehicleNo?: string | null;
+    mode?: Mode | null;
+    fromPlace?: string | null;
+    reasonCode?: string | null;
+    remark?: string | null;
+    validUntil?: Date | null;
+  } = {},
+): Promise<void> {
+  await trx
+    .insertInto('eway_bill_events')
+    .values({
+      org_id: orgId,
+      eway_bill_id: billId,
+      eway_bill_no: ewbNo,
+      kind,
+      vehicle_no: e.vehicleNo ?? null,
+      transport_mode: e.mode ?? null,
+      from_place: e.fromPlace?.slice(0, 100) ?? null,
+      reason_code: e.reasonCode ?? null,
+      remark: e.remark?.slice(0, 200) ?? null,
+      valid_until: e.validUntil ?? null,
+      created_by_user_id: userId,
+    })
+    .execute();
+}
+
+interface LoadedBill {
+  id: number;
+  number: string;
+  status: string;
+  provider: string;
+  vehicleNo: string | null;
+  mode: Mode;
+  distanceKm: number | null;
+  generatedAt: Date | null;
+  partBAt: Date | null;
+  validUntil: Date | null;
+  extendedCount: number;
+  invoiceId: number | null;
+  branchId: number;
+  branchState: string;
+}
+
+/** The bill, locked for the change about to be made to it. */
+async function loadBill(trx: Trx, orgId: number, billId: number): Promise<LoadedBill> {
+  const row = await trx
+    .selectFrom('eway_bills as w')
+    .leftJoin('invoices as i', 'i.id', 'w.invoice_id')
+    .leftJoin('delivery_challans as d', 'd.id', 'w.challan_id')
+    .select([
+      'w.id', 'w.eway_bill_no', 'w.status', 'w.provider', 'w.vehicle_no', 'w.transport_mode',
+      'w.distance_km', 'w.generated_at', 'w.part_b_at', 'w.valid_until', 'w.extended_count',
+      'w.invoice_id', 'i.branch_id as invoice_branch', 'd.branch_id as challan_branch',
+    ])
+    .where('w.id', '=', billId)
+    .where('w.org_id', '=', orgId)
+    .forUpdate()
+    .executeTakeFirst();
+  if (!row) throw notFound('That e-way bill does not exist.');
+
+  const branchId = row.invoice_branch ?? row.challan_branch;
+  if (branchId === null) throw notFound('That e-way bill is not attached to a document.');
+  const branch = await trx
+    .selectFrom('branches')
+    .select('state_code')
+    .where('id', '=', branchId)
+    .executeTakeFirstOrThrow();
+
+  return {
+    id: row.id,
+    number: row.eway_bill_no ?? '',
+    status: row.status,
+    provider: row.provider ?? 'fake',
+    vehicleNo: row.vehicle_no,
+    mode: row.transport_mode,
+    distanceKm: row.distance_km,
+    generatedAt: row.generated_at,
+    partBAt: row.part_b_at,
+    validUntil: row.valid_until,
+    extendedCount: row.extended_count,
+    invoiceId: row.invoice_id,
+    branchId,
+    branchState: branch.state_code,
+  };
+}
+
+/** A bill that exists at the portal and has not been cancelled. */
+function assertStanding(bill: LoadedBill, what: string): void {
+  if (bill.status === 'cancelled') {
+    throw conflict(`E-way bill ${bill.number} is cancelled, so ${what} is not possible.`);
+  }
+  if ((bill.status !== 'generated' && bill.status !== 'expired') || !bill.number) {
+    throw conflict('There is no generated e-way bill here to change. Generate one first.');
+  }
+}
+
+/** The provider that issued the bill: the only one that can change it. */
+async function issuingProvider(
+  trx: Trx,
+  orgId: number,
+  bill: LoadedBill,
+): Promise<{ provider: GstProvider; connection: PortalConnection }> {
+  const current = await connectionFor(trx, orgId, bill.branchId, 'ewaybill');
+  if (bill.provider === 'fake') {
+    // A stand-in bill is changed by the stand-in, whatever the branch uses now.
+    const connection: PortalConnection =
+      current.providerName === 'fake'
+        ? current
+        : { ...current, id: null, providerName: 'fake', baseUrl: null, configured: false };
+    return { provider: resolveProvider('fake'), connection };
+  }
+  if (current.providerName !== bill.provider || !providerServes(bill.provider, 'ewaybill')) {
+    throw new ApiError(
+      409,
+      `E-way bill ${bill.number} was issued through ${providerLabel(bill.provider)}. Changing it goes ` +
+        "through NIC's e-way bill system, which needs its own connection in Settings → Integrations.",
+      'ewb_connection_needed',
+    );
+  }
+  return { provider: resolveProvider(bill.provider), connection: current };
+}
+
+/** A portal failure, in words that say what did not happen. */
+function portalFailure(err: unknown, label: string, notDone: string): unknown {
+  if (err instanceof PortalUnavailable) {
+    return new ApiError(503, `${err.message} ${notDone}; it is safe to try again.`, 'portal_unavailable');
+  }
+  return toApiError(err, label);
+}
+
+function vehicleOrRefuse(input: string | null | undefined): string | null {
+  if (!input?.trim()) return null;
+  const v = normaliseVehicleNo(input);
+  if (!v) {
+    throw badRequest(
+      `"${input}" is not a vehicle number the portal will take. It should look like TN01AB1234 — ` +
+        'between 7 and 11 letters and digits.',
+    );
+  }
+  return v;
+}
+
+export interface EwbChangeResult {
+  ewayBillNo: string;
+  vehicleNo: string | null;
+  validUntil: string | null;
+  extendedCount: number;
+  provider: string;
+  live: boolean;
+}
+
+type ChangeOptions = { now?: Date; call?: PortalCaller };
+
+// ── A new vehicle ────────────────────────────────────────────────────────────
+
+export interface VehicleChangeInput {
+  vehicleNo?: string | null;
+  mode?: Mode;
+  transportDocNo?: string | null;
+  /** yyyy-mm-dd */
+  transportDocDate?: string | null;
+  /** The place the goods are when the vehicle changes. */
+  fromPlace: string;
+  fromStateCode?: string;
+  reason: VehicleChangeReason;
+  remark?: string;
+}
+
+export async function changeEwayVehicle(
+  trx: Trx,
+  orgId: number,
+  userId: number | null,
+  billId: number,
+  input: VehicleChangeInput,
+  opts: ChangeOptions = {},
+): Promise<EwbChangeResult> {
+  const now = opts.now ?? new Date();
+  const call = opts.call ?? runPortalCall;
+  const bill = await loadBill(trx, orgId, billId);
+  assertStanding(bill, 'changing its vehicle');
+
+  if (bill.validUntil && now.getTime() > bill.validUntil.getTime()) {
+    throw new ApiError(
+      409,
+      `E-way bill ${bill.number} has expired, and a vehicle cannot be changed on an expired bill. Extend ` +
+        'it within 8 hours of expiry, or generate a new one.',
+      'ewb_expired',
+    );
+  }
+
+  const mode = input.mode ?? bill.mode;
+  const vehicleNo = vehicleOrRefuse(input.vehicleNo);
+  const transportDocNo = input.transportDocNo?.trim() || null;
+  if (mode === 'road' && !vehicleNo) throw badRequest('Give the new vehicle number.');
+  if (mode !== 'road' && !vehicleNo && !transportDocNo) {
+    throw badRequest('Give the vehicle number, or the transport document number for rail, air or ship.');
+  }
+  if (vehicleNo && vehicleNo === bill.vehicleNo && mode === bill.mode) {
+    throw badRequest(`${vehicleNo} is already the vehicle on e-way bill ${bill.number}.`);
+  }
+  const fromPlace = input.fromPlace.trim();
+  if (!fromPlace) throw badRequest('Where are the goods now? The portal records the place the vehicle changed.');
+
+  // The first Part B is a reason of its own, and the one that starts the clock.
+  const firstTime = bill.partBAt === null;
+  const reason: VehicleChangeReason = firstTime ? '4' : input.reason;
+  const remark = input.remark?.trim() || VEHICLE_CHANGE_REASONS[reason];
+
+  const { provider, connection } = await issuingProvider(trx, orgId, bill);
+  const ctx = await providerContext(trx, connection);
+  const change: EwbVehicleChange = {
+    ewbNo: bill.number,
+    vehicleNo,
+    fromPlace,
+    fromStateCode: input.fromStateCode ?? bill.branchState,
+    reason,
+    remark,
+    mode,
+    transportDocNo,
+    transportDocDate: input.transportDocDate ? toIrpDate(input.transportDocDate) : null,
+  };
+
+  let result;
+  try {
+    result = await call(
+      { orgId, connection, operation: 'update_ewb_vehicle', referenceType: 'eway_bill', referenceId: bill.id },
+      change,
+      () => provider.updateEwayVehicle(change, ctx),
+    );
+  } catch (err) {
+    throw portalFailure(
+      err,
+      `the vehicle change on e-way bill ${bill.number}`,
+      `The vehicle on e-way bill ${bill.number} was not changed`,
+    );
+  }
+
+  // Only the first Part B starts the clock. A later change of lorry leaves the
+  // expiry where it was.
+  const validUntil = result.validUntil
+    ? parsePortalTimestamp(result.validUntil)
+    : firstTime
+      ? validityEnd(now, bill.distanceKm ?? 0)
+      : bill.validUntil;
+
+  await trx
+    .updateTable('eway_bills')
+    .set({
+      vehicle_no: vehicleNo,
+      transport_mode: mode,
+      part_b_at: bill.partBAt ?? now,
+      valid_until: validUntil,
+      error_message: null,
+    })
+    .where('id', '=', bill.id)
+    .execute();
+  await recordEvent(trx, orgId, userId, bill.id, bill.number, 'vehicle_changed', {
+    vehicleNo, mode, fromPlace, reasonCode: reason, remark, validUntil,
+  });
+
+  return {
+    ewayBillNo: bill.number,
+    vehicleNo,
+    validUntil: validUntil?.toISOString() ?? null,
+    extendedCount: bill.extendedCount,
+    provider: provider.name,
+    live: provider.live,
+  };
+}
+
+// ── More time ────────────────────────────────────────────────────────────────
+
+export interface ExtensionInput {
+  remainingDistanceKm: number;
+  fromPlace: string;
+  fromPincode: string;
+  fromStateCode?: string;
+  reason: EwbExtendReason;
+  remark?: string;
+  /** On a vehicle still, or waiting at a place. */
+  consignment: 'in_movement' | 'in_transit';
+  vehicleNo?: string | null;
+}
+
+export async function extendEwayBill(
+  trx: Trx,
+  orgId: number,
+  userId: number | null,
+  billId: number,
+  input: ExtensionInput,
+  opts: ChangeOptions = {},
+): Promise<EwbChangeResult> {
+  const now = opts.now ?? new Date();
+  const call = opts.call ?? runPortalCall;
+  const bill = await loadBill(trx, orgId, billId);
+  assertStanding(bill, 'extending it');
+
+  if (!bill.validUntil || !bill.generatedAt) {
+    throw conflict(`E-way bill ${bill.number} has no validity to extend yet. Give it a vehicle (Part B) first.`);
+  }
+  const verdict = canExtend(bill.validUntil, bill.generatedAt, now);
+  if (!verdict.allowed) throw new ApiError(409, verdict.reason, 'extend_not_allowed');
+
+  if (!Number.isInteger(input.remainingDistanceKm) || input.remainingDistanceKm <= 0) {
+    throw badRequest('How far is left to go? The new validity is worked out from the remaining distance.');
+  }
+  const fromPincode = input.fromPincode.trim();
+  if (!/^[1-9][0-9]{5}$/.test(fromPincode)) {
+    throw badRequest('Give the six-digit PIN code of the place the goods are now.');
+  }
+  const fromPlace = input.fromPlace.trim();
+  if (!fromPlace) throw badRequest('Where are the goods now? The portal asks for the current place.');
+
+  let vehicleNo: string | null = null;
+  if (input.consignment === 'in_movement') {
+    vehicleNo = vehicleOrRefuse(input.vehicleNo) ?? bill.vehicleNo;
+    if (!vehicleNo && bill.mode === 'road') throw badRequest('Goods still on the road need the vehicle number.');
+  }
+  const remark = input.remark?.trim() || EWB_EXTEND_REASONS[input.reason];
+
+  const { provider, connection } = await issuingProvider(trx, orgId, bill);
+  const ctx = await providerContext(trx, connection);
+  const ext: EwbExtension = {
+    ewbNo: bill.number,
+    vehicleNo,
+    fromPlace,
+    fromStateCode: input.fromStateCode ?? bill.branchState,
+    fromPincode,
+    remainingDistanceKm: input.remainingDistanceKm,
+    reason: input.reason,
+    remark,
+    consignment: input.consignment,
+    mode: bill.mode,
+    isOverDimensional: false,
+  };
+
+  let result;
+  try {
+    result = await call(
+      { orgId, connection, operation: 'extend_ewb', referenceType: 'eway_bill', referenceId: bill.id },
+      ext,
+      () => provider.extendEwayBill(ext, ctx),
+    );
+  } catch (err) {
+    throw portalFailure(err, `the extension of e-way bill ${bill.number}`, `E-way bill ${bill.number} was not extended`);
+  }
+
+  const validUntil = parsePortalTimestamp(result.validUntil);
+  const extendedCount = bill.extendedCount + 1;
+  await trx
+    .updateTable('eway_bills')
+    .set({
+      valid_until: validUntil,
+      extended_count: extendedCount,
+      status: 'generated',
+      ...(vehicleNo ? { vehicle_no: vehicleNo } : {}),
+      error_message: null,
+    })
+    .where('id', '=', bill.id)
+    .execute();
+  await recordEvent(trx, orgId, userId, bill.id, bill.number, 'extended', {
+    vehicleNo, mode: bill.mode, fromPlace, reasonCode: input.reason, remark, validUntil,
+  });
+
+  return {
+    ewayBillNo: bill.number,
+    vehicleNo: vehicleNo ?? bill.vehicleNo,
+    validUntil: validUntil.toISOString(),
+    extendedCount,
+    provider: provider.name,
+    live: provider.live,
+  };
+}
+
+// ── Cancelling ───────────────────────────────────────────────────────────────
+
+export interface EwbCancelResult {
+  ewayBillNo: string;
+  cancelledAt: string;
+  provider: string;
+  live: boolean;
+  /** The portal said it was already cancelled: an earlier reply was lost. */
+  recovered: boolean;
+}
+
+export async function cancelEwayBill(
+  trx: Trx,
+  orgId: number,
+  userId: number | null,
+  billId: number,
+  input: { reason: EwbCancelReason; remark?: string },
+  opts: ChangeOptions = {},
+): Promise<EwbCancelResult> {
+  const now = opts.now ?? new Date();
+  const call = opts.call ?? runPortalCall;
+  const bill = await loadBill(trx, orgId, billId);
+  if (bill.status === 'cancelled') throw conflict(`E-way bill ${bill.number} is already cancelled.`);
+  assertStanding(bill, 'cancelling it');
+
+  const deadline = ewbCancelDeadline(bill.generatedAt);
+  if (!deadline || now.getTime() > deadline.getTime()) {
+    throw new ApiError(
+      409,
+      `E-way bill ${bill.number} was generated more than 24 hours ago, so the portal will not cancel it. ` +
+        'A bill for goods that never moved simply expires.',
+      'ewb_cancel_window_passed',
+    );
+  }
+
+  const remark = input.remark?.trim() || EWB_CANCEL_REASONS[input.reason];
+  const { provider, connection } = await issuingProvider(trx, orgId, bill);
+  const ctx = await providerContext(trx, connection);
+
+  let cancelledAt = now;
+  let recovered = false;
+  try {
+    const result = await call(
+      { orgId, connection, operation: 'cancel_ewb', referenceType: 'eway_bill', referenceId: bill.id },
+      { ewbNo: bill.number, cancelRsnCode: input.reason, cancelRmrk: remark },
+      () => provider.cancelEwayBill(bill.number, input.reason, remark, ctx),
+    );
+    if (result.cancelledAt) cancelledAt = parsePortalTimestamp(result.cancelledAt);
+  } catch (err) {
+    // An earlier cancellation went through and its reply was lost.
+    if (err instanceof PortalRejection && /already\s+cancel/i.test(err.message)) {
+      recovered = true;
+    } else {
+      throw portalFailure(
+        err,
+        `the cancellation of e-way bill ${bill.number}`,
+        `E-way bill ${bill.number} was not cancelled`,
+      );
+    }
+  }
+
+  const reasonText = `${EWB_CANCEL_REASONS[input.reason]}: ${remark}`.slice(0, 200);
+  await trx
+    .updateTable('eway_bills')
+    .set({ status: 'cancelled', cancelled_at: cancelledAt, cancel_reason: reasonText, error_message: null })
+    .where('id', '=', bill.id)
+    .execute();
+
+  // The invoice prints its e-way bill number, and a cancelled one must not
+  // appear on it as if it still covered the goods.
+  if (bill.invoiceId !== null) {
+    await trx
+      .updateTable('invoices')
+      .set({ eway_bill_no: null })
+      .where('id', '=', bill.invoiceId)
+      .where('eway_bill_no', '=', bill.number)
+      .execute();
+  }
+  await recordEvent(trx, orgId, userId, bill.id, bill.number, 'cancelled', {
+    reasonCode: input.reason,
+    remark,
+  });
+
+  return {
+    ewayBillNo: bill.number,
+    cancelledAt: cancelledAt.toISOString(),
+    provider: provider.name,
+    live: provider.live,
+    recovered,
+  };
 }

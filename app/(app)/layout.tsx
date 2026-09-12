@@ -42,14 +42,16 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       {() => (
         <MastersGate>
         <TooltipProvider>
-          <div className="flex h-screen overflow-hidden bg-background">
-            <aside className="hidden w-64 shrink-0 lg:block">
+          {/* On paper the shell goes: no sidebar or top bar, and no fixed-height
+              scroll box, which would print only the first screenful. */}
+          <div className="flex h-screen overflow-hidden bg-background print:block print:h-auto print:overflow-visible">
+            <aside className="hidden w-64 shrink-0 lg:block no-print">
               <Sidebar />
             </aside>
-            <div className="flex min-w-0 flex-1 flex-col">
+            <div className="flex min-w-0 flex-1 flex-col print:block">
               <Topbar />
-              <main className="thin-scroll flex-1 overflow-y-auto">
-                <div className="mx-auto max-w-[1440px] space-y-7 p-5 sm:p-8">{children}</div>
+              <main className="thin-scroll flex-1 overflow-y-auto print:overflow-visible">
+                <div className="mx-auto max-w-[1440px] space-y-7 p-5 sm:p-8 print:max-w-none print:p-0">{children}</div>
               </main>
             </div>
           </div>

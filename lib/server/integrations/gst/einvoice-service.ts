@@ -20,19 +20,25 @@ import 'server-only';
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { mulQty } from '../../../money';
+import { irnCancelDeadline } from '../../../tax/einvoice';
 import type { SupplyType } from '../../../types';
 import { db, type Executor, type Trx } from '../../db';
-import { badRequest, conflict, notFound } from '../../http';
+import { ApiError, badRequest, conflict, notFound } from '../../http';
 import { toPaiseFromSql, toNumberFromSql } from '../../money-sql';
+import { voidInvoice } from '../../services/sales';
 import {
   buildEinvoicePayload, fromIrpDate,
   type EinvoiceLine, type EinvoicePayload, type EinvoiceSource,
 } from './einvoice-payload';
 import { preflightEinvoice, summarise, type PreflightResult } from './preflight';
 import {
-  connectionFor, providerContext, resolveProvider, runPortalCall, toApiError,
+  connectionFor, providerContext, providerLabel, resolveProvider, runPortalCall, toApiError,
+  type PortalCaller, type PortalConnection,
 } from './index';
-import { PortalDuplicate, PortalRejection, parsePortalTimestamp } from './provider';
+import {
+  CANCEL_REASONS, PortalDuplicate, PortalRejection, PortalUnavailable, parsePortalTimestamp,
+  type CancelReasonCode,
+} from './provider';
 
 // ── Loading ──────────────────────────────────────────────────────────────────
 
@@ -418,6 +424,29 @@ export async function registerInvoice(
       .set({ eway_bill_no: result.ewbNo })
       .where('id', '=', invoiceId)
       .execute();
+
+    // The bill's history starts here too, not only when it is generated alone.
+    const bill = await trx
+      .selectFrom('eway_bills')
+      .select(['id', 'vehicle_no', 'transport_mode', 'valid_until'])
+      .where('invoice_id', '=', invoiceId)
+      .where('org_id', '=', orgId)
+      .executeTakeFirst();
+    if (bill) {
+      await trx
+        .insertInto('eway_bill_events')
+        .values({
+          org_id: orgId,
+          eway_bill_id: bill.id,
+          eway_bill_no: result.ewbNo,
+          kind: 'generated',
+          vehicle_no: bill.vehicle_no,
+          transport_mode: bill.transport_mode,
+          remark: 'Issued with the IRN',
+          valid_until: bill.valid_until,
+        })
+        .execute();
+    }
   }
 
   return {
@@ -509,6 +538,173 @@ async function recordFailure(ex: Executor, loaded: LoadedInvoice, err: unknown):
     })
     .where('id', '=', loaded.einvoiceId)
     .execute();
+}
+
+// ── Cancellation ─────────────────────────────────────────────────────────────
+//
+// An IRN can be cancelled for 24 hours after it was issued, and never after:
+// from then on the invoice legally exists, and only a credit note, itself
+// registered, can reverse the sale. Cancelling is final in the other direction
+// too. The portal will not register the same invoice number again, so the
+// invoice is voided in the books in the same transaction; leaving it standing
+// would keep a sale in the ledger that the government holds as cancelled.
+
+export interface CancelResult {
+  irn: string;
+  cancelledAt: string;
+  provider: string;
+  live: boolean;
+  /** The portal said it was already cancelled: an earlier reply was lost. */
+  recovered: boolean;
+}
+
+// The portal call is injectable, so tests can run inside a rolled-back transaction.
+export type { PortalCaller };
+
+/**
+ * Cancel an invoice's IRN, and void the invoice with it.
+ *
+ * Every check that can refuse runs before the portal is asked, because once
+ * the portal has cancelled there is no undoing it: the window, payments against
+ * the invoice, and an e-way bill still standing — the portal refuses while one
+ * does. The cancellation goes to the provider that issued the IRN. An IRN from
+ * the stand-in means nothing to NIC, and one from NIC must never be
+ * "cancelled" by the stand-in, which would change the books and nothing else.
+ */
+export async function cancelEinvoice(
+  trx: Trx,
+  orgId: number,
+  userId: number | null,
+  invoiceId: number,
+  input: { reason: CancelReasonCode; remark: string },
+  opts: { now?: Date; call?: PortalCaller } = {},
+): Promise<CancelResult> {
+  const now = opts.now ?? new Date();
+  const call = opts.call ?? runPortalCall;
+
+  const row = await trx
+    .selectFrom('einvoices as e')
+    .innerJoin('invoices as i', 'i.id', 'e.invoice_id')
+    .select([
+      'e.id', 'e.status', 'e.irn', 'e.ack_date', 'e.updated_at', 'e.provider',
+      'i.number', 'i.branch_id', 'i.amount_paid', 'i.status as invoice_status',
+    ])
+    .where('e.invoice_id', '=', invoiceId)
+    .where('e.org_id', '=', orgId)
+    .forUpdate()
+    .executeTakeFirst();
+
+  if (!row) throw notFound('That invoice has no e-invoice record.');
+  if (row.status === 'cancelled') throw conflict(`The IRN for ${row.number} is already cancelled.`);
+  const irn = row.irn;
+  if (row.status !== 'submitted' || !irn) throw conflict(`${row.number} has no IRN to cancel.`);
+
+  // A recovered registration may lack the portal's acknowledgement time; the
+  // moment it was recorded is the nearest honest stand-in for it.
+  const deadline = irnCancelDeadline(row.ack_date ?? row.updated_at);
+  if (!deadline || now.getTime() > deadline.getTime()) {
+    throw new ApiError(
+      409,
+      `The IRN for ${row.number} was issued more than 24 hours ago, so the portal will not cancel it. ` +
+        'Raise a credit note against the invoice instead; the credit note is registered in turn.',
+      'cancel_window_passed',
+    );
+  }
+
+  if (toPaiseFromSql(row.amount_paid) > 0) {
+    throw new ApiError(
+      409,
+      `${row.number} has payments against it. Cancelling the IRN voids the invoice, so remove the ` +
+        'payments first, or raise a credit note instead.',
+      'has_payments',
+    );
+  }
+
+  const ewb = await trx
+    .selectFrom('eway_bills')
+    .select('eway_bill_no')
+    .where('invoice_id', '=', invoiceId)
+    .where('org_id', '=', orgId)
+    .where('status', '=', 'generated')
+    .executeTakeFirst();
+  if (ewb) {
+    throw new ApiError(
+      409,
+      `E-way bill ${ewb.eway_bill_no ?? ''} is still active for ${row.number}. Cancel it first: the portal ` +
+        'will not cancel an IRN while its e-way bill stands.',
+      'ewb_active',
+    );
+  }
+
+  const issuedBy = row.provider ?? 'fake';
+  const current = await connectionFor(trx, orgId, row.branch_id, 'einvoice');
+  if (issuedBy !== 'fake' && current.providerName !== issuedBy) {
+    throw new ApiError(
+      409,
+      `The IRN for ${row.number} was issued through ${providerLabel(issuedBy)}, and this branch is no longer ` +
+        'connected to it. Reconnect it in Settings → Integrations to cancel the IRN.',
+      'provider_changed',
+    );
+  }
+  // A stand-in IRN is cancelled by the stand-in, whatever the branch uses now.
+  const connection: PortalConnection =
+    issuedBy === current.providerName
+      ? current
+      : { ...current, id: null, providerName: issuedBy, baseUrl: null, configured: false };
+  const provider = resolveProvider(issuedBy);
+  const ctx = await providerContext(trx, connection);
+  const remark = input.remark.trim() || CANCEL_REASONS[input.reason];
+
+  let cancelledAt = now;
+  let recovered = false;
+  try {
+    const result = await call(
+      { orgId, connection, operation: 'cancel_irn', referenceType: 'invoice', referenceId: invoiceId },
+      { Irn: irn, CnlRsn: input.reason, CnlRem: remark },
+      () => provider.cancelIrn(irn, input.reason, remark, ctx),
+    );
+    if (result.cancelledAt) cancelledAt = parsePortalTimestamp(result.cancelledAt);
+  } catch (err) {
+    // The one refusal that means success: an earlier cancellation went through
+    // and its reply was lost. Recording it is what makes the books agree.
+    if (err instanceof PortalRejection && /already\s+cancel/i.test(err.message)) {
+      recovered = true;
+    } else if (err instanceof PortalUnavailable) {
+      throw new ApiError(
+        503,
+        `${err.message} The IRN for ${row.number} was not cancelled; it is safe to try again.`,
+        'portal_unavailable',
+      );
+    } else {
+      throw toApiError(err, `the cancellation of ${row.number}`);
+    }
+  }
+
+  const reasonText = `${CANCEL_REASONS[input.reason]}: ${remark}`.slice(0, 200);
+  await trx
+    .updateTable('einvoices')
+    .set({
+      status: 'cancelled',
+      cancelled_at: cancelledAt,
+      cancel_reason: reasonText,
+      error_code: null,
+      error_message: null,
+    })
+    .where('id', '=', row.id)
+    .execute();
+
+  // The portal will never register this number again, so the sale goes too.
+  if (row.invoice_status !== 'void') {
+    await voidInvoice(trx, orgId, userId, invoiceId, `IRN cancelled — ${CANCEL_REASONS[input.reason]}`);
+  }
+
+  return {
+    irn,
+    cancelledAt: cancelledAt.toISOString(),
+    provider: provider.name,
+    live: provider.live,
+    recovered,
+  };
 }
 
 export { fromIrpDate };

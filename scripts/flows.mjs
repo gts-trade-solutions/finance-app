@@ -9,9 +9,16 @@ const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } })
 const page = await ctx.newPage();
 
 const errors = [];
+// A step that provokes a refusal on purpose names the endpoint here, so the
+// browser's "Failed to load resource" for that refusal is not counted.
+let expectRefusalFrom = null;
 page.on('pageerror', (e) => errors.push(String(e.message)));
 page.on('console', (m) => {
-  if (m.type() === 'error' && !/favicon|DevTools/i.test(m.text())) errors.push(m.text().slice(0, 160));
+  if (m.type() !== 'error' || /favicon|DevTools/i.test(m.text())) return;
+  // Chrome's "Failed to load resource" names no URL in its text; the location does.
+  const url = /Failed to load resource/.test(m.text()) ? m.location()?.url?.replace(BASE, '') : '';
+  if (url && expectRefusalFrom && url.startsWith(expectRefusalFrom)) return;
+  errors.push(m.text().slice(0, 160) + (url ? ` — ${url}` : ''));
 });
 
 let pass = 0, fail = 0;
@@ -111,8 +118,10 @@ const submittedCount = () =>
 const expiredRow = page.locator('tbody tr').filter({ hasText: /days past/ }).first();
 if (await expiredRow.count()) {
   const before = await submittedCount();
+  expectRefusalFrom = '/api/gst';
   await expiredRow.getByRole('button', { name: /^Register$/ }).click();
   await page.waitForTimeout(2500);
+  expectRefusalFrom = null;
   check('An invoice past the 30-day window is refused an IRN',
     (await submittedCount()) === before, 'the portal will not accept it');
 } else {
@@ -128,6 +137,21 @@ if (await liveRow.count()) {
   check('IRP registration returns an IRN', after === before + 1, `${before} → ${after} registered`);
 } else {
   check('IRP registration returns an IRN', false, 'no invoice inside the window to submit');
+}
+
+// A registered invoice prints as a tax invoice carrying its IRN and QR code —
+// the two things the law adds to an e-invoice on paper.
+const registeredId = await page.evaluate(async () => {
+  const r = await fetch('/api/gst?view=einvoices', { credentials: 'include' });
+  const row = (await r.json()).einvoices.find((e) => e.status === 'submitted');
+  return row ? row.invoiceId : null;
+});
+if (registeredId) {
+  await page.goto(`${BASE}/sales/invoices/${registeredId}/print`, { waitUntil: 'networkidle' });
+  await page.waitForSelector('[data-slot="tax-invoice"]', { timeout: 20000 }).catch(() => {});
+  check('A registered invoice prints with its IRN and QR code',
+    (await page.locator('[data-slot="invoice-qr"] svg').count()) > 0
+      && (await page.locator('[data-slot="invoice-irn"]').count()) > 0);
 }
 
 // ── 7. Reconciling a line actually posts, and the books still tie
@@ -197,22 +221,23 @@ check('Multi-branch user still gets the branch picker',
   (await page.getByText('Branch (GSTIN)').count()) > 0);
 
 await page.goto(`${BASE}/ai`, { waitUntil: 'networkidle' });
-await page.waitForTimeout(1200);
+await page.waitForSelector('[data-slot="ai-welcome"]', { timeout: 15000 }).catch(() => {});
 
-// The page opens on the checks tab now, and those are real rules over real
-// tables — so a firing check is itself evidence the assistant reads the ledger.
+// The welcome lists the checks that fire on this book. They are real rules
+// over real tables — so a firing check is itself evidence the assistant reads
+// the ledger. (The demo book always has overdue invoices.)
 check('Assistant surfaces checks run against the books',
-  (await page.getByText(/needs attention|Nothing needs attention/i).count()) > 0);
+  (await page.locator('[data-slot="ai-attention"]').count()) > 0);
 
-await page.getByRole('tab', { name: /ask about the books/i }).click();
-await page.waitForTimeout(500);
-await page.getByRole('button', { name: 'Which invoices are overdue?' }).click();
-await page.waitForTimeout(2500);
-
-// The answer quotes the same figure the AR ageing report shows, because it is
-// the same query. Matching on the rupee sign proves a real number came back.
-const answered = await page.getByText(/past its due date|Nothing is overdue/i).count();
-check('Assistant answers a ledger question with a real figure', answered > 0);
+// Asked in plain words. The answer runs the same query the AR ageing report
+// does, so it must carry a real rupee figure — and link to that report.
+await page.locator('[data-slot="ai-input"]').fill('Which invoices are overdue?');
+await page.locator('[data-slot="ai-send"]').click();
+await page.waitForSelector('[data-slot="ai-answer"]', { timeout: 60000 }).catch(() => {});
+await page.waitForFunction(() => !document.querySelector('[data-slot="ai-streaming"]'), null, { timeout: 60000 }).catch(() => {});
+const answerText = (await page.locator('[data-slot="ai-answer"]').last().innerText().catch(() => '')) || '';
+check('Assistant answers a ledger question with a real figure', /₹\s?[\d,]+/.test(answerText), answerText.slice(0, 80).replace(/\s+/g, ' '));
+check('The answer links to the report it came from', (await page.locator('[data-slot="ai-source"]').count()) > 0);
 
 // ── 8c. Adding an account creates both the bank record and its ledger account
 await page.goto(`${BASE}/banking`, { waitUntil: 'networkidle' });
@@ -699,7 +724,8 @@ check('Choosing a customer loads their open invoices', openForCustomer > 0,
   `${openForCustomer} unsettled`);
 
 const openText = await page.locator('main').innerText();
-check('Only unsettled invoices are offered', !/Paid/.test(openText));
+// A partly paid invoice is still open, so its "Partially Paid" badge is allowed.
+check('Only unsettled invoices are offered', !/(?<!Partially )\bPaid\b/.test(openText));
 
 // ── 19. Banking, from the database
 await page.goto(`${BASE}/banking`, { waitUntil: 'networkidle' });
@@ -758,7 +784,7 @@ check('Profit and loss reports a result', /Net profit|Net loss/.test(statements.
 // The cross-check that matters: the ageing is the subsidiary ledger behind the
 // control account, so the two must agree to the paisa.
 const arTotal = (statements.ar.match(/₹[\d,]+\.\d{2}/) || [])[0];
-const arInTb = statements.tb.includes(arTotal ?? ' ');
+const arInTb = statements.tb.includes(arTotal ?? '\u0000');
 check('Receivables ageing agrees with the trial balance', arInTb,
   `ageing total ${arTotal}`);
 

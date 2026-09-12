@@ -52,7 +52,7 @@ const ROUTES = [
   // Analytics
   '/analytics', '/analytics/new',
   // Depth
-  '/ai', '/settings', '/settings/hsn-codes', '/portal',
+  '/ai', '/settings', '/settings/hsn-codes', '/settings/billing', '/portal',
   // The signed-out surface. Visited last, and while signed in, which is fine:
   // none of the three redirects on a session, and a console error on the
   // landing page is the one a prospective customer would see first.

@@ -24,7 +24,7 @@ import { fromIrpDate } from './einvoice-payload';
 import type { EwayBillPayload } from './eway-payload';
 import {
   formatPortalTimestamp,
-  type EwayBillResult, type GstProvider, type IrnResult, type ProviderContext,
+  type EwayBillResult, type EwbByIrn, type EwbExtension, type GstProvider, type IrnResult, type ProviderContext,
 } from './provider';
 
 /** The four characters that make a stand-in reference unmistakable. */
@@ -178,6 +178,37 @@ export class FakeGstProvider implements GstProvider {
       validUntil: portalTimestamp(ewbValidUntil(now, distance, payload.vehicleType === 'O')),
       generatedAt: portalTimestamp(now),
     };
+  }
+
+  async generateEwbByIrn(req: EwbByIrn, ctx: ProviderContext): Promise<EwayBillResult> {
+    const now = new Date();
+    return {
+      // Derived from the IRN, so a retry on the same day gets the same number.
+      ewbNo: fakeEwbNo(ctx.gstin, req.irn, portalTimestamp(now).slice(0, 10)),
+      validUntil: portalTimestamp(ewbValidUntil(now, req.distanceKm, req.isOverDimensional)),
+      generatedAt: portalTimestamp(now),
+    };
+  }
+
+  async updateEwayVehicle(): Promise<{ updatedAt: string; validUntil: string | null }> {
+    // A change of vehicle leaves validity alone. The first Part B does start
+    // the clock, but the stand-in keeps no state to know which that is; the
+    // caller does, and works the expiry out itself.
+    return { updatedAt: portalTimestamp(new Date()), validUntil: null };
+  }
+
+  async extendEwayBill(ext: EwbExtension): Promise<{ extendedAt: string; validUntil: string }> {
+    // As the portal does it: counted afresh from now, on the distance left.
+    const now = new Date();
+    return {
+      extendedAt: portalTimestamp(now),
+      validUntil: portalTimestamp(ewbValidUntil(now, ext.remainingDistanceKm, ext.isOverDimensional)),
+    };
+  }
+
+  async cancelEwayBill(): Promise<{ cancelledAt: string }> {
+    // The 24-hour limit is the caller's to keep, as with an IRN.
+    return { cancelledAt: portalTimestamp(new Date()) };
   }
 }
 

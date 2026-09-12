@@ -108,7 +108,7 @@ export function Topbar() {
 
   return (
     <>
-      <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-2 border-b bg-topbar px-4 sm:px-6">
+      <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-2 border-b bg-topbar px-4 sm:px-6 no-print">
         {/* Mobile nav */}
         <Sheet open={mobileNav} onOpenChange={setMobileNav}>
           <SheetTrigger

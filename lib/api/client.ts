@@ -167,6 +167,32 @@ export interface InvoiceDetail {
   placeOfSupply: string;
   customer: { id: string; name: string; gstin: string | null; address: string | null };
   branch: { id: string; name: string; gstin: string | null };
+  /** The supplier as a tax invoice names it: the organisation, at this branch's registration. */
+  seller: {
+    name: string;
+    tradeName: string | null;
+    gstin: string | null;
+    pan: string | null;
+    address: string | null;
+    city: string | null;
+    pincode: string | null;
+    stateCode: string;
+    email: string | null;
+    phone: string | null;
+    registration: 'regular' | 'composition' | 'unregistered';
+  };
+  buyer: {
+    name: string;
+    gstin: string | null;
+    address: string | null;
+    city: string | null;
+    pincode: string | null;
+    stateCode: string;
+    treatment: string;
+  };
+  /** Only when goods go somewhere other than the billing address. */
+  shipTo: { address: string; city: string | null; pincode: string | null } | null;
+  ewayBill: { number: string; validUntil: string | null } | null;
   orderNumber: string | null;
   subject: string | null;
   paymentTerms: string | null;
@@ -196,9 +222,26 @@ export interface InvoiceDetail {
     cgstPaise: number;
     sgstPaise: number;
     igstPaise: number;
+    cessPaise: number;
     totalPaise: number;
   }[];
-  einvoice: { status: string; irn: string | null; ackNo?: string | null; ackDate?: string | null };
+  einvoice: {
+    status: string;
+    irn: string | null;
+    ackNo?: string | null;
+    ackDate?: string | null;
+    /** The IRP's signed QR, present only while the IRN stands. */
+    signedQr?: string | null;
+    /** Where the IRN came from: only `production` is a real registration. */
+    environment?: 'stand-in' | 'sandbox' | 'production';
+    cancelledAt?: string | null;
+    /** While the IRN can still be cancelled, when that ends (ISO). */
+    cancelUntil?: string | null;
+    /** Why the last attempt failed, while it stands failed. */
+    errorMessage?: string | null;
+    cancelReason?: string | null;
+    retry?: QueuedRetry | null;
+  };
   payments: { id: string; number: string; date: string; mode: string; amountPaise: number }[];
   journalEntryId: string | null;
   journalLines: InvoiceJournalLine[];
@@ -885,6 +928,13 @@ export interface Gstr3bResponse {
   totalCashPaise: number;
 }
 
+/** A retry the app queued after the portal did not answer: when, and which try of how many. */
+export interface QueuedRetry {
+  at: string;
+  attempt: number;
+  of: number;
+}
+
 export interface EinvoiceRow {
   id: string;
   invoiceId: string;
@@ -897,6 +947,10 @@ export interface EinvoiceRow {
   irn: string | null;
   ackNo: string | null;
   ackDate: string | null;
+  /** While the IRN can still be cancelled, when that ends (ISO); otherwise null. */
+  cancelUntil: string | null;
+  /** A retry queued after the portal did not answer. */
+  retry: QueuedRetry | null;
   errorMessage: string | null;
   attempts: number;
   daysLeft: number;
@@ -923,7 +977,22 @@ export interface EwayBillRow {
   vehicleNo: string | null;
   transporterName: string | null;
   distanceKm: number | null;
+  /** ISO. Validity runs to midnight of the last day. */
   validUntil: string | null;
+  /** ISO, once generated. */
+  generatedAt: string | null;
+  transportMode: 'road' | 'rail' | 'air' | 'ship';
+  extendedCount: number;
+  /** Why the last attempt failed, while it stands failed. */
+  errorMessage: string | null;
+  /** While the bill can still be cancelled, when that ends (ISO). */
+  cancelUntil: string | null;
+  /** Whether validity can be extended right now, and if not, why. */
+  extension: { allowed: boolean; reason: string } | null;
+  /** Whether the vehicle can be changed now: generated and not expired. */
+  changeable: boolean;
+  /** A retry queued after the portal did not answer. */
+  retry: QueuedRetry | null;
   /**
    * Whether a bill is actually required, after the state's own threshold and
    * the no-threshold cases. A row can be listed and not required.
@@ -1030,6 +1099,12 @@ export const gst = {
       /** Set when the portal issued an e-way bill from the same call. */
       ewayBillNo: string | null;
     }>('/api/gst', { action: 'submit-einvoice', invoiceId }),
+  /** Cancel an IRN within 24 hours of issue. The invoice is voided with it. */
+  cancelEinvoice: (invoiceId: string, reason: '1' | '2' | '3' | '4', remark: string) =>
+    api.post<{ irn: string; cancelledAt: string; provider: string; live: boolean; recovered: boolean }>(
+      '/api/gst',
+      { action: 'cancel-einvoice', invoiceId, reason, remark },
+    ),
   generateEwayBill: (input: {
     /** Exactly one of these. A challan moves goods just as an invoice does. */
     invoiceId?: string;
@@ -1052,6 +1127,50 @@ export const gst = {
       live: boolean;
       assessment: { required: boolean; reason: string };
     }>('/api/gst', { action: 'generate-eway-bill', ...input }),
+  /** A new vehicle for a bill still valid: Part B again. The expiry does not move. */
+  changeEwayVehicle: (input: {
+    ewayBillId: string;
+    vehicleNo?: string | null;
+    transportMode?: 'road' | 'rail' | 'air' | 'ship';
+    transportDocNo?: string | null;
+    transportDocDate?: string | null;
+    fromPlace: string;
+    reason: '1' | '2' | '3' | '4';
+    remark?: string;
+  }) =>
+    api.post<{
+      ewayBillNo: string;
+      vehicleNo: string | null;
+      validUntil: string | null;
+      extendedCount: number;
+      provider: string;
+      live: boolean;
+    }>('/api/gst', { action: 'update-eway-vehicle', ...input }),
+  /** More time, only in the 8 hours either side of expiry. */
+  extendEwayBill: (input: {
+    ewayBillId: string;
+    remainingDistanceKm: number;
+    fromPlace: string;
+    fromPincode: string;
+    reason: '1' | '2' | '4' | '5' | '99';
+    remark?: string;
+    consignment: 'in_movement' | 'in_transit';
+    vehicleNo?: string | null;
+  }) =>
+    api.post<{
+      ewayBillNo: string;
+      vehicleNo: string | null;
+      validUntil: string;
+      extendedCount: number;
+      provider: string;
+      live: boolean;
+    }>('/api/gst', { action: 'extend-eway-bill', ...input }),
+  /** Within 24 hours of generation. The document itself is not touched. */
+  cancelEwayBill: (ewayBillId: string, reason: '1' | '2' | '3' | '4', remark: string) =>
+    api.post<{ ewayBillNo: string; cancelledAt: string; provider: string; live: boolean; recovered: boolean }>(
+      '/api/gst',
+      { action: 'cancel-eway-bill', ewayBillId, reason, remark },
+    ),
 };
 
 // ── Recurring invoices ───────────────────────────────────────────────────────

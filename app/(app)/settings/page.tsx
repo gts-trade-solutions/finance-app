@@ -9,7 +9,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Building2, Plug, ShieldCheck } from 'lucide-react';
+import { Building2, Plug, ShieldCheck, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -97,6 +97,7 @@ const MONTHS = [
 
 export default function SettingsPage() {
   const canEdit = usePermission('settings', 'edit');
+  const canBilling = usePermission('billing', 'view');
   const currentUserId = useAppStore((s) => s.session?.userId);
   const state = useApi<SettingsResponse>(() => api.get('/api/settings'), []);
 
@@ -283,6 +284,21 @@ export default function SettingsPage() {
                   afterthought — and why portal credentials are per registration, not per business.
                 </p>
               </Card>
+
+              {canBilling && (
+                <Card className="flex flex-wrap items-center gap-4 p-5" data-slot="settings-billing-link">
+                  <Sparkles className="size-5 shrink-0 text-primary" />
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-sm font-semibold">Billing &amp; AI</h3>
+                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                      Credits for the AI assistant, your plan, who has used it, and the invoice for every payment.
+                    </p>
+                  </div>
+                  <Button variant="outline" size="sm" asChild>
+                    <Link href="/settings/billing">Open</Link>
+                  </Button>
+                </Card>
+              )}
 
               <Card className="flex flex-wrap items-center gap-4 p-5">
                 <div className="min-w-0 flex-1">

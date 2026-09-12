@@ -5,10 +5,18 @@ import { route, body, query, asId, badRequest } from '@/lib/server/http';
 import { toPaiseFromSql } from '@/lib/server/money-sql';
 import { gstr1, gstr3b } from '@/lib/server/gst/returns';
 import { einvoiceQueue, itcReconciliation, tdsSummary } from '@/lib/server/gst/compliance';
-import { previewEinvoice, registerInvoice } from '@/lib/server/integrations/gst/einvoice-service';
-import { checkEwayBill, generateEwayBill } from '@/lib/server/integrations/gst/eway-service';
-import { assessEwayBill } from '@/lib/tax/eway';
+import { cancelEinvoice, previewEinvoice, registerInvoice } from '@/lib/server/integrations/gst/einvoice-service';
+import { CANCEL_REASONS } from '@/lib/server/integrations/gst';
+import {
+  cancelEwayBill, changeEwayVehicle, checkEwayBill, extendEwayBill, generateEwayBill,
+} from '@/lib/server/integrations/gst/eway-service';
+import {
+  EWB_CANCEL_REASONS, EWB_EXTEND_REASONS, VEHICLE_CHANGE_REASONS,
+  assessEwayBill, canExtend, ewbCancelDeadline,
+} from '@/lib/tax/eway';
 import { logAudit, auditMeta } from '@/lib/server/audit';
+import { queuedRetries, retryAfterOutage } from '@/lib/server/jobs/queue';
+import '@/lib/server/jobs/boot';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // One endpoint for the GST screens.
@@ -18,10 +26,10 @@ import { logAudit, auditMeta } from '@/lib/server/audit';
 // the only way it can be wrong is by disagreeing with the documents behind it,
 // so nothing is cached in between.
 //
-// The two portal actions — registering an invoice and generating an e-way bill
-// — are the exception: they leave the app and change state somewhere else.
-// Both live in lib/server/integrations/gst, behind a provider interface, and
-// this file only decides who is allowed to ask.
+// The portal actions are the exception — registering and cancelling an IRN,
+// and generating, changing or cancelling an e-way bill. They leave the app and
+// change state somewhere else. All of them live in lib/server/integrations/gst,
+// behind a provider interface, and this file only decides who is allowed to ask.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const MONTH = z.string().regex(/^\d{4}-\d{2}$/, 'Give the period as yyyy-mm.');
@@ -121,7 +129,10 @@ export const GET = route(
           supply_kind: 'goods' | 'service' | 'both'; movement: string; deemed_inter: number;
           from_state: string; to_state: string;
           eway_bill_no: string | null; status: string | null; vehicle_no: string | null;
-          transporter_name: string | null; distance_km: number | null; valid_until: string | null;
+          transporter_name: string | null; distance_km: number | null;
+          // DATETIME columns arrive as Date objects: the pool keeps only DATE as text.
+          valid_until: Date | null; generated_at: Date | null; transport_mode: string | null;
+          extended_count: number | null; error_message: string | null;
         }>`
           SELECT 'invoice' AS doc_kind, i.id AS doc_id, w.id, i.number,
                  i.invoice_date AS doc_date, c.display_name AS customer_name,
@@ -134,7 +145,8 @@ export const GET = route(
                       THEN 1 ELSE 0 END AS deemed_inter,
                  b.state_code AS from_state, c.state_code AS to_state,
                  w.eway_bill_no, w.status, w.vehicle_no, w.transporter_name,
-                 w.distance_km, w.valid_until
+                 w.distance_km, w.valid_until, w.generated_at, w.transport_mode,
+                 w.extended_count, w.error_message
             FROM invoices i
             JOIN contacts c ON c.id = i.customer_id
             JOIN branches b ON b.id = i.branch_id
@@ -157,7 +169,8 @@ export const GET = route(
                  0 AS deemed_inter,
                  b.state_code AS from_state, c.state_code AS to_state,
                  w.eway_bill_no, w.status, w.vehicle_no, w.transporter_name,
-                 w.distance_km, w.valid_until
+                 w.distance_km, w.valid_until, w.generated_at, w.transport_mode,
+                 w.extended_count, w.error_message
             FROM delivery_challans d
             JOIN contacts c ON c.id = d.customer_id
             JOIN branches b ON b.id = d.branch_id
@@ -174,6 +187,8 @@ export const GET = route(
         `.execute(db);
 
         const today = new Date().toISOString().slice(0, 10);
+        const now = new Date();
+        const retries = await queuedRetries(db, orgId, 'ewb.generate');
 
         return {
           view: q.view,
@@ -189,6 +204,12 @@ export const GET = route(
               docDate: date,
               today,
             });
+            // What can still be done to a generated bill, decided here so the
+            // screen offers exactly what the server will accept.
+            const standing = r.status === 'generated';
+            const validUntil = r.valid_until ? new Date(r.valid_until) : null;
+            const generatedAt = r.generated_at ? new Date(r.generated_at) : null;
+            const cancelBy = standing ? ewbCancelDeadline(generatedAt) : null;
             return {
               id: r.id === null ? null : asId(r.id),
               docKind: r.doc_kind,
@@ -205,7 +226,15 @@ export const GET = route(
               vehicleNo: r.vehicle_no,
               transporterName: r.transporter_name,
               distanceKm: r.distance_km,
-              validUntil: r.valid_until ? String(r.valid_until).slice(0, 10) : null,
+              validUntil: validUntil?.toISOString() ?? null,
+              generatedAt: generatedAt?.toISOString() ?? null,
+              transportMode: (r.transport_mode ?? 'road') as 'road' | 'rail' | 'air' | 'ship',
+              extendedCount: Number(r.extended_count ?? 0),
+              errorMessage: r.status === 'pending' ? r.error_message : null,
+              cancelUntil: cancelBy && cancelBy > now ? cancelBy.toISOString() : null,
+              extension: standing && validUntil && generatedAt ? canExtend(validUntil, generatedAt, now) : null,
+              changeable: standing && (!validUntil || validUntil > now),
+              retry: retries.get(`${r.doc_kind}:${r.doc_id}`) ?? null,
               // Why this row is on the list, in the words the UI can show.
               required: assessment.required,
               requirementReason: assessment.reason,
@@ -219,10 +248,20 @@ export const GET = route(
   { permission: { module: 'gst', action: 'view' } },
 );
 
+const BILL_ID = z.union([z.string(), z.number()]);
+const PLACE = z.string().trim().min(1, 'Where are the goods now?').max(100);
+
 const ActionInput = z.discriminatedUnion('action', [
   z.object({
     action: z.literal('submit-einvoice'),
     invoiceId: z.union([z.string(), z.number()]),
+  }),
+  z.object({
+    action: z.literal('cancel-einvoice'),
+    invoiceId: z.union([z.string(), z.number()]),
+    // The portal's own reason codes; anything free-form goes in the remark.
+    reason: z.enum(['1', '2', '3', '4']),
+    remark: z.string().trim().max(100).optional(),
   }),
   z.object({
     action: z.literal('generate-eway-bill'),
@@ -239,6 +278,34 @@ const ActionInput = z.discriminatedUnion('action', [
     transportMode: z.enum(['road', 'rail', 'air', 'ship']).optional(),
     isOverDimensional: z.boolean().optional(),
   }),
+  z.object({
+    action: z.literal('update-eway-vehicle'),
+    ewayBillId: BILL_ID,
+    vehicleNo: z.string().trim().max(20).nullish(),
+    transportMode: z.enum(['road', 'rail', 'air', 'ship']).optional(),
+    transportDocNo: z.string().trim().max(20).nullish(),
+    transportDocDate: DATE.nullish(),
+    fromPlace: PLACE,
+    reason: z.enum(['1', '2', '3', '4']),
+    remark: z.string().trim().max(100).optional(),
+  }),
+  z.object({
+    action: z.literal('extend-eway-bill'),
+    ewayBillId: BILL_ID,
+    remainingDistanceKm: z.number().int().positive().max(4000),
+    fromPlace: PLACE,
+    fromPincode: z.string().trim().regex(/^[1-9][0-9]{5}$/, 'Give the six-digit PIN code.'),
+    reason: z.enum(['1', '2', '4', '5', '99']),
+    remark: z.string().trim().max(100).optional(),
+    consignment: z.enum(['in_movement', 'in_transit']),
+    vehicleNo: z.string().trim().max(20).nullish(),
+  }),
+  z.object({
+    action: z.literal('cancel-eway-bill'),
+    ewayBillId: BILL_ID,
+    reason: z.enum(['1', '2', '3', '4']),
+    remark: z.string().trim().max(100).optional(),
+  }),
 ]);
 
 export const POST = route(
@@ -247,7 +314,12 @@ export const POST = route(
 
     if (input.action === 'submit-einvoice') {
       const invoiceId = Number(input.invoiceId);
-      const result = await transaction((trx) => registerInvoice(trx, orgId, invoiceId));
+      // A portal that did not answer is queued to try again, not left to a person.
+      const result = await transaction((trx) => registerInvoice(trx, orgId, invoiceId)).catch((err: unknown) =>
+        retryAfterOutage(err, {
+          orgId, userId: user.userId, kind: 'einvoice.register', key: `invoice:${invoiceId}`, payload: { invoiceId },
+        }),
+      );
 
       await logAudit({
         orgId, actorUserId: user.userId, actorName: user.name, action: 'approve',
@@ -261,6 +333,95 @@ export const POST = route(
       return result;
     }
 
+    if (input.action === 'cancel-einvoice') {
+      const invoiceId = Number(input.invoiceId);
+      const result = await transaction((trx) =>
+        cancelEinvoice(trx, orgId, user.userId, invoiceId, { reason: input.reason, remark: input.remark ?? '' }),
+      );
+
+      await logAudit({
+        orgId, actorUserId: user.userId, actorName: user.name, action: 'void',
+        targetType: 'einvoice', targetId: invoiceId,
+        detail:
+          `IRN cancelled via ${result.provider} (${CANCEL_REASONS[input.reason]}): ${result.irn.slice(0, 16)}…; ` +
+          'the invoice was voided with it' + (result.recovered ? ' (the portal had already cancelled it)' : ''),
+        ...auditMeta(req),
+      });
+
+      return result;
+    }
+
+    if (input.action === 'update-eway-vehicle') {
+      const billId = Number(input.ewayBillId);
+      const result = await transaction((trx) =>
+        changeEwayVehicle(trx, orgId, user.userId, billId, {
+          vehicleNo: input.vehicleNo ?? null,
+          mode: input.transportMode,
+          transportDocNo: input.transportDocNo ?? null,
+          transportDocDate: input.transportDocDate ?? null,
+          fromPlace: input.fromPlace,
+          reason: input.reason,
+          remark: input.remark,
+        }),
+      );
+
+      await logAudit({
+        orgId, actorUserId: user.userId, actorName: user.name, action: 'update',
+        targetType: 'eway_bill', targetId: billId,
+        detail:
+          `Vehicle on e-way bill ${result.ewayBillNo} changed to ${result.vehicleNo ?? 'a transport document'} ` +
+          `at ${input.fromPlace} (${VEHICLE_CHANGE_REASONS[input.reason]})`,
+        ...auditMeta(req),
+      });
+
+      return result;
+    }
+
+    if (input.action === 'extend-eway-bill') {
+      const billId = Number(input.ewayBillId);
+      const result = await transaction((trx) =>
+        extendEwayBill(trx, orgId, user.userId, billId, {
+          remainingDistanceKm: input.remainingDistanceKm,
+          fromPlace: input.fromPlace,
+          fromPincode: input.fromPincode,
+          reason: input.reason,
+          remark: input.remark,
+          consignment: input.consignment,
+          vehicleNo: input.vehicleNo ?? null,
+        }),
+      );
+
+      await logAudit({
+        orgId, actorUserId: user.userId, actorName: user.name, action: 'update',
+        targetType: 'eway_bill', targetId: billId,
+        detail:
+          `E-way bill ${result.ewayBillNo} extended to ${result.validUntil} ` +
+          `(${EWB_EXTEND_REASONS[input.reason]}, ${input.remainingDistanceKm} km to go); ` +
+          `extension ${result.extendedCount}`,
+        ...auditMeta(req),
+      });
+
+      return result;
+    }
+
+    if (input.action === 'cancel-eway-bill') {
+      const billId = Number(input.ewayBillId);
+      const result = await transaction((trx) =>
+        cancelEwayBill(trx, orgId, user.userId, billId, { reason: input.reason, remark: input.remark }),
+      );
+
+      await logAudit({
+        orgId, actorUserId: user.userId, actorName: user.name, action: 'void',
+        targetType: 'eway_bill', targetId: billId,
+        detail:
+          `E-way bill ${result.ewayBillNo} cancelled via ${result.provider} (${EWB_CANCEL_REASONS[input.reason]})` +
+          (result.recovered ? '; the portal had already cancelled it' : ''),
+        ...auditMeta(req),
+      });
+
+      return result;
+    }
+
     const doc = input.invoiceId
       ? ({ kind: 'invoice', id: Number(input.invoiceId) } as const)
       : input.challanId
@@ -268,16 +429,21 @@ export const POST = route(
         : null;
     if (!doc) throw badRequest('Which document is moving? Pass invoiceId or challanId.');
 
+    const transport = {
+      vehicleNo: input.vehicleNo ?? null,
+      transporterId: input.transporterId ?? null,
+      transporterName: input.transporterName ?? null,
+      transportDocNo: input.transportDocNo ?? null,
+      transportDocDate: input.transportDocDate ?? null,
+      mode: input.transportMode,
+      distanceKm: input.distanceKm ?? null,
+      isOverDimensional: input.isOverDimensional,
+    };
     const result = await transaction((trx) =>
-      generateEwayBill(trx, orgId, doc, {
-        vehicleNo: input.vehicleNo ?? null,
-        transporterId: input.transporterId ?? null,
-        transporterName: input.transporterName ?? null,
-        transportDocNo: input.transportDocNo ?? null,
-        transportDocDate: input.transportDocDate ?? null,
-        mode: input.transportMode,
-        distanceKm: input.distanceKm ?? null,
-        isOverDimensional: input.isOverDimensional,
+      generateEwayBill(trx, orgId, doc, transport, { userId: user.userId }),
+    ).catch((err: unknown) =>
+      retryAfterOutage(err, {
+        orgId, userId: user.userId, kind: 'ewb.generate', key: `${doc.kind}:${doc.id}`, payload: { doc, transport },
       }),
     );
 
