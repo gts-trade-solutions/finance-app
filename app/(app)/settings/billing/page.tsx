@@ -10,9 +10,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  CalendarClock, FileText, FlaskConical, Info, Loader2, Lock, RefreshCw, Sparkles, TriangleAlert,
+  CalendarClock, FileText, FlaskConical, Info, Loader2, Lock, RefreshCw, Sparkles, TriangleAlert, Wallet,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
@@ -25,12 +25,14 @@ import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/shared/page-header';
 import { AsyncPage } from '@/components/shared/async-state';
 import { TestCheckoutDialog, usePurchase } from '@/components/billing/purchase';
+import { useCredits } from '@/components/ai/credits-provider';
 import { UsageChart } from '@/components/billing/usage-chart';
 import { ai } from '@/lib/api/ai';
 import { billing, type BillingOverview } from '@/lib/api/billing';
 import { useApi } from '@/lib/api/use-api';
 import {
-  TYPICAL_CREDITS_PER_QUESTION, formatCredits, type BillingPeriod, type PackCode, type PlanCode,
+  REPORT_DOWNLOAD_CREDITS, REPORT_MARKUP_PCT, TYPICAL_CREDITS_PER_QUESTION, formatCredits,
+  type BillingPeriod, type PackCode, type PlanCode,
 } from '@/lib/billing/catalog';
 import { formatINR } from '@/lib/money';
 import { usePermission } from '@/lib/store/hooks';
@@ -70,7 +72,27 @@ const PAYMENT_STATUS: Record<string, { label: string; tone: string }> = {
 
 export default function BillingPage() {
   const canView = usePermission('billing', 'view');
+  const credits = useCredits();
   const state = useApi<BillingOverview>(() => billing.overview(), []);
+  const { refetch } = state;
+
+  // The balance moved somewhere else — a top-up bought from the top bar, a
+  // question asked in the corner panel — so the statement here follows it.
+  const walletMc = credits.wallet?.availableMc;
+  const shownMc = useRef(walletMc);
+  useEffect(() => {
+    if (walletMc === undefined) return;
+    const before = shownMc.current;
+    shownMc.current = walletMc;
+    if (before !== undefined && before !== walletMc) void refetch();
+  }, [walletMc, refetch]);
+
+  // And the other way: a purchase, a plan or the assistant turned off here
+  // moves the balance in the top bar and the corner assistant.
+  const refresh = () => {
+    void refetch();
+    void credits.refresh();
+  };
 
   return (
     <>
@@ -78,11 +100,18 @@ export default function BillingPage() {
         title="Billing & AI"
         description="Credits for the AI assistant, the plan you are on, who has used it, and an invoice for every payment. Nothing here affects the rest of the app."
         actions={
-          <Button variant="outline" size="sm" asChild>
-            <Link href="/ai">
-              <Sparkles className="size-3.5" /> Open the assistant
-            </Link>
-          </Button>
+          <>
+            {credits.wallet?.canManage && (
+              <Button size="sm" onClick={credits.topUp} data-slot="billing-buy-credits">
+                <Wallet className="size-3.5" /> Buy credits
+              </Button>
+            )}
+            <Button variant="outline" size="sm" asChild>
+              <Link href="/ai">
+                <Sparkles className="size-3.5" /> Open the assistant
+              </Link>
+            </Button>
+          </>
         }
       />
       {!canView ? (
@@ -91,7 +120,7 @@ export default function BillingPage() {
           <p className="text-sm text-muted-foreground">Billing is managed by your organisation&apos;s administrators.</p>
         </Card>
       ) : (
-        <AsyncPage state={state}>{(d) => <Billing d={d} refresh={() => void state.refetch()} />}</AsyncPage>
+        <AsyncPage state={state}>{(d) => <Billing d={d} refresh={refresh} />}</AsyncPage>
       )}
     </>
   );
@@ -264,7 +293,10 @@ function Billing({ d, refresh }: { d: BillingOverview; refresh: () => void }) {
       <Card className="p-5">
         <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
           <h3 className="text-sm font-semibold">Credits used, last 30 days</h3>
-          <p className="text-xs text-muted-foreground">Each question is charged for the tokens it actually used.</p>
+          <p className="text-xs text-muted-foreground">
+            Each question is charged for the tokens it actually used, plus {REPORT_MARKUP_PCT}% when it comes with a detailed
+            report. Report downloads: each person&apos;s first is free, then {REPORT_DOWNLOAD_CREDITS} credit per report.
+          </p>
         </div>
         <UsageChart days={d.usage.days} />
       </Card>

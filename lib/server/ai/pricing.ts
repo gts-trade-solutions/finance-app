@@ -16,6 +16,7 @@
 // Pure functions, no server imports: the tests pin every rule here.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { REPORT_MARKUP_PCT, REPORT_MIN_SURCHARGE_MC } from '../../billing/catalog';
 import type { CallUsage } from './types';
 
 export interface ModelPrice {
@@ -102,6 +103,18 @@ export function millicreditsFor(costMicro: number, creditCostUsd: number): numbe
 export function chargeFor(costMicro: number, creditCostUsd: number, holdMc: number): number {
   if (costMicro <= 0) return 0;
   return Math.min(holdMc, Math.max(MIN_CHARGE_MC, millicreditsFor(costMicro, creditCostUsd)));
+}
+
+/**
+ * A question's charge when its answer comes with a detailed report: the
+ * tokens' charge plus REPORT_MARKUP_PCT of it, at least REPORT_MIN_SURCHARGE_MC
+ * more — and, like every charge, never more than was reserved. Nothing
+ * consumed is still nothing charged.
+ */
+export function withReportMarkup(chargeMc: number, holdMc: number): number {
+  if (chargeMc <= 0) return 0;
+  const surcharge = Math.max(REPORT_MIN_SURCHARGE_MC, Math.ceil((chargeMc * REPORT_MARKUP_PCT) / 100));
+  return Math.min(holdMc, chargeMc + surcharge);
 }
 
 /** The credit cost of a spend in micro-dollars, for budgeting inside a question. */

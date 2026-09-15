@@ -99,15 +99,24 @@ export async function walletView(ex: Executor, orgId: number, now = new Date()):
 
 // ── Locks and the ledger ─────────────────────────────────────────────────────
 
-/** Create the wallet row if it is missing, lock it, and return what is held. */
+/**
+ * Lock the wallet row, creating it the first time, and return what is held.
+ *
+ * Lock first, create only when missing. The other way round — INSERT IGNORE,
+ * then SELECT … FOR UPDATE — deadlocks whenever two requests prepare the same
+ * wallet at once: the ignored insert takes a shared lock on the existing row,
+ * both then want it exclusively, and each waits on the other. With the top bar
+ * reading the balance on every screen, "at once" is routine.
+ */
 export async function lockWallet(trx: Trx, orgId: number): Promise<number> {
-  await sql`INSERT IGNORE INTO ai_wallets (org_id, held_mc) VALUES (${orgId}, 0)`.execute(trx);
-  const row = await trx
-    .selectFrom('ai_wallets')
-    .select('held_mc')
-    .where('org_id', '=', orgId)
-    .forUpdate()
-    .executeTakeFirstOrThrow();
+  const lock = () =>
+    trx.selectFrom('ai_wallets').select('held_mc').where('org_id', '=', orgId).forUpdate().executeTakeFirst();
+  let row = await lock();
+  if (!row) {
+    await sql`INSERT IGNORE INTO ai_wallets (org_id, held_mc) VALUES (${orgId}, 0)`.execute(trx);
+    row = await lock();
+  }
+  if (!row) throw new Error(`The AI wallet for organisation ${orgId} could not be created.`);
   return Number(row.held_mc);
 }
 
@@ -517,6 +526,75 @@ export async function settleUsage(
   return { chargedMc: charged };
 }
 
+// ── Charges that are not questions ───────────────────────────────────────────
+
+/**
+ * Charge a fixed number of credits for something other than a question — a
+ * report download. Recorded as a settled usage row, so it counts toward the
+ * person's monthly limit and shows in the billing page's usage, and taken from
+ * the soonest-expiring buckets like any charge. Refused, charging nothing,
+ * when the wallet or the person's monthly limit cannot cover it.
+ */
+export async function spendCredits(
+  trx: Trx,
+  orgId: number,
+  userId: number,
+  mc: number,
+  opts: { provider: string; model: string; note: string; monthlyCapMc: number | null; conversationId?: number | null },
+  now = new Date(),
+): Promise<{ usageId: number; chargedMc: number }> {
+  if (!Number.isInteger(mc) || mc <= 0) throw new Error(`A charge must be a positive number of millicredits, not ${mc}.`);
+  const held = await lockWallet(trx, orgId);
+  const buckets = await liveBuckets(trx, orgId, now).forUpdate().execute();
+  const available = buckets.reduce((t, b) => t + Number(b.remaining_mc), 0) - held;
+  if (available < mc) throw new OutOfCreditsError(Math.max(0, available));
+  if (opts.monthlyCapMc !== null) {
+    const spent = await userSpendSince(trx, orgId, userId, istMonthStart(now));
+    if (spent + mc > opts.monthlyCapMc) {
+      throw new ApiError(
+        429,
+        `That would go past your monthly AI allowance of ${formatCredits(opts.monthlyCapMc)} credits. It resets on the 1st, or an admin can raise it.`,
+        'user_cap_reached',
+      );
+    }
+  }
+
+  const row = await trx
+    .insertInto('ai_usage')
+    .values({
+      org_id: orgId,
+      user_id: userId,
+      conversation_id: opts.conversationId ?? null,
+      status: 'settled',
+      provider: opts.provider.slice(0, 30),
+      model: opts.model.slice(0, 80),
+      hold_mc: mc,
+      charged_mc: mc,
+      settled_at: now,
+    })
+    .executeTakeFirstOrThrow();
+  const usageId = Number(row.insertId);
+
+  let left = mc;
+  let balance = await ledgerBalance(trx, orgId);
+  const lines: LedgerLine[] = [];
+  for (const b of buckets) {
+    if (left <= 0) break;
+    const take = Math.min(Number(b.remaining_mc), left);
+    if (take <= 0) continue;
+    await trx
+      .updateTable('ai_credit_buckets')
+      .set((eb) => ({ remaining_mc: eb('remaining_mc', '-', take) }))
+      .where('id', '=', b.id)
+      .execute();
+    balance -= take;
+    left -= take;
+    lines.push({ bucketId: b.id, kind: 'usage', deltaMc: -take, balanceAfterMc: balance, usageId, userId, note: opts.note });
+  }
+  await writeLedger(trx, orgId, lines);
+  return { usageId, chargedMc: mc };
+}
+
 // ── Refunds and corrections ──────────────────────────────────────────────────
 
 /**
@@ -616,7 +694,7 @@ export async function usageStats(ex: Executor, orgId: number, now = new Date(), 
   const rows = await ex
     .selectFrom('ai_usage')
     .leftJoin('users', 'users.id', 'ai_usage.user_id')
-    .select(['ai_usage.user_id', 'ai_usage.charged_mc', 'ai_usage.created_at', 'ai_usage.status', 'users.name'])
+    .select(['ai_usage.user_id', 'ai_usage.charged_mc', 'ai_usage.created_at', 'ai_usage.status', 'ai_usage.provider', 'users.name'])
     .where('ai_usage.org_id', '=', orgId)
     .where('ai_usage.created_at', '>=', since < monthStart ? since : monthStart)
     .where('ai_usage.status', '=', 'settled')
@@ -631,17 +709,19 @@ export async function usageStats(ex: Executor, orgId: number, now = new Date(), 
   for (const r of rows) {
     const at = new Date(r.created_at);
     const mc = Number(r.charged_mc);
+    // A report download spends credits, but it is not a question.
+    const question = r.provider === 'download' ? 0 : 1;
     const day = byDay.get(istDate(at));
     if (day && at >= since) {
       day.creditsMc += mc;
-      day.questions += 1;
+      day.questions += question;
     }
     if (at >= monthStart) {
       monthMc += mc;
-      monthQuestions += 1;
+      monthQuestions += question;
       const u = byUser.get(r.user_id) ?? { userId: r.user_id, name: r.name ?? 'Former user', creditsMc: 0, questions: 0 };
       u.creditsMc += mc;
-      u.questions += 1;
+      u.questions += question;
       byUser.set(r.user_id, u);
     }
   }

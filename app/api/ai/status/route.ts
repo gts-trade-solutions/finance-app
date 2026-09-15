@@ -23,7 +23,11 @@ export const GET = route(
   async ({ user, orgId, role }) => {
     const settings = await aiSettingsFor(db, orgId);
     if (settings.enabled) {
-      await transaction((trx) => prepareWallet(trx, orgId, new Date(), { isDemo: settings.isDemo }));
+      // The top bar reads the balance at the same moment, preparing the same
+      // wallet: a deadlock between the two is retried, not shown.
+      await transaction((trx) => prepareWallet(trx, orgId, new Date(), { isDemo: settings.isDemo }), {
+        retryDeadlocks: true,
+      });
     }
 
     const [wallet, sub, flags, spent] = await Promise.all([

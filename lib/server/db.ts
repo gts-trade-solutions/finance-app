@@ -105,9 +105,32 @@ export type Db = Kysely<DB>;
 export type Trx = Transaction<DB>;
 export type Executor = Kysely<DB> | Trx;
 
-/** Run `fn` inside a transaction, rolling back on any thrown error. */
-export function transaction<T>(fn: (trx: Trx) => Promise<T>): Promise<T> {
-  return db.transaction().execute(fn);
+/** MySQL's code for "chosen as the deadlock victim; try restarting transaction". */
+const ER_LOCK_DEADLOCK = 1213;
+
+/**
+ * Run `fn` inside a transaction, rolling back on any thrown error.
+ *
+ * `retryDeadlocks` runs it again, up to three times in all, when MySQL picks
+ * it as a deadlock victim. InnoDB has already rolled the whole transaction
+ * back by then, so starting over is the only remedy. Only for work that
+ * touches nothing but the database and is safe to repeat — bringing a wallet
+ * up to date, say — never around a call to a payment gateway or a portal.
+ */
+export async function transaction<T>(
+  fn: (trx: Trx) => Promise<T>,
+  opts: { retryDeadlocks?: boolean } = {},
+): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await db.transaction().execute(fn);
+    } catch (err) {
+      const deadlock = (err as { errno?: number }).errno === ER_LOCK_DEADLOCK;
+      if (!opts.retryDeadlocks || !deadlock || attempt >= 3) throw err;
+      // A short pause with some jitter, so the two sides do not meet again.
+      await new Promise((resolve) => setTimeout(resolve, 25 * attempt + Math.random() * 25));
+    }
+  }
 }
 
 /** Cheap liveness probe for the health endpoint and the smoke tests. */

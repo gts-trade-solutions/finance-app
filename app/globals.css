@@ -293,6 +293,18 @@
   }
 }
 
+/* ── The assistant's corner button ─────────────────────────────────────────
+   It sits over the bottom-right corner of every screen. A page gets room at
+   its end so its last row can scroll clear of it; a form's sticky footer keeps
+   its right end free, and the button drops into that space as just its icon —
+   the labelled version is wider than a footer can spare beside its total. */
+@media screen {
+  body:has([data-slot='ai-launcher']) .app-page:not(:has(.footer-bar)) { padding-bottom: 6rem; }
+  body:has([data-slot='ai-launcher']) .footer-bar { padding-right: 6rem; }
+  body:has(.footer-bar) [data-slot='ai-launcher'] { bottom: 0.5rem; width: 3rem; padding-inline: 0; }
+  body:has(.footer-bar) [data-slot='ai-launcher-label'] { display: none; }
+}
+
 /* ── Print: invoice/report output only ──────────────────────────────────── */
 @media print {
   .no-print { display: none !important; }

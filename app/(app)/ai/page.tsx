@@ -19,12 +19,14 @@ import { PageHeader } from '@/components/shared/page-header';
 import { AsyncPage } from '@/components/shared/async-state';
 import { CreditMeter, EnablePanel, NotEnabledPanel, UnconfiguredPanel } from '@/components/ai/panels';
 import { Workspace } from '@/components/ai/workspace';
+import { useCredits } from '@/components/ai/credits-provider';
 import { useSession } from '@/components/layout/session-provider';
 import { ai, type AiStatus } from '@/lib/api/ai';
 import { useApi } from '@/lib/api/use-api';
 
 export default function AiPage() {
   const session = useSession();
+  const credits = useCredits();
   const state = useApi<AiStatus>(() => ai.status(), []);
 
   return (
@@ -41,16 +43,25 @@ export default function AiPage() {
             <UnconfiguredPanel />
           ) : !status.enabled ? (
             status.canManage ? (
-              <EnablePanel orgName={session.org?.name ?? 'your organisation'} onEnabled={() => void state.refetch()} />
+              <EnablePanel
+                orgName={session.org?.name ?? 'your organisation'}
+                onEnabled={() => {
+                  void state.refetch();
+                  // The balance in the top bar and the corner assistant appear now.
+                  void credits.refresh();
+                }}
+              />
             ) : (
               <NotEnabledPanel />
             )
           ) : (
             <Workspace
               status={status}
-              onWallet={() => {
-                // The meter reads from the status; refresh it quietly so the
-                // header agrees with the box at the bottom.
+              availableMc={credits.wallet?.availableMc ?? status.wallet.availableMc}
+              onWallet={(mc) => {
+                // Every balance on screen moves at once; the rest of the status
+                // (the monthly limit used) is refreshed quietly behind it.
+                credits.setAvailable(mc);
                 void state.refetch();
               }}
             />

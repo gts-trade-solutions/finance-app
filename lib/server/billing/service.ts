@@ -773,7 +773,9 @@ export async function standinStep(
 
 export async function billingOverview(orgId: number) {
   const settings = await aiSettingsFor(db, orgId);
-  await transaction((trx) => prepareWallet(trx, orgId, new Date(), { isDemo: settings.isDemo }));
+  // Only database work, and safe to repeat, so a deadlock is retried rather
+  // than shown: the page is often opened while the top bar reads the balance.
+  await transaction((trx) => prepareWallet(trx, orgId, new Date(), { isDemo: settings.isDemo }), { retryDeadlocks: true });
 
   const rate = gstRatePct();
   const keys = razorpayKeys();

@@ -11,15 +11,21 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ai, type AiStatus } from '@/lib/api/ai';
-import { MC_PER_CREDIT, TRIAL_CREDITS, TRIAL_DAYS, formatCredits } from '@/lib/billing/catalog';
+import {
+  MC_PER_CREDIT, REPORT_DOWNLOAD_CREDITS, REPORT_MARKUP_PCT, TRIAL_CREDITS, TRIAL_DAYS, formatCredits,
+} from '@/lib/billing/catalog';
 import { cn } from '@/lib/utils';
+import { useCredits } from './credits-provider';
 
 const day = (iso: string) => new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
 
 /** "312.4 credits · Growth plan" — and a way to get more, for those who can buy. */
 export function CreditMeter({ status }: { status: AiStatus }) {
-  const low = status.wallet.availableMc < 10 * MC_PER_CREDIT;
-  const empty = status.wallet.availableMc < MC_PER_CREDIT;
+  const credits = useCredits();
+  // The shell's balance is live; the status is what the page loaded with.
+  const availableMc = credits.wallet?.availableMc ?? status.wallet.availableMc;
+  const low = availableMc < 10 * MC_PER_CREDIT;
+  const empty = availableMc < MC_PER_CREDIT;
   const detail = status.isDemo
     ? 'Demo allowance · resets daily'
     : status.plan
@@ -39,15 +45,20 @@ export function CreditMeter({ status }: { status: AiStatus }) {
         <Wallet className={cn('size-4', empty ? 'text-destructive' : low ? 'text-warning' : 'text-primary')} />
         <div className="leading-tight">
           <p className="text-sm font-semibold tabular-nums">
-            {formatCredits(status.wallet.availableMc)} <span className="font-normal text-muted-foreground">credits</span>
+            {formatCredits(availableMc)} <span className="font-normal text-muted-foreground">credits</span>
           </p>
           <p className="text-[11px] text-muted-foreground">{detail}</p>
         </div>
       </div>
       {status.canManage && (
-        <Button size="sm" variant={empty ? 'default' : 'outline'} asChild>
-          <Link href="/settings/billing">{empty ? 'Buy credits' : 'Billing'}</Link>
-        </Button>
+        <>
+          <Button size="sm" variant={low ? 'default' : 'outline'} onClick={credits.topUp} data-slot="ai-topup">
+            <Wallet className="size-3.5" /> Top up
+          </Button>
+          <Button size="sm" variant="ghost" asChild>
+            <Link href="/settings/billing">Plans</Link>
+          </Button>
+        </>
       )}
     </div>
   );
@@ -119,7 +130,9 @@ export function EnablePanel({ orgName, onEnabled }: { orgName: string; onEnabled
           <Wallet className="mt-0.5 size-4 shrink-0 text-primary" />
           <span>
             <span className="font-medium">What it costs.</span> Questions use credits — usually one to three each. You start with{' '}
-            {TRIAL_CREDITS} free credits for {TRIAL_DAYS} days; after that, a plan or a top-up pack.
+            {TRIAL_CREDITS} free credits for {TRIAL_DAYS} days; after that, a plan or a top-up pack. An answer that comes with a
+            chart and a detailed report costs about {REPORT_MARKUP_PCT}% more. Your first report download is free; after that,{' '}
+            {REPORT_DOWNLOAD_CREDITS} credit for each new report.
           </span>
         </li>
       </ul>

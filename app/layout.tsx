@@ -104,7 +104,8 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       </head>
       <body className={`${plexSans.variable} ${plexMono.variable} font-sans antialiased`}>
         {children}
-        <Toaster position="bottom-right" richColors closeButton />
+        {/* Lifted clear of the assistant's button in the same corner. */}
+        <Toaster position="bottom-right" offset={{ bottom: 88 }} mobileOffset={{ bottom: 88 }} richColors closeButton />
       </body>
     </html>
   );

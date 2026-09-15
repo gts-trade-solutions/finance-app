@@ -19,6 +19,7 @@ import 'server-only';
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { splitFollowups } from '../../ai/followups';
+import { MAX_REPORTS_PER_ANSWER, type AiReport } from '../../ai/reports';
 import { costMicroForMc, costMicroUsd, type ModelPrice } from './pricing';
 import { buildSystemPrompt, type PromptContext } from './prompt';
 import { runTool, toolLabel, toolSpecsFor, type ToolContext, type ToolSource } from './tools';
@@ -60,6 +61,8 @@ export interface AgentResult {
   content: string;
   followups: string[];
   sources: ToolSource[];
+  /** One per lookup, in the order they ran — only for an answer that finished. */
+  reports: AiReport[];
   usage: CallUsage;
   costMicroUsd: number;
   modelCalls: number;
@@ -88,6 +91,7 @@ export async function runAgent(input: AgentInput): Promise<AgentResult> {
 
   const budget = costMicroForMc(input.holdMc, input.creditCostUsd);
   const sources = new Map<string, ToolSource>();
+  const reports: AiReport[] = [];
   let usage: CallUsage = NO_USAGE;
   let modelCalls = 0;
   let toolCalls = 0;
@@ -140,6 +144,9 @@ export async function runAgent(input: AgentInput): Promise<AgentResult> {
           const out = await runTool(input.tools, call);
           toolCalls++;
           for (const s of out.sources) sources.set(`${s.href}|${s.label}`, s);
+          // The same lookup asked twice is one report.
+          const report = out.report;
+          if (report && !reports.some((r) => r.key === report.key)) reports.push(report);
           messages.push({ role: 'tool', toolCallId: call.id, name: call.name, content: out.content });
         }
         continue;
@@ -180,6 +187,8 @@ export async function runAgent(input: AgentInput): Promise<AgentResult> {
     content: body,
     followups: outcome === 'answered' ? followups : [],
     sources: [...sources.values()].slice(0, 6),
+    // A stopped or failed answer has no summary for a report to sit under.
+    reports: outcome === 'answered' ? reports.slice(0, MAX_REPORTS_PER_ANSWER) : [],
     usage,
     costMicroUsd: costMicroUsd(usage, input.price),
     modelCalls,

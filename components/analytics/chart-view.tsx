@@ -84,7 +84,7 @@ interface TipRow {
 }
 
 /** Values lead, names follow; a short stroke of the series colour keys each row. */
-function TipBox({ title, rows, note }: { title: string; rows: TipRow[]; note?: string }) {
+export function TipBox({ title, rows, note }: { title: string; rows: TipRow[]; note?: string }) {
   return (
     <div className="min-w-40 rounded-md border bg-popover px-3 py-2 text-xs text-popover-foreground shadow-md">
       <p className="mb-1.5 font-medium">{title}</p>
@@ -103,7 +103,7 @@ function TipBox({ title, rows, note }: { title: string; rows: TipRow[]; note?: s
 }
 
 /** Legend: rects for filled marks, lines for lines. Text stays in text colours. */
-function Legend({ items, shape = 'rect' }: { items: { label: string; color: string }[]; shape?: 'rect' | 'line' }) {
+export function Legend({ items, shape = 'rect' }: { items: { label: string; color: string }[]; shape?: 'rect' | 'line' }) {
   if (items.length < 2) return null;
   return (
     <div className="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground" role="list">

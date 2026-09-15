@@ -84,10 +84,24 @@ export interface AiMessages {
   followups_json: Json | null;
   id: Generated<number>;
   org_id: number;
+  reports_json: Json | null;
   role: "assistant" | "user";
   sources_json: Json | null;
   status: Generated<"complete" | "error" | "stopped">;
   usage_id: number | null;
+}
+
+export interface AiReportDownloads {
+  charged_mc: Generated<number>;
+  created_at: Generated<Date>;
+  format: "csv" | "png";
+  free: Generated<number>;
+  id: Generated<number>;
+  message_id: number;
+  org_id: number;
+  report_key: string;
+  usage_id: number | null;
+  user_id: number;
 }
 
 export interface AiSettings {
@@ -1326,6 +1340,7 @@ export interface DB {
   ai_credit_buckets: AiCreditBuckets;
   ai_credit_ledger: AiCreditLedger;
   ai_messages: AiMessages;
+  ai_report_downloads: AiReportDownloads;
   ai_settings: AiSettings;
   ai_usage: AiUsage;
   ai_wallets: AiWallets;

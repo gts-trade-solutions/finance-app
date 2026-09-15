@@ -102,6 +102,25 @@ export const TOPUP_VALIDITY_DAYS = 365;
 export const TRIAL_CREDITS = 50;
 export const TRIAL_DAYS = 30;
 
+// ── Detailed reports ─────────────────────────────────────────────────────────
+
+/**
+ * An answer that comes with a detailed report — key figures, a chart and a
+ * table — is charged its tokens plus this share, for building the report. At
+ * least a tenth of a credit on top, and still never more than the question
+ * reserved.
+ */
+export const REPORT_MARKUP_PCT = 15;
+export const REPORT_MIN_SURCHARGE_MC = 100;
+
+/**
+ * Downloading a report, as an image or a spreadsheet. Each person's first
+ * download is free; after that each new report costs this. The same report
+ * again, in either format, costs nothing — it has been paid for.
+ */
+export const REPORT_DOWNLOAD_CREDITS = 1;
+export const FREE_REPORT_DOWNLOADS = 1;
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 export const planByCode = (code: string): PlanDef | undefined => PLANS.find((p) => p.code === code);

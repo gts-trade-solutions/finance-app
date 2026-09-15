@@ -11,6 +11,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { api, ApiError } from './client';
+import type { AiReport } from '../ai/reports';
+
+export type { AiReport } from '../ai/reports';
 
 export interface AiSource {
   label: string;
@@ -55,15 +58,48 @@ export interface AiStatus {
   flags: AiFlag[];
 }
 
+/** The balance and little else: what the top bar and the corner assistant need. */
+export interface AiWallet {
+  enabled: boolean;
+  mode: 'openai' | 'standin' | 'unconfigured';
+  isDemo: boolean;
+  /** Can buy credits and change the plan. */
+  canManage: boolean;
+  availableMc: number;
+  trialExpiresAt: string | null;
+  plan: { name: string; status: string } | null;
+}
+
 export interface AiMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   followups: string[];
   sources: AiSource[];
+  /** The detailed reports under an answer: key figures, a chart and a table each. */
+  reports: AiReport[];
   status: 'complete' | 'stopped' | 'error';
   chargedMc: number;
   createdAt: string;
+}
+
+/** What downloading one report would cost this person, before they confirm. */
+export interface DownloadQuote {
+  /** Downloaded before: free again, in either format. */
+  owned: boolean;
+  /** This person's first download: free. */
+  free: boolean;
+  priceMc: number;
+  availableMc: number;
+}
+
+export interface DownloadResult {
+  /** The report as stored with the answer — what the file is made from. */
+  report: AiReport;
+  chargedMc: number;
+  free: boolean;
+  owned: boolean;
+  availableMc: number;
 }
 
 export interface ConversationSummary {
@@ -75,6 +111,7 @@ export interface ConversationSummary {
 
 export const ai = {
   status: () => api.get<AiStatus>('/api/ai/status'),
+  wallet: () => api.get<AiWallet>('/api/ai/wallet'),
   conversations: () => api.get<{ conversations: ConversationSummary[] }>('/api/ai/conversations'),
   conversation: (id: string) => api.get<{ id: string; title: string; messages: AiMessage[] }>(`/api/ai/conversations/${id}`),
   rename: (id: string, title: string) => api.patch<{ ok: true }>(`/api/ai/conversations/${id}`, { title }),
@@ -84,6 +121,12 @@ export const ai = {
       '/api/ai/settings',
       input,
     ),
+  downloadQuote: (messageId: string, key: string) =>
+    api.get<DownloadQuote>(
+      `/api/ai/reports/download?messageId=${encodeURIComponent(messageId)}&key=${encodeURIComponent(key)}`,
+    ),
+  download: (input: { messageId: string; key: string; format: 'png' | 'csv' }) =>
+    api.post<DownloadResult>('/api/ai/reports/download', input),
 };
 
 // ── Streaming a question ─────────────────────────────────────────────────────
@@ -99,6 +142,7 @@ export type StreamEvent =
       content: string;
       followups: string[];
       sources: AiSource[];
+      reports: AiReport[];
       status: 'complete' | 'stopped' | 'error';
       chargedMc: number;
       availableMc: number;

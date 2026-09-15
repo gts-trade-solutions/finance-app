@@ -32,6 +32,7 @@ import { useSession } from './session-provider';
 import { Sidebar } from './sidebar';
 import { QuickCreate } from './quick-create';
 import { GlobalSearch } from './global-search';
+import { CreditsChip } from '@/components/ai/credits-chip';
 
 /** Icon button styled for the navy band. */
 function BandButton({
@@ -186,6 +187,9 @@ export function Topbar() {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+
+          {/* The AI credit balance, one click from a top-up. */}
+          <CreditsChip />
 
           {/* Quick create */}
           {canCreate && (

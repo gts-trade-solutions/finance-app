@@ -30,7 +30,8 @@ import { holdCredits, settleUsage, walletView } from '../billing/wallet';
 import { runAgent, type AgentEvent } from './agent';
 import { aiMode, creditCostUsd, openAiSettings, questionCapMc } from './config';
 import { OpenAiProvider } from './openai';
-import { chargeFor, priceFor, type ModelPrice } from './pricing';
+import type { AiReport } from '../../ai/reports';
+import { chargeFor, priceFor, withReportMarkup, type ModelPrice } from './pricing';
 import { aiSettingsFor } from './settings';
 import { StandinProvider } from './standin';
 import { hiddenAreas, type ToolSource } from './tools';
@@ -138,6 +139,8 @@ export async function beginQuestion(input: QuestionInput): Promise<BegunQuestion
       .where('org_id', '=', orgId)
       .where('user_id', '=', user.userId)
       .where('created_at', '>', minuteAgo)
+      // Report downloads are usage too, but not questions.
+      .where('provider', '<>', 'download')
       .executeTakeFirst(),
     db
       .selectFrom('ai_usage')
@@ -251,6 +254,7 @@ export interface FinishedQuestion {
   content: string;
   followups: string[];
   sources: ToolSource[];
+  reports: AiReport[];
   status: 'complete' | 'stopped' | 'error';
   chargedMc: number;
   availableMc: number;
@@ -308,7 +312,11 @@ export async function runQuestion(
     console.error('[ai] question failed', { org: q.orgId, kind: result.errorKind, message: result.errorMessage });
   }
 
-  const chargeMc = chargeFor(result.costMicroUsd, creditCostUsd(), q.holdMc);
+  // An answer that comes with a detailed report is charged a little more, for
+  // building it. One without — a greeting, a refusal — is charged its tokens.
+  const reports = result.reports;
+  const tokenChargeMc = chargeFor(result.costMicroUsd, creditCostUsd(), q.holdMc);
+  const chargeMc = reports.length ? withReportMarkup(tokenChargeMc, q.holdMc) : tokenChargeMc;
   const status = result.outcome === 'answered' ? 'complete' : result.outcome;
   const notice = result.outcome === 'error' ? noticeFor(result.errorKind, chargeMc > 0) : null;
   const content =
@@ -337,6 +345,7 @@ export async function runQuestion(
         content,
         followups_json: result.followups.length ? JSON.stringify(result.followups) : null,
         sources_json: result.sources.length ? JSON.stringify(result.sources) : null,
+        reports_json: reports.length ? JSON.stringify(reports) : null,
         status,
         usage_id: q.usageId,
         charged_mc: chargedMc,
@@ -358,6 +367,7 @@ export async function runQuestion(
     content,
     followups: result.followups,
     sources: result.sources,
+    reports,
     status,
     chargedMc: finished.chargedMc,
     availableMc: wallet.availableMc,
@@ -399,6 +409,7 @@ export interface StoredMessage {
   content: string;
   followups: string[];
   sources: ToolSource[];
+  reports: AiReport[];
   status: 'complete' | 'stopped' | 'error';
   chargedMc: number;
   createdAt: string;
@@ -431,7 +442,7 @@ export async function getConversation(
 
   const rows = await db
     .selectFrom('ai_messages')
-    .select(['id', 'role', 'content', 'followups_json', 'sources_json', 'status', 'charged_mc', 'created_at'])
+    .select(['id', 'role', 'content', 'followups_json', 'sources_json', 'reports_json', 'status', 'charged_mc', 'created_at'])
     .where('conversation_id', '=', id)
     .orderBy('id')
     .execute();
@@ -445,6 +456,7 @@ export async function getConversation(
       content: m.content,
       followups: parseJson<string[]>(m.followups_json, []),
       sources: parseJson<ToolSource[]>(m.sources_json, []),
+      reports: parseJson<AiReport[]>(m.reports_json, []),
       status: m.status,
       chargedMc: Number(m.charged_mc),
       createdAt: new Date(m.created_at).toISOString(),

@@ -11,6 +11,7 @@ import { formatCharge } from '@/lib/billing/catalog';
 import { visibleWhileStreaming } from '@/lib/ai/followups';
 import { cn } from '@/lib/utils';
 import { Markdown } from './markdown';
+import { ReportCard } from './report-card';
 
 function Avatar({ busy }: { busy?: boolean }) {
   return (
@@ -40,10 +41,15 @@ export function AssistantMessage({
   m,
   isLast,
   onFollowup,
+  variant = 'full',
+  onOpenReport,
 }: {
   m: AiMessage;
   isLast: boolean;
   onFollowup: (q: string) => void;
+  /** Compact in the corner panel, full on the assistant's page. */
+  variant?: 'compact' | 'full';
+  onOpenReport?: (index: number) => void;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -58,7 +64,7 @@ export function AssistantMessage({
   };
 
   return (
-    <div className="flex gap-3" data-slot="ai-answer" data-status={m.status}>
+    <div className="flex gap-3" data-slot="ai-answer" data-status={m.status} data-message-id={m.id}>
       <Avatar />
       <div className="min-w-0 flex-1">
         {m.status === 'error' ? (
@@ -67,6 +73,21 @@ export function AssistantMessage({
           </p>
         ) : (
           <Markdown>{m.content}</Markdown>
+        )}
+
+        {/* The summary above; the detail — figures, chart, table — below it. */}
+        {m.reports.length > 0 && (
+          <div className="mt-3 space-y-3">
+            {m.reports.map((r, i) => (
+              <ReportCard
+                key={r.key}
+                report={r}
+                messageId={m.id}
+                variant={variant}
+                onOpen={onOpenReport ? () => onOpenReport(i) : undefined}
+              />
+            ))}
+          </div>
         )}
 
         <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 text-[11px] text-muted-foreground">
@@ -81,7 +102,11 @@ export function AssistantMessage({
               <FileText className="size-3" /> {s.label}
             </Link>
           ))}
-          {m.chargedMc > 0 && <span data-slot="ai-charge">{formatCharge(m.chargedMc)} credits</span>}
+          {m.chargedMc > 0 && (
+            <span data-slot="ai-charge">
+              {formatCharge(m.chargedMc)} credits{m.reports.length ? ' · includes the report' : ''}
+            </span>
+          )}
           {m.status !== 'error' && m.content && (
             <button
               type="button"

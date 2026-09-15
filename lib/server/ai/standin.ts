@@ -149,7 +149,7 @@ function describe(name: string, d: any): string {
         table(['Account', 'Amount', 'Share'], (d.categories ?? []).map((c: any) => [c.name, c.amount, c.share]))
       );
     case 'get_business_ratios':
-      return table(['Ratio', 'Value', 'Healthy'], (d.ratios ?? []).map((r: any) => [r.name, r.value, r.healthy ? 'Yes' : 'No']));
+      return `${(d.ratios ?? []).filter((r: any) => r.healthy).length} of ${(d.ratios ?? []).length} ratios look healthy between ${d.period?.from} and ${d.period?.to}.`;
     case 'get_cash_flow':
       return (
         `Cash went from **${d.opening_cash}** to **${d.closing_cash}** between ${d.period.from} and ${d.period.to}.\n\n` +
@@ -182,8 +182,18 @@ const FOLLOWUPS: Record<string, string[]> = {
   get_gst_summary: ['How much input tax credit is blocked, and why?', 'What is due in GSTR-1 this month?'],
 };
 
+/** A write-up without its table: the detailed report under the answer shows the rows. */
+function summaryOnly(text: string): string {
+  return text
+    .split('\n')
+    .filter((l) => !l.trimStart().startsWith('|'))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function writeUp(results: { name: string; data: any }[]): string {
-  const body = results.map((r) => describe(r.name, r.data)).join('\n\n');
+  const body = results.map((r) => summaryOnly(describe(r.name, r.data))).join('\n\n');
   const questions = [...new Set(results.flatMap((r) => FOLLOWUPS[r.name] ?? []))].slice(0, 3);
   return (
     `${body}\n\n_Answered by the built-in stand-in, which reads the same reports but does not reason about them. Set OPENAI_API_KEY for full answers._` +

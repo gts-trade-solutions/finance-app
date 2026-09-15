@@ -7,7 +7,8 @@
 // An answer streams in as it is written. The lookups the assistant makes show
 // as they happen ("Reading the ledger…"), so a few seconds of silence while a
 // report runs does not read as a hang. Stop cuts the model off; the question is
-// charged only for what was produced, and the partial answer is kept.
+// charged only for what was produced, and the partial answer is kept. The
+// asking itself lives in useAiChat, shared with the corner panel.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import Link from 'next/link';
@@ -26,14 +27,14 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
-import { ai, askStream, type AiMessage, type AiStatus, type AiSuggestion, type ConversationSummary } from '@/lib/api/ai';
-import { ApiError } from '@/lib/api/client';
+import { ai, type AiStatus, type AiSuggestion, type ConversationSummary } from '@/lib/api/ai';
 import { MC_PER_CREDIT, formatCredits } from '@/lib/billing/catalog';
-import { visibleWhileStreaming } from '@/lib/ai/followups';
 import { cn } from '@/lib/utils';
+import type { AiReport } from '@/lib/ai/reports';
 import { AssistantMessage, StreamingMessage, UserMessage } from './messages';
-
-const MAX_CHARS = 4000;
+import { ReportDialog } from './report-card';
+import { MAX_QUESTION_CHARS, useAiChat } from './use-ai-chat';
+import { useCredits } from './credits-provider';
 
 const KIND_ICON: Record<AiSuggestion['kind'], LucideIcon> = {
   balance: Landmark,
@@ -55,37 +56,45 @@ function when(iso: string): string {
   return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
 }
 
-const localMessage = (role: 'user' | 'assistant', content: string, over: Partial<AiMessage> = {}): AiMessage => ({
-  id: `local-${role}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-  role,
-  content,
-  followups: [],
-  sources: [],
-  status: 'complete',
-  chargedMc: 0,
-  createdAt: new Date().toISOString(),
-  ...over,
-});
-
-export function Workspace({ status, onWallet }: { status: AiStatus; onWallet: (availableMc: number) => void }) {
+export function Workspace({
+  status,
+  availableMc,
+  onWallet,
+}: {
+  status: AiStatus;
+  /** The live balance, kept by the app shell so every display agrees. */
+  availableMc: number;
+  onWallet: (availableMc: number) => void;
+}) {
+  const credits = useCredits();
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [loadingList, setLoadingList] = useState(true);
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<AiMessage[]>([]);
-  const [loadingConversation, setLoadingConversation] = useState(false);
-  const [streaming, setStreaming] = useState<{ text: string; tool: string | null } | null>(null);
   const [input, setInput] = useState('');
   const [historyOpen, setHistoryOpen] = useState(false);
   const [renaming, setRenaming] = useState<ConversationSummary | null>(null);
   const [deleting, setDeleting] = useState<ConversationSummary | null>(null);
+  /** A report opened out over the page. */
+  const [expanded, setExpanded] = useState<{ report: AiReport; messageId: string } | null>(null);
+  /** A report asked for from the corner panel, to open once its conversation has loaded. */
+  const [focus, setFocus] = useState<{ messageId: string; index: number } | null>(null);
 
-  const abortRef = useRef<AbortController | null>(null);
-  const streamRef = useRef<{ text: string; tool: string | null } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
-  const [available, setAvailable] = useState(status.wallet.availableMc);
 
-  useEffect(() => setAvailable(status.wallet.availableMc), [status.wallet.availableMc]);
+  const chat = useAiChat(availableMc, {
+    onWallet,
+    onStarted: (c) => setConversations((list) => [c, ...list]),
+    onTouched: (id) =>
+      setConversations((list) => {
+        const hit = list.find((x) => x.id === id);
+        if (!hit) return list;
+        return [
+          { ...hit, updatedAt: new Date().toISOString(), messageCount: hit.messageCount + 2 },
+          ...list.filter((x) => x.id !== id),
+        ];
+      }),
+  });
+  const { activeId, messages, loadingConversation, streaming, available, open: openChat, startNew: startChat } = chat;
 
   const loadList = useCallback(async () => {
     try {
@@ -102,9 +111,32 @@ export function Workspace({ status, onWallet }: { status: AiStatus; onWallet: (a
     void loadList();
   }, [loadList]);
 
-  // Leaving the page mid-answer stops the model rather than leaving it
-  // running, and charging, for nobody.
-  useEffect(() => () => abortRef.current?.abort(), []);
+  // Opened from the corner assistant's "full page" button: carry on with that
+  // conversation here. Read once, from the address, when the page opens.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get('c');
+    const messageId = params.get('m');
+    const index = Number(params.get('r') ?? 0);
+    if (messageId) setFocus({ messageId, index: Number.isInteger(index) && index >= 0 ? index : 0 });
+    if (id) void openChat(id);
+    // Taken in: a reload should not open it again over whatever comes next.
+    if (id || messageId) window.history.replaceState(null, '', window.location.pathname);
+  }, [openChat]);
+
+  // "View full report" from the corner panel: once the conversation is here,
+  // bring that answer into view and open its report full size.
+  useEffect(() => {
+    if (!focus) return;
+    const m = messages.find((x) => x.id === focus.messageId);
+    const report = m?.reports[focus.index];
+    if (!m || !report) return;
+    setFocus(null);
+    setExpanded({ report, messageId: m.id });
+    requestAnimationFrame(() =>
+      document.querySelector(`[data-message-id="${CSS.escape(m.id)}"]`)?.scrollIntoView({ block: 'center' }),
+    );
+  }, [focus, messages]);
 
   // Follow the answer down while it is being written, unless the reader has
   // scrolled up to look at something.
@@ -116,138 +148,33 @@ export function Workspace({ status, onWallet }: { status: AiStatus; onWallet: (a
     if (nearBottom || !streaming) el.scrollTo({ top: el.scrollHeight, behavior: streaming ? 'auto' : 'smooth' });
   }, [messages, streaming]);
 
-  const open = async (id: string) => {
+  const openConversation = (id: string) => {
     if (streaming) return;
     setHistoryOpen(false);
-    setActiveId(id);
-    setLoadingConversation(true);
-    try {
-      const res = await ai.conversation(id);
-      setMessages(res.messages);
-    } catch (err) {
-      toast.error((err as Error).message);
-      setActiveId(null);
-      setMessages([]);
-    } finally {
-      setLoadingConversation(false);
-    }
+    void openChat(id);
   };
 
   const startNew = () => {
     if (streaming) return;
     setHistoryOpen(false);
-    setActiveId(null);
-    setMessages([]);
+    startChat();
     setInput('');
     textRef.current?.focus();
   };
 
-  const setStream = (next: { text: string; tool: string | null } | null) => {
-    streamRef.current = next;
-    setStreaming(next);
-  };
-
-  const ask = async (raw: string) => {
+  const ask = (raw: string) => {
     const question = raw.trim();
     if (!question || streaming) return;
-    if (question.length > MAX_CHARS) {
-      toast.error(`Questions can be up to ${MAX_CHARS.toLocaleString('en-IN')} characters.`);
+    if (question.length > MAX_QUESTION_CHARS) {
+      toast.error(`Questions can be up to ${MAX_QUESTION_CHARS.toLocaleString('en-IN')} characters.`);
       return;
     }
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
     setInput('');
-    setMessages((m) => [...m, localMessage('user', question)]);
-    setStream({ text: '', tool: null });
-    let finished = false;
-    let conversationId = activeId;
-
-    try {
-      await askStream(
-        { conversationId: activeId, message: question },
-        (e) => {
-          switch (e.type) {
-            case 'start':
-              conversationId = e.conversationId;
-              if (e.isNew) {
-                setActiveId(e.conversationId);
-                setConversations((c) => [
-                  { id: e.conversationId, title: e.title, messageCount: 1, updatedAt: new Date().toISOString() },
-                  ...c,
-                ]);
-              }
-              break;
-            case 'delta': {
-              const s = streamRef.current ?? { text: '', tool: null };
-              setStream({ text: s.text + e.text, tool: null });
-              break;
-            }
-            case 'discard':
-              setStream({ text: '', tool: streamRef.current?.tool ?? null });
-              break;
-            case 'tool':
-              setStream({ text: streamRef.current?.text ?? '', tool: e.label });
-              break;
-            case 'done':
-              finished = true;
-              setMessages((m) => [
-                ...m,
-                {
-                  id: e.messageId,
-                  role: 'assistant',
-                  content: e.content,
-                  followups: e.followups,
-                  sources: e.sources,
-                  status: e.status,
-                  chargedMc: e.chargedMc,
-                  createdAt: new Date().toISOString(),
-                },
-              ]);
-              setAvailable(e.availableMc);
-              onWallet(e.availableMc);
-              if (e.notice) toast.error(e.notice);
-              break;
-            case 'error':
-              finished = true;
-              setMessages((m) => [...m, localMessage('assistant', e.message, { status: 'error' })]);
-              break;
-          }
-        },
-        ctrl.signal,
-      );
-
-      if (!finished) {
-        // Stopped, or the connection dropped: keep what had arrived. The
-        // server has stored it too, with what it cost.
-        const partial = visibleWhileStreaming(streamRef.current?.text ?? '');
-        setMessages((m) => [
-          ...m,
-          localMessage('assistant', partial || 'Stopped before an answer was written.', { status: 'stopped' }),
-        ]);
-      }
-    } catch (err) {
-      const message = err instanceof ApiError ? err.message : 'The question could not be sent.';
-      setMessages((m) => [...m, localMessage('assistant', message, { status: 'error' })]);
-      if (err instanceof ApiError && err.code === 'out_of_credits') {
-        setAvailable(0);
-        onWallet(0);
-      }
-    } finally {
-      abortRef.current = null;
-      setStream(null);
-      if (conversationId) {
-        setConversations((c) => {
-          const hit = c.find((x) => x.id === conversationId);
-          if (!hit) return c;
-          return [{ ...hit, updatedAt: new Date().toISOString(), messageCount: hit.messageCount + 2 }, ...c.filter((x) => x.id !== conversationId)];
-        });
-      }
-    }
+    void chat.ask(question);
   };
 
-  const stop = () => abortRef.current?.abort();
-
   const outOfCredits = available < MC_PER_CREDIT;
+  const lowCredits = !outOfCredits && available < 10 * MC_PER_CREDIT;
   const capLeft = status.userCap ? status.userCap.capMc - status.userCap.spentMc : null;
   const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
 
@@ -277,7 +204,7 @@ export function Workspace({ status, onWallet }: { status: AiStatus; onWallet: (a
             >
               <button
                 type="button"
-                onClick={() => void open(c.id)}
+                onClick={() => openConversation(c.id)}
                 className="min-w-0 flex-1 px-2.5 py-2 text-left"
                 disabled={!!streaming}
               >
@@ -337,14 +264,21 @@ export function Workspace({ status, onWallet }: { status: AiStatus; onWallet: (a
               <Loader2 className="size-4 animate-spin" /> Opening the conversation…
             </p>
           ) : messages.length === 0 && !streaming ? (
-            <Welcome status={status} onAsk={(q) => void ask(q)} disabled={outOfCredits} />
+            <Welcome status={status} onAsk={ask} disabled={outOfCredits} />
           ) : (
             <div className="mx-auto max-w-3xl space-y-6">
               {messages.map((m) =>
                 m.role === 'user' ? (
                   <UserMessage key={m.id} m={m} />
                 ) : (
-                  <AssistantMessage key={m.id} m={m} isLast={m === lastAssistant && !streaming} onFollowup={(q) => void ask(q)} />
+                  <AssistantMessage
+                    key={m.id}
+                    m={m}
+                    isLast={m === lastAssistant && !streaming}
+                    onFollowup={ask}
+                    variant="full"
+                    onOpenReport={(i) => setExpanded({ report: m.reports[i], messageId: m.id })}
+                  />
                 ),
               )}
               {streaming && <StreamingMessage text={streaming.text} tool={streaming.tool} />}
@@ -360,12 +294,12 @@ export function Workspace({ status, onWallet }: { status: AiStatus; onWallet: (a
                 {status.isDemo
                   ? "The demo book's AI allowance for today is used up. Create your own book to keep asking."
                   : status.canManage
-                    ? 'Your organisation has run out of AI credits.'
+                    ? 'Your organisation has run out of AI credits. Top up to keep asking.'
                     : 'Your organisation has run out of AI credits. Ask an administrator to top up.'}
               </p>
               {status.canManage && (
-                <Button size="sm" asChild>
-                  <Link href="/settings/billing">Buy credits</Link>
+                <Button size="sm" onClick={credits.topUp} data-slot="ai-out-of-credits-topup">
+                  <Wallet className="size-3.5" /> Top up credits
                 </Button>
               )}
             </div>
@@ -374,7 +308,7 @@ export function Workspace({ status, onWallet }: { status: AiStatus; onWallet: (a
               className="mx-auto max-w-3xl"
               onSubmit={(e) => {
                 e.preventDefault();
-                void ask(input);
+                ask(input);
               }}
             >
               <div className="flex items-end gap-2 rounded-md border bg-background px-3 py-2 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/25">
@@ -389,18 +323,18 @@ export function Workspace({ status, onWallet }: { status: AiStatus; onWallet: (a
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                       e.preventDefault();
-                      void ask(input);
+                      ask(input);
                     }
                   }}
                   rows={1}
-                  maxLength={MAX_CHARS + 200}
+                  maxLength={MAX_QUESTION_CHARS + 200}
                   placeholder="Ask about balances, profit, cash, what customers owe, GST…"
                   className="max-h-[200px] min-h-6 flex-1 resize-none bg-transparent text-sm leading-6 outline-none placeholder:text-muted-foreground"
                   aria-label="Your question"
                   data-slot="ai-input"
                 />
                 {streaming ? (
-                  <Button type="button" size="icon-sm" variant="outline" onClick={stop} aria-label="Stop the answer" data-slot="ai-stop">
+                  <Button type="button" size="icon-sm" variant="outline" onClick={chat.stop} aria-label="Stop the answer" data-slot="ai-stop">
                     <Square className="size-3.5 fill-current" />
                   </Button>
                 ) : (
@@ -414,11 +348,19 @@ export function Workspace({ status, onWallet }: { status: AiStatus; onWallet: (a
                   Answers are built from your books and link to their reports. Check a figure there before you file on it.
                 </span>
                 <span className="tabular-nums">
-                  {input.length > MAX_CHARS - 500
-                    ? `${input.length.toLocaleString('en-IN')} / ${MAX_CHARS.toLocaleString('en-IN')}`
+                  {input.length > MAX_QUESTION_CHARS - 500
+                    ? `${input.length.toLocaleString('en-IN')} / ${MAX_QUESTION_CHARS.toLocaleString('en-IN')}`
                     : capLeft !== null
                       ? `${formatCredits(Math.max(0, capLeft))} of your monthly credits left`
                       : `${formatCredits(available)} credits left`}
+                  {lowCredits && status.canManage && (
+                    <>
+                      {' · '}
+                      <button type="button" onClick={credits.topUp} className="font-medium text-primary hover:underline">
+                        Top up
+                      </button>
+                    </>
+                  )}
                 </span>
               </p>
             </form>
@@ -432,6 +374,8 @@ export function Workspace({ status, onWallet }: { status: AiStatus; onWallet: (a
           {historyList}
         </SheetContent>
       </Sheet>
+
+      <ReportDialog report={expanded?.report ?? null} messageId={expanded?.messageId ?? null} onClose={() => setExpanded(null)} />
 
       <RenameDialog
         conversation={renaming}

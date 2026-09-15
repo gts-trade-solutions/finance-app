@@ -35,8 +35,14 @@ import {
 import { businessRatios, cashFlow, expensesByCategory, salesBy } from '../reports/analysis';
 import { cashPosition, previousWindow } from '../reports/analytics';
 import { gstr3b } from '../gst/returns';
+import type { AiReport } from '../../ai/reports';
 import { detectFlags } from './insights';
 import { HIDDEN_AREA_WORDS } from './prompt';
+import {
+  accountBalanceReport, ageingReport, balanceSheetReport, cashFlowReport, cashPositionReport, documentsReport,
+  expensesReport, gstReport, profitAndLossReport, ratiosReport, reportKey, safely, salesReport, trialBalanceReport,
+  type ReportDraft,
+} from './reports';
 import { fyStartOf, previousMonth } from './time';
 import type { ToolCall, ToolSpec } from './types';
 
@@ -62,6 +68,8 @@ export interface ToolRun {
   content: string;
   sources: ToolSource[];
   label: string;
+  /** What the person sees under the answer: key figures, a chart and a table. */
+  report: AiReport | null;
 }
 
 /** Sales and staff roles do not see purchase costs, margins or the ledger. */
@@ -112,6 +120,15 @@ const buckets = (b: Record<string, number>): Record<string, string> =>
 
 const overdueOf = (b: Record<string, number>): number =>
   Object.entries(b).reduce((t, [k, v]) => (k === 'Current' ? t : t + v), 0);
+
+/** The age buckets summed over some parties — one customer's, when a question names one. */
+const bucketTotals = (rows: { buckets: Record<string, number> }[]): Record<string, number> => {
+  const t: Record<string, number> = {};
+  for (const r of rows) for (const [k, v] of Object.entries(r.buckets)) t[k] = (t[k] ?? 0) + v;
+  return t;
+};
+
+const owedBy = (rows: { totalPaise: number }[]): number => rows.filter((r) => r.totalPaise > 0).reduce((t, r) => t + r.totalPaise, 0);
 
 // ── Arguments ────────────────────────────────────────────────────────────────
 
@@ -214,7 +231,7 @@ interface ToolDef<A> {
   parameters: Record<string, unknown>;
   schema: z.ZodType<A>;
   gate: Gate;
-  run: (ctx: ToolContext, args: A) => Promise<{ data: unknown; sources?: ToolSource[] }>;
+  run: (ctx: ToolContext, args: A) => Promise<{ data: unknown; sources?: ToolSource[]; report?: ReportDraft | null }>;
 }
 
 const define = <A>(d: ToolDef<A>): ToolDef<A> => d;
@@ -289,6 +306,17 @@ const TOOLS: AnyTool[] = [
             })),
         },
         sources: [{ label: `General ledger · ${match.name}`, href: '/reports/general-ledger' }],
+        report: safely(() =>
+          accountBalanceReport({
+            account: match,
+            debitNormal,
+            from,
+            to: asOf,
+            openingPaise: gl.openingPaise,
+            closingPaise: gl.closingPaise,
+            lines: gl.lines,
+          }),
+        ),
       };
     },
   }),
@@ -366,6 +394,9 @@ const TOOLS: AnyTool[] = [
           truncated: rows.length > 40 || undefined,
         },
         sources: [{ label: 'Trial balance', href: '/reports/trial-balance' }],
+        report: safely(() =>
+          trialBalanceReport({ asOf, totalDebit: tb.totalDebit, totalCredit: tb.totalCredit, balanced: tb.balanced, rows }),
+        ),
       };
     },
   }),
@@ -408,6 +439,16 @@ const TOOLS: AnyTool[] = [
           },
         },
         sources: [{ label: 'Profit and loss', href: '/reports/profit-and-loss' }],
+        report: safely(() =>
+          profitAndLossReport({
+            from: w.from,
+            to: w.to,
+            prev,
+            now: { income: pl.totalIncome, expense: pl.totalExpense, gross: pl.grossProfit, net: pl.netProfit },
+            before: { income: before.totalIncome, expense: before.totalExpense, net: before.netProfit },
+            expenseRows: pl.expenseRows,
+          }),
+        ),
       };
     },
   }),
@@ -437,6 +478,18 @@ const TOOLS: AnyTool[] = [
           equity: top(bs.equityRows),
         },
         sources: [{ label: 'Balance sheet', href: '/reports/balance-sheet' }],
+        report: safely(() =>
+          balanceSheetReport({
+            asOf,
+            assets: bs.totalAssets,
+            liabilities: bs.totalLiabilities,
+            equity: bs.totalEquity,
+            currentEarnings: bs.currentPeriodEarnings,
+            balanced: bs.balanced,
+            assetRows: bs.assetRows,
+            liabilityRows: bs.liabilityRows,
+          }),
+        ),
       };
     },
   }),
@@ -463,6 +516,12 @@ const TOOLS: AnyTool[] = [
           })),
         },
         sources: [{ label: 'Banking', href: '/banking' }],
+        report: safely(() =>
+          cashPositionReport({
+            asOf: ctx.today,
+            rows: rows.map((r) => ({ name: r.name, kind: r.kind, balancePaise: r.balancePaise, unmatched: Number(r.unmatched ?? 0) })),
+          }),
+        ),
       };
     },
   }),
@@ -533,6 +592,18 @@ const TOOLS: AnyTool[] = [
           { label: 'Receivables ageing', href: '/reports/ar-ageing' },
           ...(a.customer ? [{ label: 'Invoices', href: '/sales/invoices' }] : []),
         ],
+        // For one named customer the chart and the figures are theirs alone.
+        report: safely(() =>
+          ageingReport({
+            side: 'receivable',
+            asOf,
+            buckets: AGEING_BUCKETS,
+            totals: a.customer ? bucketTotals(rows) : ar.totals,
+            rows,
+            owed: a.customer ? owedBy(rows) : owed,
+            advances: a.customer ? undefined : advances,
+          }),
+        ),
       };
     },
   }),
@@ -621,6 +692,21 @@ const TOOLS: AnyTool[] = [
           { label: 'Payables ageing', href: '/reports/ap-ageing' },
           ...(msme.rows.length ? [{ label: 'MSME 45-day tracker', href: '/purchases/msme-tracker' }] : []),
         ],
+        report: safely(() =>
+          ageingReport({
+            side: 'payable',
+            asOf,
+            buckets: AGEING_BUCKETS,
+            totals: a.vendor ? bucketTotals(rows) : ap.totals,
+            rows,
+            owed: a.vendor ? owedBy(rows) : owedTo,
+            advances: a.vendor ? undefined : paidAhead,
+            msme: {
+              unpaid: msme.rows.length,
+              past45: msme.rows.filter((b) => daysBetween(day(b.bill_date), ctx.today) >= 45).length,
+            },
+          }),
+        ),
       };
     },
   }),
@@ -693,6 +779,25 @@ const TOOLS: AnyTool[] = [
           }),
         },
         sources: [{ label: 'Invoices', href: '/sales/invoices' }],
+        report: safely(() =>
+          documentsReport({
+            kind: 'invoice',
+            matching: Number(t?.n ?? 0),
+            totalValue: toPaiseFromSql(t?.total ?? 0),
+            unpaid: toPaiseFromSql(t?.unpaid ?? 0),
+            docs: rows.rows.map((r) => {
+              const balance = toPaiseFromSql(r.total) - toPaiseFromSql(r.amount_paid);
+              return {
+                number: r.number,
+                party: r.name,
+                due: day(r.due_date),
+                status: r.status,
+                balance,
+                daysOverdue: balance > 0 && r.status !== 'draft' ? Math.max(0, daysBetween(day(r.due_date), ctx.today)) : undefined,
+              };
+            }),
+          }),
+        ),
       };
     },
   }),
@@ -766,6 +871,25 @@ const TOOLS: AnyTool[] = [
           }),
         },
         sources: [{ label: 'Bills', href: '/purchases/bills' }],
+        report: safely(() =>
+          documentsReport({
+            kind: 'bill',
+            matching: Number(t?.n ?? 0),
+            totalValue: toPaiseFromSql(t?.total ?? 0),
+            unpaid: toPaiseFromSql(t?.unpaid ?? 0),
+            docs: rows.rows.map((r) => {
+              const balance = toPaiseFromSql(r.total) - toPaiseFromSql(r.amount_paid);
+              return {
+                number: r.internal_no,
+                party: r.name,
+                due: day(r.due_date),
+                status: r.status,
+                balance,
+                daysOverdue: balance > 0 && r.status !== 'draft' ? Math.max(0, daysBetween(day(r.due_date), ctx.today)) : undefined,
+              };
+            }),
+          }),
+        ),
       };
     },
   }),
@@ -838,6 +962,7 @@ const TOOLS: AnyTool[] = [
           })),
         },
         sources: [{ label: by === 'month' ? 'Sales reports' : `Sales by ${by}`, href: REPORT_FOR_GROUP[by] }],
+        report: safely(() => salesReport({ from: w.from, to: w.to, by, rows, href: REPORT_FOR_GROUP[by] })),
       };
     },
   }),
@@ -876,6 +1001,7 @@ const TOOLS: AnyTool[] = [
           })),
         },
         sources: [{ label: 'Expenses by category', href: '/reports/expenses-by-category' }],
+        report: safely(() => expensesReport({ from: w.from, to: w.to, prev, total, prevTotal, rows })),
       };
     },
   }),
@@ -924,6 +1050,17 @@ const TOOLS: AnyTool[] = [
           due_date_note: 'For monthly filers. Quarterly (QRMP) filers file GSTR-3B by the 22nd or 24th after the quarter, depending on the state.',
         },
         sources: [{ label: `GSTR-3B · ${month}`, href: '/gst/gstr3b' }],
+        report: safely(() =>
+          gstReport({
+            month,
+            outputTax: g.outward.cgstPaise + g.outward.sgstPaise + g.outward.igstPaise + g.outward.cessPaise,
+            itc: g.itc.cgstPaise + g.itc.sgstPaise + g.itc.igstPaise,
+            blocked: g.itc.blockedPaise,
+            cash: g.totalCashPaise,
+            setOff: g.setOff,
+            due: { gstr1: `${next}-11`, gstr3b: `${next}-20` },
+          }),
+        ),
       };
     },
   }),
@@ -952,6 +1089,13 @@ const TOOLS: AnyTool[] = [
           })),
         },
         sources: [{ label: 'Business performance ratios', href: '/reports/business-ratios' }],
+        report: safely(() =>
+          ratiosReport({
+            from: w.from,
+            to: w.to,
+            ratios: ratios.map((r) => ({ label: r.label, value: r.value, unit: r.unit, good: !!r.good, explain: r.explain })),
+          }),
+        ),
       };
     },
   }),
@@ -983,6 +1127,18 @@ const TOOLS: AnyTool[] = [
             .map((r) => ({ what: r.label, group: r.group, amount: amt(r.amountPaise) })),
         },
         sources: [{ label: 'Cash flow statement', href: '/reports/cash-flow' }],
+        report: safely(() =>
+          cashFlowReport({
+            from: w.from,
+            to: w.to,
+            opening: cf.openingPaise,
+            operating: cf.operatingPaise,
+            investing: cf.investingPaise,
+            financing: cf.financingPaise,
+            closing: cf.closingPaise,
+            rows: cf.rows,
+          }),
+        ),
       };
     },
   }),
@@ -1050,6 +1206,7 @@ export async function runTool(ctx: ToolContext, call: ToolCall): Promise<ToolRun
     content: JSON.stringify(details ? { error, details } : { error }),
     sources: [],
     label,
+    report: null,
   });
 
   // Checked again here, not only when the list was offered: the model can
@@ -1078,7 +1235,13 @@ export async function runTool(ctx: ToolContext, call: ToolCall): Promise<ToolRun
         partial: content.slice(0, MAX_RESULT_CHARS - 400),
       });
     }
-    return { ok: true, content, sources: out.sources ?? [], label };
+    return {
+      ok: true,
+      content,
+      sources: out.sources ?? [],
+      label,
+      report: out.report ? { ...out.report, key: reportKey(def.name, parsed.data) } : null,
+    };
   } catch (err) {
     console.error('[ai] tool failed', call.name, err);
     return fail('The report behind this could not be run just now.');

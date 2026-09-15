@@ -101,6 +101,7 @@ export async function POST(req: Request): Promise<Response> {
           content: done.content,
           followups: done.followups,
           sources: done.sources,
+          reports: done.reports,
           status: done.status,
           chargedMc: done.chargedMc,
           availableMc: done.availableMc,

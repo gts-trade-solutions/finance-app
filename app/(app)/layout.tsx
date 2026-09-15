@@ -7,6 +7,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { SessionGate } from '@/components/layout/session-provider';
 import { MastersGate } from '@/components/layout/masters-gate';
+import { CreditsProvider } from '@/components/ai/credits-provider';
+import { AssistantLauncher } from '@/components/ai/assistant-launcher';
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   // The server decides whether there is a session. A client-side check would
@@ -42,6 +44,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       {() => (
         <MastersGate>
         <TooltipProvider>
+        <CreditsProvider>
           {/* On paper the shell goes: no sidebar or top bar, and no fixed-height
               scroll box, which would print only the first screenful. */}
           <div className="flex h-screen overflow-hidden bg-background print:block print:h-auto print:overflow-visible">
@@ -51,10 +54,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             <div className="flex min-w-0 flex-1 flex-col print:block">
               <Topbar />
               <main className="thin-scroll flex-1 overflow-y-auto print:overflow-visible">
-                <div className="mx-auto max-w-[1440px] space-y-7 p-5 sm:p-8 print:max-w-none print:p-0">{children}</div>
+                <div className="app-page mx-auto max-w-[1440px] space-y-7 p-5 sm:p-8 print:max-w-none print:p-0">{children}</div>
               </main>
             </div>
           </div>
+          <AssistantLauncher />
+        </CreditsProvider>
         </TooltipProvider>
         </MastersGate>
       )}
