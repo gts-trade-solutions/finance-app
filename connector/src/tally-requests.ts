@@ -229,7 +229,11 @@ export const requests = {
       fields: [expr.text('Guid'), expr.text('LedgerName'), expr.amount('Amount')],
     }),
 
-  /** Every voucher GUID in a period, however old: what lets deletions in Tally be noticed. */
+  /**
+   * Every voucher GUID in a period, however old: what lets deletions in Tally
+   * be noticed. The date comes too, because Tally does not always keep to the
+   * period it was given — see the note on windows in the connector's sync.
+   */
   voucherGuids: (company: string, from: string, to: string) =>
     spec({
       id: 'RekonzaVoucherGuids',
@@ -237,7 +241,7 @@ export const requests = {
       company,
       from,
       to,
-      columns: ['guid'] as const,
-      fields: [expr.text('Guid')],
+      columns: ['guid', 'date'] as const,
+      fields: [expr.text('Guid'), expr.date('Date')],
     }),
 };

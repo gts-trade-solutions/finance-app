@@ -148,9 +148,16 @@ export async function syncOnce(o: SyncOptions): Promise<SyncSummary> {
         const parents = new Map(types.filter((t) => t.name).map((t) => [t.name!, t.parent]));
         const windows = heldVoucherAlterId === 0 ? months(p.syncFrom, vouchersTo) : [{ from: p.syncFrom, to: vouchersTo }];
         for (const w of windows) {
-          const rows = await fetchRows(requests.vouchers(p.name, w.from, w.to, heldVoucherAlterId), o.tally);
+          // Tally does not always keep to the period it is given: asked for the
+          // month the books begin in, a real TallyPrime answers with every
+          // voucher the company has. Keeping only the ones inside the window
+          // stops the same voucher being sent once per window.
+          const all = await fetchRows(requests.vouchers(p.name, w.from, w.to, heldVoucherAlterId), o.tally);
+          const rows = all.filter((r) => r.date && r.date >= w.from && r.date <= w.to);
           if (!rows.length) continue;
-          const entries = await fetchRows(requests.entries(p.name, w.from, w.to, heldVoucherAlterId), o.tally);
+          const inWindow = new Set(rows.map((r) => r.guid));
+          const entries = (await fetchRows(requests.entries(p.name, w.from, w.to, heldVoucherAlterId), o.tally))
+            .filter((e) => inWindow.has(e.guid));
           const vouchers = toVouchers(rows, entries, parents);
           for (const batch of chunks(vouchers, VOUCHER_BATCH)) {
             const r = await o.portal.send<VouchersReply>({ kind: 'vouchers', companyGuid: p.guid, vouchers: batch });
@@ -173,7 +180,12 @@ export async function syncOnce(o: SyncOptions): Promise<SyncSummary> {
       // ── Deletions, daily ──
       if (state.indexSentOn !== today) {
         for (const w of months(p.syncFrom, vouchersTo)) {
-          const guids = (await fetchRows(requests.voucherGuids(p.name, w.from, w.to), o.tally)).map((g) => g.guid).filter((g): g is string => !!g);
+          // Filtered by the date Tally gives back, not by the period it was
+          // asked for: a list that reached beyond the window would be compared
+          // against the window's stored vouchers and could read as a deletion.
+          const guids = (await fetchRows(requests.voucherGuids(p.name, w.from, w.to), o.tally))
+            .filter((g) => g.guid && g.date && g.date >= w.from && g.date <= w.to)
+            .map((g) => g.guid!);
           // A month too large to send whole is skipped rather than sent in part:
           // a partial list would read as deletions that never happened.
           if (guids.length > MAX_INDEX_GUIDS) continue;

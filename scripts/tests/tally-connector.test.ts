@@ -205,6 +205,33 @@ test('a second sync sends only what changed, and a deletion in Tally is noticed'
   }
 });
 
+test('a Tally that ignores the period it was given still sends each voucher once', async () => {
+  // What real TallyPrime does when asked for the month its books begin in: it
+  // answers with every voucher the company has. The connector keeps only the
+  // ones inside the window, so nothing is sent a second time and the list used
+  // to spot deletions never reaches past the month it describes.
+  const tally = await startFakeTally({ today: AS_OF });
+  tally.data.periodBlind = true;
+  try {
+    await withPortal(async ({ trx, orgId, portal }) => {
+      const state: Record<string, CompanyState> = {};
+      const summary = await syncOnce({ tally: { host: '127.0.0.1', port: tally.port }, portal, state, machineName: 'TEST-PC', connectorVersion: 'test', today: AS_OF });
+      const expected = sampleCompany(AS_OF);
+
+      assert.equal(summary.companies[0].error, undefined);
+      assert.equal(summary.companies[0].vouchersSent, expected.vouchers.length, 'each voucher once, not once per window');
+      assert.equal(summary.companies[0].deletions, 0, 'and nothing was read as deleted');
+
+      const row = await trx.selectFrom('tally_companies').select('id').where('org_id', '=', orgId).executeTakeFirstOrThrow();
+      const stored = await trx.selectFrom('tally_vouchers').select(({ fn }) => [fn.countAll<number>().as('n')])
+        .where('company_id', '=', row.id).executeTakeFirstOrThrow();
+      assert.equal(Number(stored.n), expected.vouchers.length);
+    });
+  } finally {
+    await tally.close();
+  }
+});
+
 test('Tally being closed is reported to the portal, not thrown', async () => {
   const tally = await startFakeTally({ today: AS_OF });
   const port = tally.port;

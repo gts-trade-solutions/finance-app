@@ -36,6 +36,13 @@ export class FakeTallyData {
   private readonly sample;
   private readonly revenueGroups: Set<string>;
 
+  /**
+   * Real TallyPrime, asked for the month its books begin in, answers with every
+   * voucher the company has rather than the window's. Setting this reproduces
+   * that, so the connector is tested against Tally as it behaves.
+   */
+  periodBlind = false;
+
   constructor(today: string) {
     this.sample = sampleCompany(today);
     this.vouchers = [...this.sample.vouchers];
@@ -70,7 +77,8 @@ export class FakeTallyData {
   }
 
   rows(id: string, from: string | null, to: string | null, afterAlterId: number): string[][] {
-    const inPeriod = (v: TallyVoucher) => (!from || v.date >= from) && (!to || v.date <= to);
+    const inPeriod = (v: TallyVoucher) =>
+      this.periodBlind || ((!from || v.date >= from) && (!to || v.date <= to));
     const asAt = to ?? '9999-12-31';
     switch (id) {
       case 'RekonzaCompanies':
@@ -111,7 +119,7 @@ export class FakeTallyData {
           .filter((v) => inPeriod(v) && v.alterId > afterAlterId && !v.isCancelled)
           .flatMap((v) => v.entries.map((e) => [v.guid, e.ledger, tallyAmount(e.debitPaise - e.creditPaise)]));
       case 'RekonzaVoucherGuids':
-        return this.vouchers.filter(inPeriod).map((v) => [v.guid]);
+        return this.vouchers.filter(inPeriod).map((v) => [v.guid, v.date]);
       default:
         throw new Error(`Unknown report ${id}`);
     }
