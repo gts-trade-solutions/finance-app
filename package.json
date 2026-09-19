@@ -16,6 +16,7 @@
     "tally:simulate": "tsx --conditions=react-server --env-file=.env.local scripts/tally-simulate.ts",
     "tally:connector": "tsx connector/src/main.ts",
     "tally:fake": "tsx connector/src/fake-tally-cli.ts",
+    "tally:import": "tsx scripts/tally-import.ts",
     "smoke": "node scripts/smoke.mjs",
     "flows": "node scripts/flows.mjs",
     "brand:assets": "node scripts/brand-assets.mjs",

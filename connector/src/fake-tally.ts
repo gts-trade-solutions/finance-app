@@ -125,22 +125,71 @@ function reply(rows: string[][]): string {
   return `<ENVELOPE>\r\n${body}\r\n</ENVELOPE>`;
 }
 
+/** What an import posted to the port carried, and Tally's own reply to it. */
+export interface Imported {
+  ledgers: string[];
+  vouchers: { remoteId: string; type: string; number: string; amountPaise: number }[];
+  errors: string[];
+}
+
+function acceptImport(xml: string, into: Imported): string {
+  const un = (s: string) => s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
+  for (const m of xml.matchAll(/<LEDGER NAME="([^"]*)"/g)) into.ledgers.push(un(m[1]));
+  for (const v of xml.match(/<VOUCHER [\s\S]*?<\/VOUCHER>/g) ?? []) {
+    const amounts = [...v.matchAll(/<ALLLEDGERENTRIES.LIST>[\s\S]*?<AMOUNT>(-?[\d.]+)<\/AMOUNT>/g)].map((m) => Number(m[1]));
+    const total = amounts.reduce((t, a) => t + a, 0);
+    // Tally refuses a voucher that does not balance, and keeps the rest.
+    if (Math.abs(total) > 0.005) {
+      into.errors.push(`Voucher total is not zero: ${total.toFixed(2)}`);
+      continue;
+    }
+    into.vouchers.push({
+      remoteId: v.match(/REMOTEID="([^"]*)"/)?.[1] ?? '',
+      type: un(v.match(/<VOUCHERTYPENAME>([^<]*)<\/VOUCHERTYPENAME>/)?.[1] ?? ''),
+      number: un(v.match(/<VOUCHERNUMBER>([^<]*)<\/VOUCHERNUMBER>/)?.[1] ?? ''),
+      amountPaise: Math.round(amounts.filter((a) => a < 0).reduce((t, a) => t - a, 0) * 100),
+    });
+  }
+  const created = into.ledgers.length + into.vouchers.length;
+  return (
+    '<ENVELOPE><HEADER><VERSION>1</VERSION><STATUS>1</STATUS></HEADER><BODY><DATA><IMPORTRESULT>' +
+    `<CREATED>${created}</CREATED><ALTERED>0</ALTERED><DELETED>0</DELETED><COMBINED>0</COMBINED>` +
+    `<IGNORED>0</IGNORED><ERRORS>${into.errors.length}</ERRORS><CANCELLED>0</CANCELLED>` +
+    into.errors.map((e) => `<LINEERROR>${xmlEscape(e)}</LINEERROR>`).join('') +
+    '</IMPORTRESULT></DATA></BODY></ENVELOPE>'
+  );
+}
+
 export interface FakeTally {
   port: number;
   data: FakeTallyData;
   /** Every report asked for, in order: what a test checks the connector did. */
   requests: string[];
+  /** Anything imported into it, the way Tally would take an import on the same port. */
+  imported: Imported;
   close(): Promise<void>;
 }
 
 export function startFakeTally(opts: { port?: number; today: string; host?: string }): Promise<FakeTally> {
   const data = new FakeTallyData(opts.today);
   const seen: string[] = [];
+  const imported: Imported = { ledgers: [], vouchers: [], errors: [] };
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on('data', (c: Buffer) => chunks.push(c));
     req.on('end', () => {
       const xml = Buffer.concat(chunks).toString('utf16le');
+
+      // An import arrives on the same port as a report, and is answered with
+      // counts rather than rows.
+      if (xml.includes('<TALLYREQUEST>Import Data</TALLYREQUEST>')) {
+        seen.push('Import');
+        const body = Buffer.from(acceptImport(xml, imported), 'utf16le');
+        res.writeHead(200, { 'Content-Type': 'text/xml;charset=utf-16', 'Content-Length': body.length });
+        res.end(body);
+        return;
+      }
+
       const id = xml.match(/<ID>([^<]+)<\/ID>/)?.[1] ?? '';
       const company = xml.match(/<SVCURRENTCOMPANY>([^<]*)<\/SVCURRENTCOMPANY>/)?.[1];
       const from = fromTdlDate(xml.match(/<SVFROMDATE>([^<]+)<\/SVFROMDATE>/)?.[1]);
@@ -170,6 +219,7 @@ export function startFakeTally(opts: { port?: number; today: string; host?: stri
         port: typeof address === 'object' && address ? address.port : (opts.port ?? 0),
         data,
         requests: seen,
+        imported,
         close: () => new Promise<void>((r) => server.close(() => r())),
       });
     });

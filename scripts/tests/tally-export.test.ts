@@ -14,6 +14,8 @@ import { createInvoice } from '../../lib/server/services/sales';
 import { createBill } from '../../lib/server/services/purchases';
 import { receivePayment } from '../../lib/server/services/payments';
 import { buildExport, defaultLedger, exportSummary, mastersXml, vouchersXml } from '../../lib/server/tally/export';
+import { startFakeTally } from '../../connector/src/fake-tally';
+import { postTally } from '../../connector/src/tally-client';
 
 const FROM = '2026-08-01';
 const TO = '2026-08-31';
@@ -278,6 +280,35 @@ test('the summary counts what will be sent, and warns before two things become o
     const renamed = readVouchers(vouchersXml(await buildExport(f.trx, f.orgId, { from: FROM, to: TO })));
     assert.ok(renamed.find((v) => v.type === 'Sales')!.entries.some((e) => e.ledger === 'Sharma & Sons' && e.amount === 10_000));
   });
+});
+
+test('a Tally on the other end takes the files and reports what it made of them', async () => {
+  // Posted to a data port exactly as `npm run tally:import` posts to a real
+  // TallyPrime — the stand-in reads the envelope, refuses anything that does
+  // not balance, and answers with Tally's own counts.
+  const tally = await startFakeTally({ today: TO });
+  try {
+    await withFixture(async (f) => {
+      const { invoice } = await aMonth(f);
+      const data = await buildExport(f.trx, f.orgId, { from: FROM, to: TO });
+      const address = { host: '127.0.0.1', port: tally.port };
+
+      const mastersReply = await postTally(mastersXml(data), address);
+      assert.match(mastersReply, /<ERRORS>0<\/ERRORS>/);
+      assert.deepEqual(tally.imported.ledgers.sort(), data.ledgers.map((l) => l.name).sort());
+
+      const vouchersReply = await postTally(vouchersXml(data), address);
+      assert.match(vouchersReply, /<ERRORS>0<\/ERRORS>/, 'every voucher was accepted');
+      assert.equal(tally.imported.vouchers.length, 3);
+      const sale = tally.imported.vouchers.find((v) => v.type === 'Sales')!;
+      assert.equal(sale.number, invoice.number);
+      assert.equal(sale.amountPaise, 11_800_00, 'the invoice arrived at its full value');
+      assert.equal(sale.remoteId, `rekonza-${f.orgId}-${invoice.journalEntryId}`, 'and can be matched on a re-import');
+      assert.deepEqual(tally.imported.errors, []);
+    });
+  } finally {
+    await tally.close();
+  }
 });
 
 test('nothing posted in the dates is not an empty file but no file', async () => {
