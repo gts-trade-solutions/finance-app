@@ -1259,6 +1259,131 @@ export interface StockAdjustments {
   warehouse_id: number | null;
 }
 
+export interface TallyCompanies {
+  as_of: ColumnType<string | null, string | null, string | null>;
+  books_from: ColumnType<string | null, string | null, string | null>;
+  connector_id: number;
+  created_at: Generated<Date>;
+  fy_from: ColumnType<string | null, string | null, string | null>;
+  gstin: string | null;
+  guid: string;
+  id: Generated<number>;
+  last_error: string | null;
+  last_synced_at: Date | null;
+  maintains_inventory: Generated<number>;
+  master_alter_id: Generated<number>;
+  name: string;
+  org_id: number;
+  state_name: string | null;
+  updated_at: Generated<Date>;
+  voucher_alter_id: Generated<number>;
+}
+
+export interface TallyConnectors {
+  connector_version: string | null;
+  created_at: Generated<Date>;
+  created_by_user_id: number | null;
+  id: Generated<number>;
+  last_error: string | null;
+  last_seen_at: Date | null;
+  machine_name: string | null;
+  org_id: number;
+  paired_at: Date | null;
+  pairing_code_hash: string | null;
+  pairing_expires_at: Date | null;
+  revoked_at: Date | null;
+  status: Generated<"active" | "pending" | "revoked">;
+  tally_version: string | null;
+  token_hash: string | null;
+  token_prefix: string | null;
+}
+
+export interface TallyExports {
+  branch_id: number | null;
+  created_at: Generated<Date>;
+  exported_by_user_id: number | null;
+  from_date: ColumnType<string, string, string>;
+  id: Generated<number>;
+  kind: "masters" | "vouchers";
+  ledger_count: Generated<number>;
+  org_id: number;
+  to_date: ColumnType<string, string, string>;
+  voucher_count: Generated<number>;
+}
+
+export interface TallyGroups {
+  affects_gross_profit: Generated<number>;
+  company_id: number;
+  guid: string | null;
+  id: Generated<number>;
+  name: string;
+  nature: "assets" | "expenses" | "income" | "liabilities";
+  parent: string | null;
+}
+
+export interface TallyLedgerMap {
+  account_id: number;
+  id: Generated<number>;
+  ledger_name: string;
+  org_id: number;
+  parent_group: string;
+  updated_at: Generated<Date>;
+  updated_by_user_id: number | null;
+}
+
+export interface TallyLedgers {
+  closing_paise: Generated<number>;
+  company_id: number;
+  gstin: string | null;
+  guid: string | null;
+  id: Generated<number>;
+  name: string;
+  opening_paise: Generated<number>;
+  parent: string;
+  state_name: string | null;
+}
+
+export interface TallyStockItems {
+  closing_qty: Generated<Decimal>;
+  closing_value_paise: Generated<number>;
+  company_id: number;
+  guid: string | null;
+  hsn: string | null;
+  id: Generated<number>;
+  name: string;
+  opening_qty: Generated<Decimal>;
+  opening_value_paise: Generated<number>;
+  parent: string | null;
+  unit: string | null;
+}
+
+export interface TallyVoucherEntries {
+  company_id: number;
+  credit_paise: Generated<number>;
+  debit_paise: Generated<number>;
+  id: Generated<number>;
+  ledger: string;
+  line_no: number;
+  voucher_id: number;
+}
+
+export interface TallyVouchers {
+  alter_id: Generated<number>;
+  amount_paise: Generated<number>;
+  base_type: string;
+  company_id: number;
+  date: ColumnType<string, string, string>;
+  guid: string;
+  id: Generated<number>;
+  is_cancelled: Generated<number>;
+  is_optional: Generated<number>;
+  narration: string | null;
+  number: string | null;
+  party: string | null;
+  reference: string | null;
+  voucher_type: string;
+}
+
 export interface TransactionLocks {
   id: Generated<number>;
   locked_by_user_id: number | null;
@@ -1407,6 +1532,15 @@ export interface DB {
   sessions: Sessions;
   settings: Settings;
   stock_adjustments: StockAdjustments;
+  tally_companies: TallyCompanies;
+  tally_connectors: TallyConnectors;
+  tally_exports: TallyExports;
+  tally_groups: TallyGroups;
+  tally_ledger_map: TallyLedgerMap;
+  tally_ledgers: TallyLedgers;
+  tally_stock_items: TallyStockItems;
+  tally_voucher_entries: TallyVoucherEntries;
+  tally_vouchers: TallyVouchers;
   transaction_locks: TransactionLocks;
   user_branches: UserBranches;
   users: Users;

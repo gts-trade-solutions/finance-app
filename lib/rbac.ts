@@ -28,6 +28,9 @@ const MATRIX: Record<RoleName, Record<string, Action[]>> = {
     reports: ['view'],
     settings: ['view'],
     ai: ['view', 'create'],
+    // A client's Tally company, read in by a connector on their PC. Pairing
+    // that connector is part of looking after the books.
+    tally: ['view', 'edit'],
     // Analytics works on copies, never the ledger, so building reports is
     // open to anyone who can see the figures they are built from.
     analytics: ['view', 'create', 'edit', 'void'],
@@ -56,6 +59,7 @@ const MATRIX: Record<RoleName, Record<string, Action[]>> = {
     ai: ['view'],
     // Auditors and stakeholders read the board pack; they do not edit it.
     analytics: ['view'],
+    tally: ['view'],
   },
 };
 
