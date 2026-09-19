@@ -114,19 +114,31 @@ export function PairingDialog({
               <li className="flex gap-2.5">
                 <span className="font-mono text-xs text-muted-foreground">1</span>
                 <span>
-                  In TallyPrime, press <kbd className="rounded border bg-muted px-1 text-xs">F1</kbd> Help → Settings →
-                  Connectivity, and set TallyPrime to act as a server on port 9000.
+                  On the PC that runs TallyPrime, open your company in it.
                 </span>
               </li>
               <li className="flex gap-2.5">
                 <span className="font-mono text-xs text-muted-foreground">2</span>
-                <span>Open the REKONZA Tally connector on the same PC and enter this code.</span>
+                <span>
+                  In TallyPrime press <kbd className="rounded border bg-muted px-1 text-xs">F1</kbd> Help → Settings →
+                  Connectivity, set it to act as a server on port 9000, and save with{' '}
+                  <kbd className="rounded border bg-muted px-1 text-xs">Ctrl</kbd>+
+                  <kbd className="rounded border bg-muted px-1 text-xs">A</kbd>. The top of the Tally window then
+                  reads <span className="font-mono text-xs">TallyPrime:9000</span>.
+                </span>
               </li>
               <li className="flex gap-2.5">
                 <span className="font-mono text-xs text-muted-foreground">3</span>
-                <span>Keep TallyPrime open. The connector sends changes while it runs.</span>
+                <span>Open the REKONZA connector on that same PC and type this code into it.</span>
+              </li>
+              <li className="flex gap-2.5">
+                <span className="font-mono text-xs text-muted-foreground">4</span>
+                <span>Leave TallyPrime and the connector running. Changes come across every few minutes.</span>
               </li>
             </ol>
+            <p className="text-xs text-muted-foreground">
+              This code is the only thing typed into the connector — your password is never needed on that PC.
+            </p>
             {!pairedMachine && code && !expired && (
               <p className="flex items-center gap-2 text-xs text-muted-foreground">
                 <Loader2 className="size-3 animate-spin" /> Waiting for the connector…

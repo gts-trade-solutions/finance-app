@@ -132,9 +132,9 @@ function SetupSteps({ canEdit, onConnect, hasConnector }: { canEdit: boolean; on
       </div>
       <ol className="grid gap-3 md:grid-cols-3">
         {[
-          ['Install the connector', 'On the PC or server where TallyPrime runs. One connector covers every company on it.'],
-          ['Turn on Tally’s data port', 'In TallyPrime: F1 Help → Settings → Connectivity → act as server, port 9000.'],
-          ['Pair it with a code', 'Press Connect a PC here and type the code into the connector. Nothing else is shared.'],
+          ['Install the connector', 'On the PC or server where TallyPrime runs — ask REKONZA support for the installer. One connector covers every company on that PC.'],
+          ['Turn on Tally’s data port', 'In TallyPrime: F1 Help → Settings → Connectivity → act as server on port 9000, saved with Ctrl+A. The top of the Tally window then reads TallyPrime:9000.'],
+          ['Pair it with a code', 'Press Connect a PC here and type the code into the connector. Only the code is typed in — never a password.'],
         ].map(([title, detail], i) => (
           <li key={title} className="rounded-md border p-3.5">
             <p className="text-sm font-medium">
