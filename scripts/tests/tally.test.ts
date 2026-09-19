@@ -222,6 +222,43 @@ test('the day book lists every voucher of a day, optional and cancelled ones mar
   });
 });
 
+test('the year’s result is counted once, though Tally carries it in Profit & Loss A/c too', async () => {
+  // How real TallyPrime reports it: the Profit & Loss A/c ledger closes at what
+  // was brought forward plus the current period's result, while the income and
+  // expense ledgers carry that same result. Counting both would report the year
+  // twice — the trial balance would not agree and the balance sheet would be out
+  // by the year's profit.
+  await withOrg(async ({ trx, orgId }) => {
+    const { connector, company } = await pushSample(trx, orgId);
+    const asTallyReportsIt = {
+      ...sample.masters,
+      ledgers: sample.masters.ledgers.map((l) =>
+        l.name === 'Profit & Loss A/c'
+          ? { ...l, closingPaise: l.openingPaise - sample.expected.netProfitPaise }
+          : l),
+    };
+    await applySync(trx, connector, SyncMessage.parse(asTallyReportsIt));
+
+    const tb = await trialBalance(trx, company);
+    assert.equal(tb.differencePaise, 0, 'the trial balance still agrees');
+    const pl = tb.rows.find((r) => r.name === 'Profit & Loss A/c');
+    assert.equal(
+      (pl?.creditPaise ?? 0) - (pl?.debitPaise ?? 0),
+      -sample.masters.ledgers.find((l) => l.name === 'Profit & Loss A/c')!.openingPaise,
+      'it shows what was brought forward, as Tally’s own trial balance does',
+    );
+
+    const bs = await balanceSheet(trx, company);
+    assert.equal(bs.totalAssetsPaise, bs.totalLiabilitiesPaise, 'and the balance sheet still balances');
+    const plLine = bs.liabilities.find((l) => l.name === 'Profit & Loss A/c')!;
+    assert.equal(
+      plLine.amountPaise,
+      -sample.masters.ledgers.find((l) => l.name === 'Profit & Loss A/c')!.openingPaise + sample.expected.netProfitPaise,
+      'brought forward plus this year, not this year twice',
+    );
+  });
+});
+
 test('a financial year starts on the company’s own day', () => {
   assert.equal(fyStartFor('2026-08-15', '2026-04-01'), '2026-04-01');
   assert.equal(fyStartFor('2027-02-01', '2026-04-01'), '2026-04-01');

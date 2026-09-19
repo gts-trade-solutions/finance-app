@@ -529,7 +529,13 @@ export async function trialBalance(ex: Executor, company: CompanyRow): Promise<T
     if (node) rows.push(node);
   }
   for (const l of topLedgers) {
-    if (l.closing !== 0) rows.push({ name: l.name, kind: 'ledger', ledgerId: String(l.id), ...sides(l.closing), children: [] });
+    // Tally's Profit & Loss A/c closes at what was brought forward plus this
+    // year's result — and that result is already here, spread over the income
+    // and expense ledgers. Counting the closing balance too would report it
+    // twice and the trial balance would not agree, so it shows what was
+    // brought forward, exactly as Tally's own Trial Balance does.
+    const balance = l.name === PROFIT_AND_LOSS_LEDGER ? l.opening : l.closing;
+    if (balance !== 0) rows.push({ name: l.name, kind: 'ledger', ledgerId: String(l.id), ...sides(balance), children: [] });
   }
 
   // Stock kept as items is in no ledger, so the ledger openings only balance
@@ -678,7 +684,9 @@ export async function balanceSheet(ex: Executor, company: CompanyRow): Promise<B
 
   // The profit and loss account: what was brought forward, and this year's result.
   const plLedger = ledgers.find((l) => l.name === PROFIT_AND_LOSS_LEDGER && !tree.groups.has(l.parent));
-  const openingProfit = plLedger ? -plLedger.closing : 0;
+  // What was brought forward, not the closing balance: Tally has already added
+  // this year's result into that ledger, and it is added again on the next line.
+  const openingProfit = plLedger ? -plLedger.opening : 0;
   liabilities.push(
     line(PROFIT_AND_LOSS_LEDGER, openingProfit + p.netProfit, [
       ...(openingProfit ? [line('Opening Balance', openingProfit)] : []),

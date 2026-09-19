@@ -50,3 +50,6 @@ build.log
 /scripts/shots/
 dev.log
 /.next-verify/
+
+# TallyPrime writes this beside wherever it was started
+tallyhttp.log
