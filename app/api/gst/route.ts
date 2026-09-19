@@ -7,6 +7,7 @@ import { gstr1, gstr3b } from '@/lib/server/gst/returns';
 import { einvoiceQueue, itcReconciliation, tdsSummary } from '@/lib/server/gst/compliance';
 import { cancelEinvoice, previewEinvoice, registerInvoice } from '@/lib/server/integrations/gst/einvoice-service';
 import { CANCEL_REASONS } from '@/lib/server/integrations/gst';
+import { einvoiceReadiness } from '@/lib/server/integrations/gst/readiness';
 import {
   cancelEwayBill, changeEwayVehicle, checkEwayBill, extendEwayBill, generateEwayBill,
 } from '@/lib/server/integrations/gst/eway-service';
@@ -76,8 +77,11 @@ export const GET = route(
         return { view: q.view, ...(await gstr3b(db, orgId, period)) };
 
       case 'einvoices': {
-        const { rows, counts } = await einvoiceQueue(db, orgId, q.status);
-        return { view: q.view, einvoices: rows, statusCounts: counts };
+        const [{ rows, counts }, portal] = await Promise.all([
+          einvoiceQueue(db, orgId, q.status),
+          einvoiceReadiness(db, orgId),
+        ]);
+        return { view: q.view, einvoices: rows, statusCounts: counts, portal };
       }
 
       case 'itc':

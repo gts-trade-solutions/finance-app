@@ -103,6 +103,13 @@ export default function SettingsPage() {
 
   const [form, setForm] = useState({ name: '', legalName: '', pan: '', email: '', phone: '', address: '' });
   const [editingBranch, setEditingBranch] = useState<EditableBranch | null>(null);
+  // Opened on a tab when linked to one — "Settings → Integrations" from the
+  // e-invoice checklist. Read once, from the address.
+  const [tab, setTab] = useState('org');
+  useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get('tab');
+    if (t) setTab(t);
+  }, []);
   const save = useApiAction((input: unknown) => api.patch<{ id: string }>('/api/settings', input));
 
   useEffect(() => {
@@ -144,7 +151,7 @@ export default function SettingsPage() {
 
       <AsyncPage state={state}>
         {(d) => (
-          <Tabs defaultValue="org">
+          <Tabs value={tab} onValueChange={(v) => setTab(String(v))}>
             <TabsList className="flex-wrap">
               <TabsTrigger value="org">Organisation</TabsTrigger>
               <TabsTrigger value="users">Users &amp; roles</TabsTrigger>

@@ -20,7 +20,7 @@ import {
   randomBytes, type KeyObject,
 } from 'node:crypto';
 
-import { NicEinvoiceProvider, readDuplicate, readErrors, type NicConfig } from '../../lib/server/integrations/gst/nic-einvoice';
+import { NicEinvoiceProvider, nicConfigFromEnv, readDuplicate, readErrors, type NicConfig } from '../../lib/server/integrations/gst/nic-einvoice';
 import {
   aesDecrypt, aesEncryptBase64, decryptSessionKey, loadPublicKey,
 } from '../../lib/server/integrations/gst/nic-crypto';
@@ -208,6 +208,8 @@ function simulatedNic(opts: { sekAsBase64?: boolean } = {}): Portal {
 function config(over: Partial<NicConfig> = {}): NicConfig {
   return {
     baseUrl: 'https://einv-apisandbox.nic.in',
+    declaredEnvironment: null,
+    environmentError: null,
     authPath: '/eivital/v1.04/auth',
     invoicePath: '/eicore/v1.03/Invoice',
     cancelPath: '/eicore/v1.03/Invoice/Cancel',
@@ -472,9 +474,31 @@ test('the sandbox is a real connection that files nothing', () => {
   assert.equal(sandbox.environment, 'sandbox');
   assert.equal(sandbox.live, false);
 
-  const prod = new NicEinvoiceProvider(config({ baseUrl: 'https://einvoice1.gst.gov.in' }));
+  const prod = new NicEinvoiceProvider(config({ baseUrl: 'https://einvoice1.gst.gov.in', declaredEnvironment: 'production' }));
   assert.equal(prod.environment, 'production');
   assert.equal(prod.live, true);
+  assert.deepEqual(prod.missingConfiguration(), []);
+});
+
+test("an address that is not NIC's sandbox files only once it is declared production", () => {
+  const gsp = new NicEinvoiceProvider(config({ baseUrl: 'https://gsp.example.in/einvoice' }));
+  assert.equal(gsp.live, false, 'undeclared is never reported as filing');
+  assert.match(gsp.missingConfiguration().join(' '), /NIC_EINV_ENV/);
+
+  const gspTest = new NicEinvoiceProvider(config({ baseUrl: 'https://gsp.example.in/einvoice', declaredEnvironment: 'sandbox' }));
+  assert.equal(gspTest.environment, 'sandbox');
+  assert.deepEqual(gspTest.missingConfiguration(), []);
+
+  const mislabelled = new NicEinvoiceProvider(config({ baseUrl: 'https://einvoice1.gst.gov.in', declaredEnvironment: 'sandbox' }));
+  assert.equal(mislabelled.live, false);
+  assert.match(mislabelled.missingConfiguration().join(' '), /live government portal/);
+});
+
+test('the environment is read from NIC_EINV_ENV, and a typo is named', () => {
+  assert.equal(nicConfigFromEnv({ NIC_EINV_ENV: 'Production' } as unknown as NodeJS.ProcessEnv).declaredEnvironment, 'production');
+  const typo = nicConfigFromEnv({ NIC_EINV_ENV: 'prod' } as unknown as NodeJS.ProcessEnv);
+  assert.equal(typo.declaredEnvironment, null);
+  assert.match(typo.environmentError ?? '', /must be sandbox or production/);
 });
 
 // ── The pieces, on their own ─────────────────────────────────────────────────

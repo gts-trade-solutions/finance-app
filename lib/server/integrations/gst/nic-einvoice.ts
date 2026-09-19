@@ -50,8 +50,22 @@ export interface NicConfig {
   publicKey: KeyObject | null;
   /** What went wrong loading the key, so "not configured" can say why. */
   publicKeyError: string | null;
+  /**
+   * What NIC_EINV_ENV says this address is. Only NIC's own sandbox host is
+   * recognised on sight; any other address — a GSP's test system as much as
+   * the live portal — has to be declared, because guessing wrong labels a
+   * filing as a test or a test as a filing.
+   */
+  declaredEnvironment: 'sandbox' | 'production' | null;
+  /** NIC_EINV_ENV was set to something other than sandbox or production. */
+  environmentError: string | null;
   timeoutMs: number;
 }
+
+/** NIC's public sandbox, the one address known without being told. */
+const isNicSandbox = (url: string) => /^https:\/\/einv-apisandbox\.nic\.in(\/|$)/i.test(url);
+/** The government's own live hosts. Never a test system, whatever is declared. */
+const isGovernmentHost = (url: string) => /^https:\/\/([a-z0-9-]+\.)*gst\.gov\.in(\/|$)/i.test(url);
 
 /** From the environment. Read once, when the provider is first used. */
 export function nicConfigFromEnv(env: NodeJS.ProcessEnv = process.env): NicConfig {
@@ -66,6 +80,11 @@ export function nicConfigFromEnv(env: NodeJS.ProcessEnv = process.env): NicConfi
     }
   }
 
+  const declared = env.NIC_EINV_ENV?.trim().toLowerCase() || null;
+  const declaredEnvironment = declared === 'sandbox' || declared === 'production' ? declared : null;
+  const environmentError =
+    declared && !declaredEnvironment ? `NIC_EINV_ENV is "${declared}"; it must be sandbox or production.` : null;
+
   return {
     baseUrl: (env.NIC_EINV_BASE_URL?.trim() || NIC_SANDBOX_URL).replace(/\/+$/, ''),
     authPath: env.NIC_EINV_AUTH_PATH?.trim() || '/eivital/v1.04/auth',
@@ -76,6 +95,8 @@ export function nicConfigFromEnv(env: NodeJS.ProcessEnv = process.env): NicConfi
     clientSecret: env.NIC_EINV_CLIENT_SECRET?.trim() || null,
     publicKey,
     publicKeyError,
+    declaredEnvironment,
+    environmentError,
     timeoutMs: Number(env.NIC_EINV_TIMEOUT_MS) || 30_000,
   };
 }
@@ -233,8 +254,17 @@ export class NicEinvoiceProvider implements GstProvider {
     private readonly fetchImpl: typeof fetch = (...args) => fetch(...args),
   ) {}
 
+  /**
+   * Production only when it is certain. NIC's sandbox host is a sandbox; any
+   * other address is whatever NIC_EINV_ENV declares, and until it declares
+   * something the connection reports itself as not filing — and refuses to
+   * make a call at all (see `missingConfiguration`), so that report is true.
+   */
   get environment(): ProviderEnvironment {
-    return /apisandbox/i.test(this.config.baseUrl) ? 'sandbox' : 'production';
+    const { baseUrl, declaredEnvironment } = this.config;
+    if (isNicSandbox(baseUrl)) return 'sandbox';
+    if (isGovernmentHost(baseUrl)) return declaredEnvironment === 'production' ? 'production' : 'sandbox';
+    return declaredEnvironment ?? 'sandbox';
   }
 
   get live(): boolean {
@@ -244,6 +274,19 @@ export class NicEinvoiceProvider implements GstProvider {
   /** What is missing before this can make a call. Empty means ready. */
   missingConfiguration(): string[] {
     const missing: string[] = [];
+    const { baseUrl, declaredEnvironment, environmentError } = this.config;
+    if (environmentError) missing.push(environmentError);
+    else if (!isNicSandbox(baseUrl) && !declaredEnvironment) {
+      missing.push(
+        `NIC_EINV_BASE_URL points at ${baseUrl}, which is not NIC's sandbox. Set NIC_EINV_ENV=production ` +
+          'if invoices sent there are filed, or NIC_EINV_ENV=sandbox for a test system.',
+      );
+    } else if (isGovernmentHost(baseUrl) && declaredEnvironment !== 'production') {
+      missing.push(
+        `NIC_EINV_BASE_URL points at the live government portal (${baseUrl}), but NIC_EINV_ENV says sandbox. ` +
+          'Invoices sent there are filed — set NIC_EINV_ENV=production, or point it at a test system.',
+      );
+    }
     if (this.config.publicKeyError) missing.push(this.config.publicKeyError);
     else if (!this.config.publicKey) {
       missing.push(

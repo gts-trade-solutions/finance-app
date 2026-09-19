@@ -956,6 +956,32 @@ export interface EinvoiceRow {
   daysLeft: number;
 }
 
+/** How far a registration is from registering invoices with the real portal. */
+export interface PortalReadinessStep {
+  key: 'server' | 'details' | 'credentials' | 'login' | 'first_irn';
+  done: boolean;
+  todo: string[];
+}
+
+export interface BranchPortalReadiness {
+  branchId: string;
+  name: string;
+  gstin: string | null;
+  provider: string;
+  providerLabel: string;
+  environment: 'stand-in' | 'sandbox' | 'production';
+  steps: PortalReadinessStep[];
+  realIrns: number;
+  lastVerifiedAt: string | null;
+  lastError: string | null;
+}
+
+export interface PortalReadiness {
+  connected: boolean;
+  filing: boolean;
+  branches: BranchPortalReadiness[];
+}
+
 export interface EwayBillRow {
   id: string | null;
   /**
@@ -1068,7 +1094,7 @@ export const gst = {
     api.get<Gstr1Response>('/api/gst', { view: 'gstr1', period, branchId }),
   gstr3b: (period: string) => api.get<Gstr3bResponse>('/api/gst', { view: 'gstr3b', period }),
   einvoices: (status?: string) =>
-    api.get<{ einvoices: EinvoiceRow[]; statusCounts: Record<string, number> }>('/api/gst', {
+    api.get<{ einvoices: EinvoiceRow[]; statusCounts: Record<string, number>; portal: PortalReadiness }>('/api/gst', {
       view: 'einvoices', status,
     }),
   ewayBills: () => api.get<{ ewayBills: EwayBillRow[] }>('/api/gst', { view: 'eway-bills' }),

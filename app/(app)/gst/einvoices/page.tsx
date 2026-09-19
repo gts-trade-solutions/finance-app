@@ -28,7 +28,8 @@ import { StatTile } from '@/components/shared/stat-tile';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { AsyncPage } from '@/components/shared/async-state';
 import { CancelEinvoiceDialog } from '@/components/gst/cancel-einvoice-dialog';
-import { gst, type EinvoiceRow } from '@/lib/api/client';
+import { PortalSetupCard } from '@/components/gst/portal-setup-card';
+import { gst, type EinvoiceRow, type PortalReadiness } from '@/lib/api/client';
 import { useApi, useApiAction } from '@/lib/api/use-api';
 import { usePermission } from '@/lib/store/hooks';
 import { formatINRCompact } from '@/lib/money';
@@ -38,6 +39,7 @@ import { cn } from '@/lib/utils';
 interface Response {
   einvoices: EinvoiceRow[];
   statusCounts: Record<string, number>;
+  portal: PortalReadiness;
 }
 
 /** "14:32" in Indian time. */
@@ -217,6 +219,8 @@ export default function EInvoicesPage() {
       <AsyncPage state={state}>
         {(d) => (
           <>
+            <PortalSetupCard portal={d.portal} />
+
             <div className="grid gap-3 sm:grid-cols-3">
               <StatTile
                 label="Awaiting an IRN"
