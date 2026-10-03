@@ -11,7 +11,7 @@
 
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
-import { Building2, ChevronRight, MonitorDown, MonitorX, Plug, TriangleAlert, Upload } from 'lucide-react';
+import { Building2, ChevronRight, MonitorDown, MonitorX, PlayCircle, Plug, TriangleAlert, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -22,6 +22,7 @@ import {
 import { PageHeader } from '@/components/shared/page-header';
 import { AsyncPage } from '@/components/shared/async-state';
 import { PairingDialog } from '@/components/tally/pairing-dialog';
+import { TallyTutorialDialog, useFirstVisitTutorial } from '@/components/tally/tutorial-dialog';
 import { ago, longDate, presence } from '@/components/tally/format';
 import { tally, type TallyCompanyView, type TallyConnectorView, type TallyOverview } from '@/lib/api/tally';
 import { useApi } from '@/lib/api/use-api';
@@ -32,6 +33,8 @@ export default function TallyPage() {
   const canEdit = usePermission('tally', 'edit');
   const state = useApi<TallyOverview>(() => tally.overview(), []);
   const [pairing, setPairing] = useState(false);
+  // Opens by itself the first time anyone on this browser comes to Tally.
+  const [tutorial, setTutorial] = useFirstVisitTutorial();
   const [disconnecting, setDisconnecting] = useState<TallyConnectorView | null>(null);
   const knownActive = useRef<Set<string>>(new Set());
   const [pairedMachine, setPairedMachine] = useState<string | null>(null);
@@ -61,6 +64,9 @@ export default function TallyPage() {
         description="Your TallyPrime companies, read from the PC where Tally runs. Read-only here: entries are still made in Tally, and every figure shows the day it was last synced."
         actions={
           <div className="flex items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setTutorial(true)} data-slot="tally-tutorial-open">
+              <PlayCircle className="size-3.5" /> Watch the tutorial
+            </Button>
             {/* The other direction: our own documents, sent to Tally. */}
             <Button variant="outline" size="sm" asChild data-slot="tally-export-link">
               <Link href="/tally/export">
@@ -106,6 +112,7 @@ export default function TallyPage() {
         )}
       </AsyncPage>
 
+      <TallyTutorialDialog open={tutorial} onOpenChange={setTutorial} />
       <PairingDialog open={pairing} onOpenChange={setPairing} pairedMachine={pairedMachine} />
       <DisconnectDialog connector={disconnecting} onClose={() => setDisconnecting(null)} onDone={() => void refetch()} />
     </>
