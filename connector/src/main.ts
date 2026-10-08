@@ -15,6 +15,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import os from 'node:os';
+import { runApp } from './app';
 import { configPath, loadConfig, saveConfig, type ConnectorConfig } from './config';
 import { ConnectorOutdated, ConnectorUnpaired, pairWithPortal, portalLink } from './portal';
 import { syncOnce, type SyncSummary } from './sync';
@@ -78,6 +79,15 @@ async function main() {
   const config = withOptions(loadConfig());
 
   switch (command) {
+    // Double-clicked, or started by Windows: the window and the loop, with no
+    // command to type. Everything below stays for a terminal and for support.
+    case 'help':
+    case 'app': {
+      await runApp(CONNECTOR_VERSION, { open: !args.includes('--no-window') });
+      await new Promise(() => {});
+      return;
+    }
+
     case 'pair': {
       const code = args[1];
       const portalUrl = option('portal') ?? process.env.REKONZA_PORTAL_URL ?? config.portalUrl;
@@ -133,7 +143,7 @@ async function main() {
     }
 
     default:
-      console.log('Usage: rekonza-tally <pair CODE --portal URL | sync | run | status | forget> [--tally-host H] [--tally-port P] [--every MIN]');
+      console.log('Usage: rekonza-tally [app | pair CODE --portal URL | sync | run | status | forget] [--tally-host H] [--tally-port P] [--every MIN]');
   }
 }
 

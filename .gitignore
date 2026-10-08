@@ -53,3 +53,6 @@ dev.log
 
 # TallyPrime writes this beside wherever it was started
 tallyhttp.log
+
+# The packaged connector: 90 MB, built with npm run connector:build
+connector/dist/

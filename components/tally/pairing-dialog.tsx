@@ -10,13 +10,14 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useState } from 'react';
-import { CheckCircle2, Copy, Loader2, RefreshCw } from 'lucide-react';
+import { CheckCircle2, Copy, Download, Loader2, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import { tally } from '@/lib/api/tally';
+import { CONNECTOR_DOWNLOAD_URL } from '@/lib/tally/connector-download';
 
 const clock = (iso: string) =>
   new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit' }).format(new Date(iso));
@@ -129,7 +130,18 @@ export function PairingDialog({
               </li>
               <li className="flex gap-2.5">
                 <span className="font-mono text-xs text-muted-foreground">3</span>
-                <span>Open the REKONZA connector on that same PC and type this code into it.</span>
+                <span className="space-y-2">
+                  <span className="block">
+                    Open the REKONZA connector on that same PC and type this code into it.
+                  </span>
+                  {CONNECTOR_DOWNLOAD_URL && (
+                    <Button variant="outline" size="xs" asChild data-slot="tally-connector-download">
+                      <a href={CONNECTOR_DOWNLOAD_URL} download>
+                        <Download className="size-3" /> Download the connector
+                      </a>
+                    </Button>
+                  )}
+                </span>
               </li>
               <li className="flex gap-2.5">
                 <span className="font-mono text-xs text-muted-foreground">4</span>
